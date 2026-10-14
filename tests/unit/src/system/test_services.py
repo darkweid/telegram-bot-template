@@ -2,9 +2,11 @@ import asyncio
 from collections.abc import Awaitable, Callable
 from unittest.mock import AsyncMock
 
+from aiogram.fsm.storage.memory import MemoryStorage
+from aiogram.fsm.storage.redis import RedisStorage
 import pytest
 from redis.asyncio import Redis
-from redis.exceptions import ConnectionError as RedisConnectionError
+from redis.exceptions import ConnectionError as RedisConnectionError, ResponseError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.main.config import Config
@@ -22,10 +24,12 @@ def _service(
     *,
     postgres: Callable[..., Awaitable[None]] | BaseException | None = None,
     redis: Callable[..., Awaitable[None]] | BaseException | None = None,
+    fsm: Callable[..., Awaitable[None]] | BaseException | None = None,
     memory: dict[str, int] | BaseException | None = None,
 ) -> HealthService:
-    """`postgres`/`redis`: None answers, an exception is raised, a coroutine
-    function runs instead (e.g. `_hang`). `memory`: what INFO memory returns."""
+    """`postgres`/`redis`/`fsm`: None answers, an exception is raised, a
+    coroutine function runs instead (e.g. `_hang`). `memory`: what INFO memory
+    returns."""
     repository = AsyncMock(spec=SystemRepository)
     repository.ping.side_effect = postgres
     client = AsyncMock(spec=Redis)
@@ -36,8 +40,15 @@ def _service(
         return_value=memory or {"used_memory": 10, "maxmemory": 0},
         side_effect=memory if isinstance(memory, BaseException) else None,
     )
+    fsm_client = AsyncMock(spec=Redis)
+    fsm_client.ping = AsyncMock(return_value=True, side_effect=fsm)
     return HealthService(
-        repository, AsyncMock(spec=AsyncSession), client, settings.app, settings.bot
+        repository,
+        AsyncMock(spec=AsyncSession),
+        client,
+        RedisStorage(redis=fsm_client),
+        settings.app,
+        settings.bot,
     )
 
 
@@ -58,13 +69,27 @@ async def test_not_ready_without_redis(settings: Config) -> None:
     assert (readiness.postgres, readiness.redis, readiness.ok) == (True, False, False)
 
 
+async def test_not_ready_when_the_fsm_database_refuses(settings: Config) -> None:
+    """The cache client answering says nothing about the FSM's own database,
+    and every update reads or locks there."""
+    service = _service(settings, fsm=ResponseError("DB index is out of range"))
+    readiness = await service.check_readiness()
+    assert (readiness.postgres, readiness.redis, readiness.ok) == (True, False, False)
+
+
+async def test_in_process_fsm_storage_needs_no_probe(settings: Config) -> None:
+    service = _service(settings)
+    service.storage = MemoryStorage()
+    assert (await service.check_readiness()).ok
+
+
 async def test_a_hanging_dependency_fails_within_the_budget(
     settings: Config, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(services, "PROBE_TIMEOUT_SECONDS", 0.05)
     async with asyncio.timeout(1):
         readiness = await _service(
-            settings, postgres=_hang, redis=_hang
+            settings, postgres=_hang, redis=_hang, fsm=_hang
         ).check_readiness()
     assert (readiness.postgres, readiness.redis) == (False, False)
 

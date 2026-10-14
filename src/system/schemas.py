@@ -5,6 +5,7 @@ from typing import Literal
 @dataclass(frozen=True, slots=True)
 class Readiness:
     postgres: bool
+    # Both Redis clients answer: the cache's database and the FSM's.
     redis: bool
 
     @property

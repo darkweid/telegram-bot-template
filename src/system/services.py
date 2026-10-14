@@ -1,6 +1,8 @@
 import asyncio
 from collections.abc import Awaitable
 
+from aiogram.fsm.storage.base import BaseStorage
+from aiogram.fsm.storage.redis import RedisStorage
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -34,22 +36,25 @@ class HealthService:
         repository: SystemRepository,
         session: AsyncSession,
         redis: Redis,
+        storage: BaseStorage,
         app_config: AppConfig,
         bot_config: BotConfig,
     ) -> None:
         self.repository = repository
         self.session = session
         self.redis = redis
+        self.storage = storage
         self.app_config = app_config
         self.bot_config = bot_config
 
     async def check_readiness(self) -> Readiness:
         # Concurrently, so the whole check stays within one probe budget.
-        postgres, redis = await asyncio.gather(
+        postgres, redis, fsm = await asyncio.gather(
             self._probe("Postgres", self.repository.ping(self.session)),
             self._probe("Redis", self.redis.ping()),
+            self._probe("Redis FSM", self._ping_fsm_storage()),
         )
-        return Readiness(postgres=postgres, redis=redis)
+        return Readiness(postgres=postgres, redis=redis and fsm)
 
     async def get_report(self) -> HealthReport:
         """Never raises: monitoring reads this to find out *which* dependency
@@ -67,6 +72,14 @@ class HealthService:
             redis=readiness.redis,
             redis_memory_used_ratio=ratio,
         )
+
+    async def _ping_fsm_storage(self) -> None:
+        """FSM state has a client and a database of its own (REDIS_FSM_DATABASE):
+        an index the server refuses fails this client alone, on every update,
+        while the cache client still answers."""
+        # Any other storage keeps its state in the process: nothing to reach.
+        if isinstance(self.storage, RedisStorage):
+            await self.storage.redis.ping()
 
     async def _probe(self, name: str, check: Awaitable[object]) -> bool:
         """Catches everything on purpose: a host that does not resolve reaches
