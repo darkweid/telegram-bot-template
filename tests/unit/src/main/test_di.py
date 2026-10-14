@@ -17,6 +17,8 @@ from src.core.database.uow import SQLAlchemyUnitOfWork
 from src.core.telegram.session import ForbiddenMiddleware, RetryAfterMiddleware
 from src.main.config import BotConfig, Config
 from src.main.di import build_container
+from src.system.repositories import SystemRepository
+from src.system.services import HealthService
 from tests.fakes.telegram import FakeTelegramSession
 from tests.helpers.providers import build_test_container
 
@@ -205,5 +207,24 @@ async def test_fsm_storage_owns_a_client_separate_from_the_shared_one(
         storage = await container.get(BaseStorage)
         assert isinstance(storage, RedisStorage)
         assert storage.redis is not await container.get(Redis)
+    finally:
+        await container.close()
+
+
+async def test_health_service_resolves_per_request_on_the_app_clients(
+    settings: Config, i18n: I18n
+) -> None:
+    container = build_test_container(settings, FakeTelegramSession(), i18n)
+    try:
+        async with container() as first:
+            service = await first.get(HealthService)
+            assert service is await first.get(HealthService)
+            assert service.session is await first.get(AsyncSession)
+            assert service.redis is await container.get(Redis)
+            assert service.repository is await container.get(SystemRepository)
+        async with container() as second:
+            assert await second.get(HealthService) is not service
+        with pytest.raises(NoFactoryError):
+            await container.get(HealthService)
     finally:
         await container.close()

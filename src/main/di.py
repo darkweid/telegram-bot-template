@@ -43,6 +43,7 @@ from src.main.config import (
     WebhookConfig,
     WebServerConfig,
 )
+from src.system.di import SystemProvider
 from src.user.di import UserProvider
 
 
@@ -181,6 +182,7 @@ def build_container(config: Config, *providers: Provider) -> AsyncContainer:
         TelegramProvider(),
         I18nProvider(),
         UserProvider(),
+        SystemProvider(),
         AiogramProvider(),
         *providers,
         context={Config: config},
