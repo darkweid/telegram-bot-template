@@ -33,7 +33,9 @@ def _production_subscribers() -> Iterator[None]:
 
 @pytest.fixture
 def user_id() -> int:
-    return new_user_id()
+    # Always past int4: the outbox filters below must compare ids as bigint,
+    # and new_user_id() alone stays under 2**31 on some draws.
+    return 2**31 + new_user_id()
 
 
 @pytest_asyncio.fixture(loop_scope="session")
