@@ -117,6 +117,10 @@ The queue lives in its own Redis database, `REDIS_TASKS_DATABASE` (default
 `make run` and `make run-dev` start both services; `make logs s=worker` and
 `make logs s=scheduler` show their output.
 
+In the dev stack the worker restarts on a change to a `.py` file under `src/`,
+`loggers/` or `models/`, like the bot. The scheduler does not run under
+watchfiles: after changing a schedule, run `make restart s=scheduler`.
+
 ## Roles
 
 Two optional roles, set in `.env` as comma-separated Telegram user ids:

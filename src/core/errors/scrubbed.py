@@ -59,7 +59,8 @@ def reportable(error: BaseException) -> BaseException:
     summary built from safe fields, keeping the traceback, wherever they are:
     logging and Sentry render the whole `__cause__` and `__context__` chain.
     The chain goes on below a pydantic error and ends at a driver error.
-    The chain is rewritten in place, so `error` itself is safe afterwards too.
+    The chain below is rewritten in place; the returned exception is the safe
+    one, and `error` itself keeps its data when it was the one replaced.
     """
     safe = _scrubbed_link(error)
     pending = [safe]

@@ -5,6 +5,23 @@ from src.core.errors.scrubbed import ScrubbedError
 from src.core.tasks.registry import TaskSpec, register_tasks
 
 
+def _chain(error: BaseException) -> list[BaseException]:
+    """Every exception logging or Sentry would render below `error`."""
+    links: list[BaseException] = []
+    pending: list[BaseException] = [error]
+    while pending:
+        link = pending.pop()
+        if any(link is seen for seen in links):
+            continue
+        links.append(link)
+        pending.extend(
+            nested
+            for nested in (link.__cause__, link.__context__)
+            if nested is not None
+        )
+    return links
+
+
 async def ping(value: int) -> int:
     return value + 1
 
@@ -45,7 +62,9 @@ async def test_a_task_error_leaves_the_task_already_scrubbed() -> None:
     finally:
         await broker.shutdown()
     assert isinstance(result.error, ScrubbedError)
-    assert "4242" not in str(result.error)
+    chain = _chain(result.error)
+    assert not any(isinstance(link, DBAPIError) for link in chain)
+    assert all("4242" not in str(link) for link in chain)
 
 
 async def refused() -> None:

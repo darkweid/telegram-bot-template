@@ -67,8 +67,8 @@ class IdempotencyReceiver(Receiver):
     flight at once, as when the outbox sweeper republishes a row whose
     after-commit publish already went out. The claim is renewed while the run
     lasts, and a failed run releases it so a retry can take it. Dedup is
-    best-effort: on any Redis error the receiver
-    fails open and executes - the baseline semantics stay at-least-once.
+    best-effort: on any Redis error the receiver fails open and executes -
+    the baseline semantics stay at-least-once.
     """
 
     def __init__(
@@ -217,6 +217,11 @@ def _withhold_ack(ack_controller: AckController | None) -> None:
     marker or a lapsed claim. The holder's own ack settles the entry, since
     XACK is per group, not per consumer. Marking the controller acked is the
     only way to stop `Receiver.callback` from acking it after this returns.
+
+    Delivery stays at-least-once here: when the withheld entry is a separate
+    one (a sweeper republish) and the holder's run fails, no done marker is
+    written, so the entry, reclaimed after the stream's idle timeout, runs the
+    task once more beyond SmartRetryMiddleware's count.
     """
     if ack_controller is not None:
         ack_controller.is_acked = True

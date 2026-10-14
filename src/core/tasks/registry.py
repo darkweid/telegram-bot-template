@@ -54,6 +54,9 @@ def _scrub_errors(func: TaskFunction) -> TaskFunction:
             safe = reportable(exc)
             if safe is exc:
                 raise
-            raise safe from None
+        # Raised outside the handler: inside it, `exc` with its DETAIL would
+        # become `safe.__context__`, and `from None` would drop the scrubbed
+        # cause `reportable` kept.
+        raise safe
 
     return run

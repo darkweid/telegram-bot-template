@@ -160,12 +160,15 @@ async def test_redis_set_failure_does_not_break_result() -> None:
 async def test_a_concurrent_second_delivery_is_skipped() -> None:
     """The outbox sweeper can republish a row whose after-commit publish already
     went out; both deliveries carry the row id and must not both run."""
+    running = asyncio.Event()
     release = asyncio.Event()
     runs = 0
 
     async def slow_run(*_args: object, **_kwargs: object) -> TaskiqResult:
         nonlocal runs
         runs += 1
+        # The receiver calls this only once it holds the claim.
+        running.set()
         await release.wait()
         return success_result()
 
@@ -173,7 +176,7 @@ async def test_a_concurrent_second_delivery_is_skipped() -> None:
 
     with patch.object(Receiver, "run_task", new=slow_run):
         first = asyncio.create_task(receiver.run_task(MagicMock(), make_message()))
-        await asyncio.sleep(0.01)
+        await running.wait()
         second = await receiver.run_task(MagicMock(), make_message())
         release.set()
         await first
