@@ -35,7 +35,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && chown appuser:appuser /app
 
 COPY --from=builder --chown=appuser:appuser /install /install
-COPY --chown=appuser:appuser . .
+COPY --chown=appuser:appuser src ./src
+COPY --chown=appuser:appuser loggers ./loggers
+COPY --chown=appuser:appuser models ./models
+COPY --chown=appuser:appuser migrations ./migrations
+COPY --chown=appuser:appuser alembic.ini ./
 COPY --from=builder --chown=appuser:appuser /app/locales ./locales
 
 USER appuser

@@ -16,7 +16,7 @@ on:
         required: true
     # Declared explicitly rather than `secrets: inherit` in the callers: CI runs
     # third-party actions against every push and pull request, and only needs the
-    # automatic GITHUB_TOKEN plus this one licensing secret - not the deploy secrets.
+    # automatic GITHUB_TOKEN plus this one licensing secret.
     secrets:
       GITLEAKS_LICENSE:
         required: false
@@ -122,8 +122,12 @@ jobs:
           ./.venv/bin/python -m pip install --upgrade pip
           ./.venv/bin/pip install -r infra/requirements/dev.txt
 
+      # .env.example ships a placeholder token the settings validator rejects on
+      # purpose; any well-formed one lets the settings load.
       - name: Create .env file from .env.example
-        run: cp .env.example .env
+        run: |
+          cp .env.example .env
+          sed -i 's/^BOT_TOKEN=.*/BOT_TOKEN=123456789:AAci-placeholder-token-0000000000000/' .env
 
       - name: Cache pre-commit
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -174,8 +178,12 @@ jobs:
           ./.venv/bin/python -m pip install --upgrade pip
           ./.venv/bin/pip install -r infra/requirements/prod.txt
 
+      # .env.example ships a placeholder token the settings validator rejects on
+      # purpose; any well-formed one lets the settings load.
       - name: Create .env file from .env.example
-        run: cp .env.example .env
+        run: |
+          cp .env.example .env
+          sed -i 's/^BOT_TOKEN=.*/BOT_TOKEN=123456789:AAci-placeholder-token-0000000000000/' .env
 
       - name: Check migration HEADs
         shell: bash
@@ -243,7 +251,7 @@ jobs:
     timeout-minutes: 20
 
     # Credentials, database name and port all mirror .env.test, which `TESTING=true`
-    # loads and the suite reads its DSN from — a value changed in one place has to change
+    # loads and the suite reads its DSN from - a value changed in one place has to change
     # in the other. Redis likewise: no password, as .env.test has it. Locally the same
     # suite runs against the throwaway containers `make test-integration` starts
     # (infra/docker-compose.test.yml); here service containers are simpler, because
@@ -433,9 +441,9 @@ jobs:
           retention-days: 30
 
   # Builds the image once, here, so a broken Dockerfile fails in CI instead of
-  # on the box mid-deploy. CD then pulls this exact sha tag. `latest` only ever
-  # moves on the production caller - a staging build must not become the tag a
-  # human reaches for when they mean production.
+  # on the box later. The immutable sha-<12> tag is what to pin BOT_IMAGE to.
+  # `latest` only ever moves on the production caller - a staging build must not
+  # become the tag a human reaches for when they mean production.
   build-and-push:
     name: Build & push image
     needs: [changes, lint, migration-heads, unit-tests, integration-tests, bandit, pip-audit, gitleaks]
@@ -482,7 +490,7 @@ jobs:
           tags: |
             ${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.tag }}
             ${{ steps.meta.outputs.image }}:${{ inputs.moving_tag }}
-          # Lets a deploy assert which commit an image tag was actually built from.
+          # Records which commit an image tag was built from.
           labels: |
             org.opencontainers.image.revision=${{ github.sha }}
           cache-from: type=gha

@@ -88,9 +88,9 @@ The bot refuses to start in webhook mode without an `https` base URL and a
 secret. It sets the webhook on every start and keeps it on shutdown, so
 Telegram queues updates while the next container starts.
 
-Run the prod-like stack with `make run`, then `make migrate` before the bot
-gets its first update: the bot does not migrate on start, and `make migrate`
-applies the migrations baked into the image.
+Run the prod-like stack with `make run`. A one-shot `migrate` service applies
+the migrations baked into the image before the bot starts, and the bot waits
+for it; `make migrate` runs the same service by hand.
 
 Put a reverse proxy with a valid certificate in front of the bot and forward
 `WEBHOOK_PATH` (default `/webhook/telegram`) to `bot:${WEB_SERVER_PORT}` on the

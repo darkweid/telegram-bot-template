@@ -28,6 +28,12 @@ services:
       - ..:/app
       - /app/.venv
 
+  # The dev bot migrates on its own start from the mounted tree, so this
+  # one-shot service only has to exit, and must not need the production image.
+  migrate:
+    image: tg-bot-template-bot-dev:latest
+    command: ["true"]
+
   postgres:
     restart: "no"
 

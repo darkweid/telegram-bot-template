@@ -70,8 +70,28 @@ def test_redis_gets_its_own_password_and_no_other_secret() -> None:
     needs only its password."""
     redis = _services()["redis"]
     assert "env_file" not in redis
-    assert redis["environment"] == {"REDISCLI_AUTH": "${REDIS_PASSWORD}"}
+    assert set(redis["environment"]) == {"REDIS_PASSWORD", "REDISCLI_AUTH"}
     assert " -a " not in " ".join(redis["healthcheck"]["test"])
+
+
+def test_redis_password_stays_off_the_command_line() -> None:
+    """An argument shows in `ps` and breaks on a password with spaces or
+    quotes; the entrypoint script passes it on stdin."""
+    redis = _services()["redis"]
+    assert "REDIS_PASSWORD" not in " ".join(redis["command"])
+    assert redis["environment"]["REDIS_PASSWORD"].startswith("${REDIS_PASSWORD:?")
+
+
+def test_the_bot_waits_for_the_migrations() -> None:
+    services = _services()
+    assert services["migrate"]["command"] == ["alembic", "upgrade", "head"]
+    assert services["migrate"]["image"] == services["bot"]["image"]
+    assert services["bot"]["depends_on"]["migrate"] == {
+        "condition": "service_completed_successfully"
+    }
+    assert services["migrate"]["depends_on"]["postgres"] == {
+        "condition": "service_healthy"
+    }
 
 
 def test_dev_override_polls_and_never_restarts() -> None:
@@ -79,3 +99,11 @@ def test_dev_override_polls_and_never_restarts() -> None:
     assert override["bot"]["environment"]["BOT_MODE"] == "polling"
     for name in ("bot", "postgres", "redis"):
         assert override[name]["restart"] == "no", name
+
+
+def test_dev_override_keeps_the_production_image_out_of_the_dev_stack() -> None:
+    """The dev bot migrates itself from the mounted tree; the one-shot service
+    must neither pull BOT_IMAGE nor run the baked-in migrations."""
+    migrate = _load("infra/docker-compose.override.yml")["services"]["migrate"]
+    assert migrate["image"] == "tg-bot-template-bot-dev:latest"
+    assert migrate["command"] == ["true"]

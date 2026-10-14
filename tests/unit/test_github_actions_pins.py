@@ -41,3 +41,40 @@ def test_every_job_runs_on_a_github_hosted_runner() -> None:
             found += 1
             assert job["runs-on"] == "ubuntu-latest", f"{path.name}: {name}"
     assert found
+
+
+_RANK = {"none": 0, "read": 1, "write": 2}
+
+
+def _grants(permissions: dict[str, str] | None) -> dict[str, str]:
+    return permissions or {}
+
+
+def test_callers_grant_every_permission_the_reusable_workflow_requests() -> None:
+    """A called workflow can never hold more than the job that calls it, so a
+    permission _ci.yml asks for and a caller omits fails the whole run at
+    startup, before a single step."""
+    workflows = PROJECT_ROOT / ".github/workflows"
+    reusable = yaml.safe_load((workflows / "_ci.yml").read_text(encoding="utf-8"))
+    requested = [
+        (where, _grants(block.get("permissions")))
+        for where, block in [
+            ("workflow", reusable),
+            *((f"job {name}", job) for name, job in reusable["jobs"].items()),
+        ]
+    ]
+
+    found = 0
+    for caller in ("prod_ci.yml", "stage_ci.yml"):
+        workflow = yaml.safe_load((workflows / caller).read_text(encoding="utf-8"))
+        calling = [job for job in workflow["jobs"].values() if "uses" in job]
+        assert calling, caller
+        for job in calling:
+            granted = _grants(job.get("permissions"))
+            for where, wanted in requested:
+                for scope, level in wanted.items():
+                    found += 1
+                    assert (
+                        _RANK[granted.get(scope, "none")] >= _RANK[level]
+                    ), f"{caller}: {where} requests {scope}: {level}"
+    assert found

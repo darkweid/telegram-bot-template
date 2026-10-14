@@ -1,3 +1,6 @@
+from pathlib import Path
+
+from dotenv import dotenv_values
 from pydantic import ValidationError
 import pytest
 from redis.connection import parse_url
@@ -13,6 +16,7 @@ from src.main.config import (
     get_settings,
 )
 
+PROJECT_ROOT = Path(__file__).resolve().parents[4]
 VALID_TOKEN = "123456789:AAtest-bot-token-not-real-0000000000000"
 VALID_SECRET = "s" * 32
 
@@ -331,3 +335,13 @@ def test_get_settings_loads_the_test_env_file(monkeypatch: pytest.MonkeyPatch) -
         assert settings.postgres.POSTGRES_DB == "test_db"
     finally:
         get_settings.cache_clear()
+
+
+def test_env_example_token_is_a_placeholder_the_validator_rejects() -> None:
+    """A copied .env.example must stop at startup until the token is replaced,
+    instead of starting a bot that fails every call against Telegram."""
+    values = dotenv_values(PROJECT_ROOT / ".env.example")
+
+    assert values.get("BOT_TOKEN")
+    with pytest.raises(ValidationError, match="does not look like a token"):
+        BotConfig(_env_file=None, BOT_TOKEN=values["BOT_TOKEN"])  # type: ignore[arg-type]

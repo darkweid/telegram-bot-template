@@ -48,6 +48,25 @@ services:
           cpus: '1'
           memory: 1G
 
+  # Applies the migrations baked into the image the bot runs, once, before the
+  # bot starts. `make migrate` runs it by hand.
+  migrate:
+    image: ${BOT_IMAGE:-tg-bot-template-bot:latest}
+    env_file: ../.env
+    command: ["alembic", "upgrade", "head"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      bot-builder:
+        condition: service_completed_successfully
+    networks:
+      - bot-network
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 256M
+
   bot:
     image: ${BOT_IMAGE:-tg-bot-template-bot:latest}
     env_file: ../.env
@@ -70,6 +89,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
       bot-builder:
         condition: service_completed_successfully
     networks:
@@ -88,9 +109,11 @@ services:
       - "127.0.0.1:${REDIS_HOST_PORT:-6379}:6379"
     # Not the bot's env_file: that would hand Redis every secret of the stack.
     # redis-cli authenticates from REDISCLI_AUTH on its own, for the healthcheck
-    # and `make redis-cli` alike, without the password in its argv.
+    # and `make redis-cli` alike, without the password in its argv. An empty
+    # password would leave the instance open, so compose refuses to start.
     environment:
-      REDISCLI_AUTH: ${REDIS_PASSWORD}
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?set REDIS_PASSWORD in .env}
+      REDISCLI_AUTH: ${REDIS_PASSWORD:?set REDIS_PASSWORD in .env}
     healthcheck:
       # Plain `redis-cli ping` exits 0 even on NOAUTH under requirepass, so a
       # broken instance reads as healthy; assert the PONG.
@@ -98,9 +121,10 @@ services:
       interval: 10s
       timeout: 3s
       retries: 5
-    command: redis-server /etc/redis/redis.conf --requirepass ${REDIS_PASSWORD}
+    command: ["sh", "/etc/redis/entrypoint.sh"]
     volumes:
       - ./redis.conf:/etc/redis/redis.conf:ro
+      - ./redis-entrypoint.sh:/etc/redis/entrypoint.sh:ro
       - redis-data:/data
     networks:
       - bot-network

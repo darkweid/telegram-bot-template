@@ -1,6 +1,5 @@
-# Production CI: the branch that gets deployed to the production environment.
-# All logic lives in _ci.yml; this file exists to bind it to a branch and to a
-# workflow name that CD (prod) can subscribe to.
+# Production CI for the main branch. All logic lives in _ci.yml; this file
+# binds it to a branch and decides the moving image tag.
 name: CI (prod)
 
 on:
@@ -32,8 +31,10 @@ jobs:
     # The ceiling for _ci.yml: a called workflow can never hold more than the
     # job that calls it, and this block - not the workflow-level one above -
     # is what that job holds. `packages: write` is for the image push,
-    # `actions: read` for the tree lookup.
+    # `actions: read` for the tree lookup, `pull-requests: read` for
+    # gitleaks, which lists a pull request's commits.
     permissions:
       contents: read
+      pull-requests: read
       packages: write
       actions: read

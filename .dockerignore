@@ -1,32 +1,22 @@
-**/__pycache__
-**/*.pyc
-**/*.pyo
-**/*.pyd
-.Python
-# Every env file, whatever its suffix: the image runs `COPY . .`, so a local
-# .env.prod or .env.backup would otherwise ship its secrets in a layer. The bot
-# reads its settings from the container environment, never from a file here.
-.env*
-.venv
-**/*.log
-logs/
-backups/
-.git
+# Deny by default: the build context is exactly what the images copy, so a new
+# top-level file or directory never reaches a layer unless it is listed here.
+*
 
-# Runtime code only: tests run on the host, so keep dev tooling, tests, docs,
-# and caches out of the image.
-.idea/
-.vscode/
-docs/
-docs-local/
-tests/
-.mypy_cache/
-.ruff_cache/
-.pytest_cache/
-coverage.xml
-.coverage
-htmlcov/
+!src/
+!loggers/
+!models/
+!migrations/
+!locales/
+!alembic.ini
+# The builder stages install from the lockfiles.
+!infra/requirements/base.txt
+!infra/requirements/prod.txt
+!infra/requirements/dev.txt
+# The Postgres image copies its server settings.
+!infra/postgres/postgresql.conf
 
 # Compiled catalogs come from the image's own build stage, never from a
 # developer's tree.
 **/*.mo
+**/__pycache__
+**/*.py[cod]

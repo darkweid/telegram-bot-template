@@ -1,4 +1,3 @@
-# Docker settings
 COMPOSE_BASE = infra/docker-compose.yml
 COMPOSE_DEV = infra/docker-compose.override.yml
 DOCKER_COMPOSE = docker compose --env-file .env -f $(COMPOSE_BASE)
@@ -13,7 +12,6 @@ COMPOSE_TEST = infra/docker-compose.test.yml
 # The invoking user, for containers that write into the bind-mounted tree
 HOST_USER := $(shell id -u):$(shell id -g)
 
-# Container names
 APP_CONTAINER = bot
 
 # Requirements management
@@ -73,12 +71,13 @@ clean-resources-hard: ## Remove all unused images and build cache, forcing full 
 
 ##@ Database
 
-# Applies the migrations baked into the bot image the stack runs (BOT_IMAGE);
-# `make build` or a pull refreshes it. The dev stack does not need it: its bot
-# runs `alembic upgrade head` on start.
+# The stack runs the same `migrate` service before the bot starts; this is for
+# applying migrations without restarting the bot. It uses the migrations baked
+# into the bot image (BOT_IMAGE), so `make build` or a pull refreshes them. The
+# dev bot runs `alembic upgrade head` itself on start.
 .PHONY: migrate
-migrate: ## Apply the bot image's migrations (Postgres must be running)
-	$(DOCKER_COMPOSE) run --rm --no-deps $(APP_CONTAINER) alembic upgrade head
+migrate: ## Apply the bot image's migrations (Postgres is started if needed)
+	$(DOCKER_COMPOSE) run --rm migrate
 
 # Runs in the dev image, which carries ruff and black for the post-write hooks in
 # alembic.ini. Compose starts Postgres and waits for it, and the database is migrated
@@ -88,7 +87,7 @@ migrate: ## Apply the bot image's migrations (Postgres must be running)
 # HOME=/tmp gives black a writable cache directory. The message is quoted
 # unexpanded, so quotes, backticks and $ reach alembic as typed.
 .PHONY: migration
-migration: ## Create an Alembic revision: make migration m="add users table"
+migration: ## Create an Alembic revision: make migration m="add notes table"
 	@MSG='$(subst ','\'',$(value m))'; \
 	if [ -z "$$MSG" ]; then printf 'Enter migration message: '; read -r MSG; fi; \
 	if [ -z "$$MSG" ]; then echo "Migration message cannot be empty"; exit 1; fi; \
@@ -145,7 +144,6 @@ test-integration: ## Run the integration suite against a throwaway PostgreSQL an
 	POSTGRES_PORT="$$PG_PORT" \
 	REDIS_HOST=127.0.0.1 \
 	REDIS_PORT="$$REDIS_TEST_PORT" \
-	REDIS_TEST_INSTANCE="127.0.0.1:$$REDIS_TEST_PORT" \
 	pytest tests/integration -m integration -v
 
 .PHONY: test-all

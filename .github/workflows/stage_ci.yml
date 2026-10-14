@@ -1,5 +1,5 @@
 # Staging CI: identical checks, a different branch, and a moving tag that never
-# collides with the one production deploys from. The stage branch does not exist
+# collides with the production one. The stage branch does not exist
 # in the template - this workflow stays dormant until a project creates it.
 name: CI (stage)
 
@@ -31,8 +31,10 @@ jobs:
     # The ceiling for _ci.yml: a called workflow can never hold more than the
     # job that calls it, and this block - not the workflow-level one above -
     # is what that job holds. `packages: write` is for the image push,
-    # `actions: read` for the tree lookup.
+    # `actions: read` for the tree lookup, `pull-requests: read` for
+    # gitleaks, which lists a pull request's commits.
     permissions:
       contents: read
+      pull-requests: read
       packages: write
       actions: read
