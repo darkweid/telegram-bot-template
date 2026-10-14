@@ -109,9 +109,16 @@ class UserRepository(BaseRepository[User]):
         by: int | None,
         now: datetime,
     ) -> bool:
+        """Whether this call changed the user: False when the row is missing or
+        already in that state.
+
+        The state is part of the WHERE: of two admins banning at once, the
+        second waits on the row lock, re-checks the condition and changes
+        nothing, so only one is told they banned the user.
+        """
         statement = (
             update(User)
-            .where(User.id == user_id)
+            .where(User.id == user_id, User.is_banned.is_distinct_from(banned))
             .values(is_banned=banned, banned_at=now if banned else None, banned_by=by)
             .returning(User.id)
         )

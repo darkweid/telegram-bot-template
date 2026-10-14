@@ -72,10 +72,17 @@ async def test_a_failed_commit_keeps_the_snapshot() -> None:
 
 
 async def test_banning_a_banned_user_changes_nothing() -> None:
-    users = _users(build_user_model(id=42, is_banned=True))
-    change = await _use_case(users).execute(ADMIN, 42, banned=True)
-    assert not change.changed
-    users.set_banned.assert_not_awaited()
+    """Another admin may have banned them a moment ago: the conditional write,
+    not the snapshot read before it, decides."""
+    cache = build_cache()
+    await cache.set(user_cache_key(42), build_user_snapshot(id=42))
+    users = _users(build_user_model(id=42))
+    users.set_banned.return_value = False
+    session = FakeAsyncSession()
+    change = await _use_case(users, cache, session).execute(ADMIN, 42, banned=True)
+    assert (change.changed, change.user.is_banned) == (False, True)
+    session.commit.assert_not_awaited()
+    assert await cache.get(user_cache_key(42), model=UserProfile) is not None
 
 
 async def test_ban_refuses_a_privileged_target() -> None:

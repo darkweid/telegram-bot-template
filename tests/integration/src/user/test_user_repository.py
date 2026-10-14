@@ -286,3 +286,59 @@ async def test_a_refresh_keeps_the_ban(
     )
     await db_session.commit()
     assert upserted.user.is_banned is True
+
+
+async def test_a_repeated_ban_reports_no_change(
+    db_session: AsyncSession, user_id: int, cleanup: None
+) -> None:
+    """The admin is told the user already was banned, and `banned_at` keeps the
+    first ban's time."""
+    users = UserRepository()
+    await users.upsert_from_telegram(db_session, _profile(user_id), T0)
+    assert await users.set_banned(db_session, user_id, banned=True, by=7, now=T0)
+    later = T0 + timedelta(minutes=1)
+    assert not await users.set_banned(db_session, user_id, banned=True, by=8, now=later)
+    await db_session.commit()
+    user = await users.get_single(db_session, id=user_id, populate_existing=True)
+    assert user is not None
+    assert (user.banned_at, user.banned_by) == (T0, 7)
+
+
+async def test_of_two_concurrent_bans_only_one_changes_the_user(
+    integration_engine: AsyncEngine, user_id: int
+) -> None:
+    """Two admins banning at once must not both be told they banned the user:
+    the second waits for the first and finds nothing left to change."""
+    repository = UserRepository()
+    try:
+        async with AsyncSession(integration_engine) as setup:
+            await repository.upsert_from_telegram(setup, _profile(user_id), T0)
+            await setup.commit()
+        async with (
+            AsyncSession(integration_engine, expire_on_commit=False) as first,
+            AsyncSession(integration_engine, expire_on_commit=False) as second,
+        ):
+            assert await repository.set_banned(
+                first, user_id, banned=True, by=7, now=T0
+            )
+            task = asyncio.create_task(
+                repository.set_banned(second, user_id, banned=True, by=8, now=T0)
+            )
+            try:
+                await asyncio.sleep(0.5)
+                assert not task.done()
+
+                await first.commit()
+                changed = await asyncio.wait_for(task, 10)
+                await second.commit()
+            finally:
+                if not task.done():
+                    task.cancel()
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await task
+
+        assert changed is False
+    finally:
+        async with AsyncSession(integration_engine) as session:
+            await session.execute(delete(User).where(User.id == user_id))
+            await session.commit()

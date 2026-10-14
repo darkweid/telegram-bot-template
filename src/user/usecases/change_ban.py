@@ -49,11 +49,13 @@ class ChangeBanUseCase:
                 raise SelfBanError()
             if banned and self._roles.is_privileged(target.id):
                 raise ProtectedUserError()
-            if target.is_banned == banned:
-                return BanChange(user=target, changed=False)
-            await self._users.set_banned(
+            # The conditional write decides, not the snapshot read above:
+            # another admin may have changed the ban in between.
+            changed = await self._users.set_banned(
                 uow.session, target.id, banned=banned, by=admin_id, now=get_utc_now()
             )
+            if not changed:
+                return BanChange(user=replace(target, is_banned=banned), changed=False)
             invalidate_user_after_commit(uow, self._cache, target.id)
             await uow.commit()
         logger.info(
