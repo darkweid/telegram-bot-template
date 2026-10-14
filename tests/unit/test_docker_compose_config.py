@@ -82,6 +82,17 @@ def test_redis_password_stays_off_the_command_line() -> None:
     assert redis["environment"]["REDIS_PASSWORD"].startswith("${REDIS_PASSWORD:?")
 
 
+def test_make_run_knows_the_local_bot_image_name() -> None:
+    """`make run` builds only when the resolved bot image is the local default;
+    a name that drifted from compose would pull an image no registry has."""
+    makefile = (PROJECT_ROOT / "Makefile").read_text(encoding="utf-8")
+    match = re.search(r"^LOCAL_BOT_IMAGE = (\S+)$", makefile, re.MULTILINE)
+    assert match
+    for service in ("bot-builder", "migrate", "bot"):
+        image = _services()[service]["image"]
+        assert image == f"${{BOT_IMAGE:-{match.group(1)}}}"
+
+
 def test_the_bot_waits_for_the_migrations() -> None:
     services = _services()
     assert services["migrate"]["command"] == ["alembic", "upgrade", "head"]

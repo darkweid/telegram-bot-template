@@ -90,7 +90,9 @@ Telegram queues updates while the next container starts.
 
 Run the prod-like stack with `make run`. A one-shot `migrate` service applies
 the migrations baked into the image before the bot starts, and the bot waits
-for it; `make migrate` runs the same service by hand.
+for it; `make migrate` runs the same service by hand. With `BOT_IMAGE` set in
+`.env` to an image CI pushed (`ghcr.io/<owner>/<repo>:sha-<12>`), `make run`
+pulls and runs that image instead of building one from the checkout.
 
 Put a reverse proxy with a valid certificate in front of the bot and forward
 `WEBHOOK_PATH` (default `/webhook/telegram`) to `bot:${WEB_SERVER_PORT}` on the

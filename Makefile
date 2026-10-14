@@ -13,6 +13,8 @@ COMPOSE_TEST = infra/docker-compose.test.yml
 HOST_USER := $(shell id -u):$(shell id -g)
 
 APP_CONTAINER = bot
+# The bot image's name when BOT_IMAGE is unset; matches the default in COMPOSE_BASE.
+LOCAL_BOT_IMAGE = tg-bot-template-bot:latest
 
 # Requirements management
 REQ_DIR = infra/requirements
@@ -35,9 +37,17 @@ build: ## Build the images
 up: ## Start the containers
 	$(DOCKER_COMPOSE) up -d
 
+# BOT_IMAGE (in .env or the shell) pins the image CI pushed: it is pulled and run
+# as is, because a build would put the checkout's code under the pinned tag.
 .PHONY: run
-run: ## Build and start the prod-like stack
-	$(DOCKER_COMPOSE) up --build -d
+run: ## Build and start the prod-like stack; with BOT_IMAGE set, pull it instead
+	@if $(DOCKER_COMPOSE) config --images | grep -qxF '$(LOCAL_BOT_IMAGE)'; then \
+		$(DOCKER_COMPOSE) up --build -d; \
+	else \
+		$(DOCKER_COMPOSE) pull migrate bot && \
+		$(DOCKER_COMPOSE) build postgres && \
+		$(DOCKER_COMPOSE) up -d; \
+	fi
 
 .PHONY: run-dev
 run-dev: i18n-compile ## Build and start the dev stack with autoreload
