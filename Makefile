@@ -17,7 +17,11 @@ APP_CONTAINER = bot
 LOCAL_BOT_IMAGE = tg-bot-template-bot:latest
 # The commit baked into a locally built image; /status and /health show it.
 # Twelve characters, like the sha- tag CI gives the image.
-export COMMIT_SHA ?= $(shell git rev-parse --short=12 HEAD 2>/dev/null || echo unknown)
+# Evaluated once; a COMMIT_SHA from the shell or the command line wins.
+ifndef COMMIT_SHA
+COMMIT_SHA := $(shell git rev-parse --short=12 HEAD 2>/dev/null || echo unknown)
+endif
+export COMMIT_SHA
 
 # Requirements management
 REQ_DIR = infra/requirements

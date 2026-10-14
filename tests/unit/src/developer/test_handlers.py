@@ -86,9 +86,37 @@ async def test_a_test_alert_goes_where_real_alerts_go(
         [confirmation] = running.session.sent(SendMessage)
     [alert] = alerts.sent(SendMessage)
     assert alert.chat_id == DEVELOPER
-    assert "Test alert" in alert.text
     assert confirmation.chat_id == DEVELOPER
     assert confirmation.text == "Test alert sent. Not there? The bot log says why."
+
+
+async def test_a_test_alert_names_the_build_and_only_the_requesters_id(
+    settings: Config, i18n: I18n
+) -> None:
+    """The alert goes out in HTML parse mode, so the configured names are
+    escaped; and like every alert it carries an id, never a name."""
+    config = _developer(settings)
+    config = config.model_copy(
+        update={
+            "app": config.app.model_copy(
+                update={
+                    "PROJECT_NAME": "My <bot>",
+                    "VERSION": "1.2.3",
+                    "COMMIT_SHA": "0123456789ab",
+                }
+            )
+        }
+    )
+    alerts = FakeTelegramSession()
+    async with running_bot(config, i18n, UseCases(), alert_session=alerts) as running:
+        await running.feed(
+            build_message_update("/test_alert", user_id=DEVELOPER, first_name="Ann")
+        )
+    [alert] = alerts.sent(SendMessage)
+    assert alert.text == (
+        "Test alert from <b>My &lt;bot&gt;</b> 1.2.3 (0123456789ab), "
+        f"requested by {DEVELOPER}"
+    )
 
 
 async def test_a_repeated_test_alert_is_sent_again(

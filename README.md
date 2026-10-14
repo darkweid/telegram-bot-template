@@ -279,7 +279,9 @@ committing it.
 
 `make` passes the checkout's commit (`git rev-parse --short=12 HEAD`) to the
 image build as `COMMIT_SHA`, and CI passes the same 12 characters it puts in
-the `sha-` tag; `/status` and `/health` show it, `unknown` without one. Leave
+the `sha-` tag; `/status` and `/health` show it, `unknown` without one. The
+dev stack (`make run-dev`) runs the live checkout rather than a baked image, so
+it always shows `unknown`. Leave
 `COMMIT_SHA` out of `.env`: the compose services read that file, and a value
 there would override the commit baked into the image.
 
