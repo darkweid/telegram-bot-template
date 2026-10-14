@@ -33,6 +33,8 @@ source_modules =
 forbidden_modules =
     src.user.repositories
     src.broadcast.repositories
+    src.system.repositories
+    src.core.outbox.repositories
     sqlalchemy
 # Only direct imports count: a handler calls a use case, and the use case
 # reaching repositories and SQLAlchemy is the point of having one.
