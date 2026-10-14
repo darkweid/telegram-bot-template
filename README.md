@@ -136,7 +136,8 @@ Two optional roles, set in `.env` as comma-separated Telegram user ids:
   `/health` report, `/test_alert` sends a test alert the way real alerts go,
   past the cooldown.
 
-Both skip throttling and bans. Each listed id gets a command menu of its own in
+Neither is throttled, and a ban never drops their updates (see below for
+broadcasts and statistics). Each listed id gets a command menu of its own in
 its private chat: the user commands plus those of its roles. An id that never
 opened the bot cannot get a menu yet; the bot logs one warning and starts
 anyway, and the menu is set on the next start after that user opens the bot.
@@ -272,8 +273,9 @@ it, and if it is gone, the broadcast stops as failed and developers are
 alerted.
 
 The total in the progress message is the number of recipients when Send was
-pressed. Users are walked in order of their id, so one who unblocks the bot
-mid-run is reached too and one who blocks it or is banned is skipped; the
+pressed. Users are walked in order of their id, so a change mid-run counts only
+for users the walk has not reached yet: one who unblocks the bot is reached
+too, one who blocks it or is banned is skipped; the
 progress never reads past its total, and the final report of a completed
 broadcast counts the users who were actually walked.
 
