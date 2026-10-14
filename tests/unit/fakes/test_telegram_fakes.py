@@ -35,6 +35,17 @@ async def test_edit_returns_a_message_for_a_chat_message() -> None:
     assert [type(m) for m in session.requests] == [EditMessageText]
 
 
+async def test_records_the_timeout_of_each_call() -> None:
+    """Code that caps its calls below the session default is pinned through
+    this; a fake that dropped the timeout would hide a missing cap."""
+    session = FakeTelegramSession()
+    bot = make_bot(session)
+    await bot.send_message(chat_id=42, text="capped", request_timeout=5)
+    await bot.send_message(chat_id=42, text="default")
+    capped, default = session.sent(SendMessage)
+    assert (session.timeout_of(capped), session.timeout_of(default)) == (5, None)
+
+
 async def test_queued_results_and_errors_come_first() -> None:
     session = FakeTelegramSession()
     bot = make_bot(session)

@@ -47,6 +47,7 @@ class FakeTelegramSession(BaseSession):
     def __init__(self) -> None:
         super().__init__()
         self.requests: list[TelegramMethod[Any]] = []
+        self._timeouts: dict[int, int | None] = {}
         self._queued: defaultdict[type[TelegramMethod[Any]], deque[object]] = (
             defaultdict(deque)
         )
@@ -71,6 +72,11 @@ class FakeTelegramSession(BaseSession):
         async with asyncio.timeout(2), self._recorded:
             await self._recorded.wait_for(lambda: len(self.sent(method_type)) >= count)
 
+    def timeout_of(self, request: TelegramMethod[Any]) -> int | None:
+        """The request timeout the call was made with; None means the
+        session's default."""
+        return self._timeouts[id(request)]
+
     def sent(self, method_type: type[M]) -> list[M]:
         return [
             request for request in self.requests if isinstance(request, method_type)
@@ -82,6 +88,7 @@ class FakeTelegramSession(BaseSession):
         method: TelegramMethod[Any],
         timeout: int | None = None,  # noqa: ASYNC109 - signature fixed by BaseSession
     ) -> Any:
+        self._timeouts[id(method)] = timeout
         await self._record(method)
         queued = self._queued[type(method)]
         if queued:

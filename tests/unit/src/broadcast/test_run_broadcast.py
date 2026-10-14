@@ -1,4 +1,6 @@
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock
 from uuid import UUID
@@ -19,9 +21,11 @@ from src.broadcast.enums import BroadcastStatus
 from src.broadcast.models import Broadcast
 from src.broadcast.repositories import BroadcastRepository
 from src.broadcast.schemas import Checkpoint
+from src.broadcast.services import STALE_AFTER
 from src.broadcast.usecases import run_broadcast as run_module
 from src.broadcast.usecases.run_broadcast import RunBroadcastUseCase
 from src.core.limiter.pacer import Pacer
+from src.core.telegram.session import MAX_RETRY_SLEEP_SECONDS
 from src.main.config import Config
 from src.user.repositories import UserRepository
 from tests.factories.users import build_user_model
@@ -62,6 +66,47 @@ async def _recipients(
 ) -> list[int]:
     assert registered_by == CREATED_AT
     return [user_id for user_id in RECIPIENTS if user_id > after][:limit]
+
+
+@dataclass
+class _Clock:
+    """Stands in for the run's clock and sleep: a sleep moves the clock on at
+    once and is logged, together with every checkpoint and how many copies
+    had gone out by then."""
+
+    telegram: FakeTelegramSession
+    now: float = 0.0
+    events: list[tuple[str, float]] = field(default_factory=list)
+
+    def monotonic(self) -> float:
+        return self.now
+
+    async def sleep(self, seconds: float) -> None:
+        self.events.append(("sleep", seconds))
+        self.now += seconds
+
+    def checkpointed(self, *args: object, **kwargs: object) -> None:
+        self.events.append(("checkpoint", len(self.telegram.sent(CopyMessage))))
+
+
+def _install_clock(
+    monkeypatch: pytest.MonkeyPatch,
+    telegram: FakeTelegramSession,
+    broadcasts: AsyncMock,
+    lease: bool | None,
+) -> _Clock:
+    """`lease` is what every checkpoint answers: False goes on, True asks to
+    stop, None means the lease was lost."""
+    clock = _Clock(telegram)
+    monkeypatch.setattr(run_module, "time", SimpleNamespace(monotonic=clock.monotonic))
+    monkeypatch.setattr(run_module, "asyncio", SimpleNamespace(sleep=clock.sleep))
+
+    def save_checkpoint(*args: object, **kwargs: object) -> bool | None:
+        clock.checkpointed()
+        return lease
+
+    broadcasts.save_checkpoint.side_effect = save_checkpoint
+    return clock
 
 
 def _broadcasts() -> AsyncMock:
@@ -378,3 +423,104 @@ async def test_progress_is_shown_with_a_stop_button_then_replaced_by_the_report(
         button.callback_data == BroadcastStopCallback(broadcast_id=BROADCAST_ID).pack()
     )
     assert (last.text, last.reply_markup) == (FINISHED, None)
+
+
+async def test_a_long_streak_of_failed_copies_renews_the_lease(
+    settings: Config, i18n: I18n, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Retries of one recipient can run past CHECKPOINT_INTERVAL_SECONDS;
+    without a renewal among them the lease could lapse mid-delivery."""
+    monkeypatch.setattr(run_module, "CHECKPOINT_INTERVAL_SECONDS", 3)
+    telegram = FakeTelegramSession()
+    for _ in range(4):
+        telegram.queue(
+            CopyMessage, TelegramNetworkError(method=COPY, message="timeout")
+        )
+    broadcasts = _broadcasts()
+    clock = _install_clock(monkeypatch, telegram, broadcasts, lease=False)
+    status = await _run(settings, i18n, telegram, broadcasts).execute(BROADCAST_ID)
+    assert status == BroadcastStatus.COMPLETED
+    assert clock.events[:7] == [
+        ("sleep", 1),
+        ("sleep", 2),
+        ("checkpoint", 2),
+        ("sleep", 4),
+        ("checkpoint", 3),
+        ("sleep", 8),
+        ("checkpoint", 4),
+    ]
+    assert _copied_to(telegram) == [10, 10, 10, 10, 10, 20, 30]
+
+
+async def test_a_lease_lost_between_retries_stops_the_run_without_writing(
+    settings: Config, i18n: I18n, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A second run owns the broadcast; another attempt or a final write from
+    here would send twice and overwrite its counts."""
+    monkeypatch.setattr(run_module, "CHECKPOINT_INTERVAL_SECONDS", 3)
+    telegram = FakeTelegramSession()
+    for _ in range(4):
+        telegram.queue(
+            CopyMessage, TelegramNetworkError(method=COPY, message="timeout")
+        )
+    broadcasts = _broadcasts()
+    clock = _install_clock(monkeypatch, telegram, broadcasts, lease=None)
+    assert (
+        await _run(settings, i18n, telegram, broadcasts).execute(BROADCAST_ID) is None
+    )
+    assert clock.events == [("sleep", 1), ("sleep", 2), ("checkpoint", 2)]
+    assert _copied_to(telegram) == [10, 10]
+    broadcasts.finish.assert_not_awaited()
+    assert telegram.sent(SendMessage) == []
+
+
+async def test_a_stop_between_retries_leaves_the_recipient_undone(
+    settings: Config, i18n: I18n, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(run_module, "CHECKPOINT_INTERVAL_SECONDS", 3)
+    telegram = FakeTelegramSession()
+    for _ in range(4):
+        telegram.queue(
+            CopyMessage, TelegramNetworkError(method=COPY, message="timeout")
+        )
+    broadcasts = _broadcasts()
+    _install_clock(monkeypatch, telegram, broadcasts, lease=True)
+    status = await _run(settings, i18n, telegram, broadcasts).execute(BROADCAST_ID)
+    assert status == BroadcastStatus.CANCELLED
+    assert _copied_to(telegram) == [10, 10]
+    assert _finished_with(broadcasts)[0] == Checkpoint(
+        cursor_user_id=0, sent=0, failed=0, unreachable=0
+    )
+
+
+def test_the_longest_gap_between_checkpoints_stays_under_the_lease() -> None:
+    """Past a due checkpoint a run can still make one copy and one progress
+    edit, each a request that hangs to its timeout after the session's flood
+    retries, and sleep one retry pause. The sum stays under half of
+    STALE_AFTER, so a slow database or event loop still leaves room before a
+    live run gets a twin."""
+    one_call = run_module.TELEGRAM_REQUEST_TIMEOUT_SECONDS + MAX_RETRY_SLEEP_SECONDS
+    longest_gap = (
+        run_module.CHECKPOINT_INTERVAL_SECONDS
+        + 2 * one_call
+        + max(run_module.TRANSIENT_RETRY_DELAYS_SECONDS)
+    )
+    assert longest_gap < STALE_AFTER.total_seconds() / 2
+
+
+async def test_every_call_of_a_run_is_capped_by_the_short_timeout(
+    settings: Config, i18n: I18n
+) -> None:
+    """The session's 60 s default would let five hanging attempts of one copy
+    outlast the lease on their own."""
+    telegram = FakeTelegramSession()
+    await _run(settings, i18n, telegram, _broadcasts()).execute(BROADCAST_ID)
+    calls = [
+        *telegram.sent(CopyMessage),
+        *telegram.sent(EditMessageText),
+        *telegram.sent(SendMessage),
+    ]
+    assert len(calls) == 6
+    assert {telegram.timeout_of(call) for call in calls} == {
+        run_module.TELEGRAM_REQUEST_TIMEOUT_SECONDS
+    }

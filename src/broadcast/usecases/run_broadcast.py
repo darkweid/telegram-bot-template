@@ -36,9 +36,18 @@ logger = get_logger(__name__)
 
 # The admin's progress message is edited at most this often.
 PROGRESS_EDIT_INTERVAL_SECONDS = 5
-# The longest a run goes without a checkpoint, flood waits included; well
-# under STALE_AFTER, after which the resume task hands the broadcast over.
+# A run renews its lease at least this often: between recipients, inside a
+# flood wait and between retries of a failing copy. Past it come at most one
+# copy and one progress edit, each one hanging request of up to
+# TELEGRAM_REQUEST_TIMEOUT_SECONDS plus the session's flood retries (up to
+# MAX_RETRY_SLEEP_SECONDS, answered at once), and one retry pause: about two
+# and a half minutes in all, under STALE_AFTER, after which the resume task
+# hands the broadcast over to a second run.
 CHECKPOINT_INTERVAL_SECONDS = 60
+# Every Bot API call of a run is capped at this, against the session's 60 s
+# default: a hanging request is the one gap no checkpoint can split, and the
+# five attempts of a failing copy at 60 s each would outlast STALE_AFTER alone.
+TELEGRAM_REQUEST_TIMEOUT_SECONDS = 10
 # Pauses before retrying a copy that met a network or server error; one more
 # failure after the last of them fails the broadcast.
 TRANSIENT_RETRY_DELAYS_SECONDS: tuple[float, ...] = (1, 2, 4, 8)
@@ -87,6 +96,10 @@ class _Run:
             failed=self.failed,
             unreachable=self.unreachable,
         )
+
+
+def _checkpoint_due(run: _Run) -> bool:
+    return time.monotonic() - run.checkpointed_at >= CHECKPOINT_INTERVAL_SECONDS
 
 
 class RunBroadcastUseCase:
@@ -187,10 +200,7 @@ class RunBroadcastUseCase:
                     return BroadcastStatus.CANCELLED
                 run.cursor = user_id
                 await self._show_progress(run)
-                if (
-                    time.monotonic() - run.checkpointed_at
-                    >= CHECKPOINT_INTERVAL_SECONDS
-                ):
+                if _checkpoint_due(run):
                     await self._checkpoint(run)
                     if run.stop_requested:
                         return BroadcastStatus.CANCELLED
@@ -213,14 +223,17 @@ class RunBroadcastUseCase:
 
     async def _deliver(self, run: _Run, user_id: int) -> bool:
         """Copy the message to one recipient and count the outcome. False when
-        a stop came in while waiting out flood control: the recipient is not
-        done, and the cursor stays before them."""
+        a stop came in while waiting out flood control or between retries: the
+        recipient is not done, and the cursor stays before them."""
         delays = iter(TRANSIENT_RETRY_DELAYS_SECONDS)
         while True:
             await self._pacer.wait()
             try:
                 await self._bot.copy_message(
-                    user_id, run.source_chat_id, run.source_message_id
+                    user_id,
+                    run.source_chat_id,
+                    run.source_message_id,
+                    request_timeout=TELEGRAM_REQUEST_TIMEOUT_SECONDS,
                 )
             except TelegramRetryAfter as error:
                 if not await self._sit_out(run, error.retry_after):
@@ -231,6 +244,11 @@ class RunBroadcastUseCase:
                 if delay is None:
                     raise
                 await asyncio.sleep(delay)
+                # A streak of failures takes minutes; the lease must outlive it.
+                if _checkpoint_due(run):
+                    await self._checkpoint(run)
+                    if run.stop_requested:
+                        return False
                 continue
             except TelegramForbiddenError:
                 # ForbiddenMiddleware has already marked the user unreachable.
@@ -335,7 +353,9 @@ class RunBroadcastUseCase:
         # which an edit does not.
         await self._edit(run, text, None)
         try:
-            await self._bot.send_message(run.admin_id, text)
+            await self._bot.send_message(
+                run.admin_id, text, request_timeout=TELEGRAM_REQUEST_TIMEOUT_SECONDS
+            )
         except TelegramAPIError as error:
             logger.warning(
                 "Broadcast %s report was not delivered: %s",
@@ -354,6 +374,7 @@ class RunBroadcastUseCase:
                 chat_id=run.admin_id,
                 message_id=run.progress_message_id,
                 reply_markup=reply_markup,
+                request_timeout=TELEGRAM_REQUEST_TIMEOUT_SECONDS,
             )
         except TelegramAPIError as error:
             # The admin may have deleted the message; the broadcast goes on.
