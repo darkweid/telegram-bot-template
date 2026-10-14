@@ -8,7 +8,9 @@ class ScrubbedError(Exception):
     `Failing row contains (...)`) and a pydantic ValidationError prints every
     `input_value`; both reach a log line or a Sentry event through `str(exc)`
     and through the exception chain. This one carries a summary the caller
-    built from safe fields, the original traceback, and no chain.
+    built from safe fields and the original traceback. It starts with no
+    chain: below a driver error every link repeats the DETAIL, below a
+    pydantic error the chain is the caller's, so the caller decides.
     """
 
 

@@ -24,8 +24,8 @@ pull requests.
   that messages users unprompted. A user becomes reachable again with their
   next update or when they unblock the bot.
 - Flood-control retries: a Bot API call that hits `RetryAfter` waits as long
-  as Telegram asks, up to a minute, and tries again, up to
-  `TELEGRAM_RETRY_ATTEMPTS` times.
+  as Telegram asks and tries again, up to `TELEGRAM_RETRY_ATTEMPTS` times. All
+  calls of one update share 30 seconds of waiting.
 - A global error handler that logs the failure, answers the user in their
   Telegram language, and reports unexpected errors to Sentry.
 - `/live`, `/ready` and `/health` probes in both modes.

@@ -2,11 +2,14 @@ import asyncio
 from typing import Any
 
 from aiogram import Dispatcher
+from aiogram.exceptions import TelegramRetryAfter
+from aiogram.methods import SendChatAction, SendMessage
 from aiogram.types import Message, TelegramObject
 import pytest
 import sentry_sdk
 
 from src.core.telegram.middlewares.update_context import UpdateContextMiddleware
+from src.core.telegram.session import MAX_RETRY_SLEEP_SECONDS, RetryAfterMiddleware
 from src.core.update_context import (
     UpdateContext,
     bind_update_context,
@@ -107,3 +110,39 @@ async def test_an_event_that_is_not_an_update_passes_through_unbound() -> None:
 
     assert await UpdateContextMiddleware()(handler, event, {}) == "handled"
     assert seen == [None]
+
+
+async def test_each_update_gets_one_flood_wait_budget() -> None:
+    session, sleeps = FakeTelegramSession(), []
+
+    async def sleep(seconds: float) -> None:
+        sleeps.append(seconds)
+
+    session.middleware(RetryAfterMiddleware(attempts=3, sleep=sleep))
+    wait = MAX_RETRY_SLEEP_SECONDS // 2 + 1
+    flood = TelegramRetryAfter(
+        SendMessage(chat_id=7, text="x"), "Too Many Requests", wait
+    )
+    session.queue(SendMessage, flood)
+    session.queue(SendChatAction, flood)
+    session.queue(SendChatAction, flood)
+    outcomes: list[str] = []
+    dp = Dispatcher()
+    dp.update.outer_middleware(UpdateContextMiddleware())
+
+    @dp.message()
+    async def handler(message: Message) -> None:
+        await message.answer("x")
+        try:
+            await message.bot.send_chat_action(message.chat.id, "typing")
+            outcomes.append("sent")
+        except TelegramRetryAfter:
+            outcomes.append("flood")
+
+    bot = make_bot(session)
+    await dp.feed_update(bot, build_message_update(user_id=7, update_id=1))
+    await dp.feed_update(bot, build_message_update(user_id=7, update_id=2))
+    # In the first update the second wait does not fit what the first left;
+    # the second update fits the same wait, so its budget is its own.
+    assert outcomes == ["flood", "sent"]
+    assert sleeps == [wait, wait]

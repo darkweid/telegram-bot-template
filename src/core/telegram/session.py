@@ -5,7 +5,9 @@ outermost: aiogram wraps them in reverse order.
 """
 
 import asyncio
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from typing import Any, Protocol
 
 from aiogram import Bot
@@ -22,10 +24,32 @@ from loggers import get_logger
 logger = get_logger(__name__)
 
 # Telegram asks for waits of a few seconds under normal flood control and for
-# minutes or hours when a bot is being punished. Sleeping that long inside an
-# update would hold the user's event-isolation lock and a polling slot, so a
-# longer wait fails the call instead.
-MAX_RETRY_AFTER_SECONDS = 60
+# minutes or hours when a bot is being punished. An update sleeps while holding
+# a polling slot and the user's event-isolation lock (EVENT_ISOLATION_LOCK_SECONDS
+# in fsm.py), so all calls of one update share this much sleep, and a wait that
+# would go past it fails its call instead. A call outside an update gets the
+# same amount to itself.
+MAX_RETRY_SLEEP_SECONDS = 30
+
+
+class _SleepBudget:
+    def __init__(self, seconds: float) -> None:
+        self.remaining = seconds
+
+
+_update_sleep_budget: ContextVar[_SleepBudget | None] = ContextVar(
+    "update_sleep_budget", default=None
+)
+
+
+@contextmanager
+def update_sleep_budget() -> Iterator[None]:
+    """Make the flood-wait calls of the block share MAX_RETRY_SLEEP_SECONDS."""
+    token = _update_sleep_budget.set(_SleepBudget(MAX_RETRY_SLEEP_SECONDS))
+    try:
+        yield
+    finally:
+        _update_sleep_budget.reset(token)
 
 
 class RetryAfterMiddleware(BaseRequestMiddleware):
@@ -44,17 +68,16 @@ class RetryAfterMiddleware(BaseRequestMiddleware):
         bot: Bot,
         method: TelegramMethod[TelegramType],
     ) -> Response[TelegramType]:
+        budget = _update_sleep_budget.get() or _SleepBudget(MAX_RETRY_SLEEP_SECONDS)
         retries = 0
         while True:
             try:
                 return await make_request(bot, method)
             except TelegramRetryAfter as error:
-                if (
-                    retries >= self._attempts
-                    or error.retry_after > MAX_RETRY_AFTER_SECONDS
-                ):
+                if retries >= self._attempts or error.retry_after > budget.remaining:
                     raise
                 retries += 1
+                budget.remaining -= error.retry_after
                 logger.warning(
                     "Flood control on %s: retry %d/%d in %ss",
                     type(method).__name__,

@@ -3,13 +3,14 @@ from aiogram.exceptions import (
     TelegramForbiddenError,
     TelegramRetryAfter,
 )
-from aiogram.methods import SendMessage
+from aiogram.methods import SendChatAction, SendMessage
 import pytest
 
 from src.core.telegram.session import (
-    MAX_RETRY_AFTER_SECONDS,
+    MAX_RETRY_SLEEP_SECONDS,
     ForbiddenMiddleware,
     RetryAfterMiddleware,
+    update_sleep_budget,
 )
 from tests.fakes.telegram import FakeTelegramSession, make_bot
 
@@ -65,7 +66,7 @@ async def test_retries_are_bounded() -> None:
 async def test_a_wait_longer_than_the_cap_is_not_waited() -> None:
     session, sleeps = FakeTelegramSession(), Sleeps()
     session.middleware(RetryAfterMiddleware(attempts=3, sleep=sleeps))
-    session.queue(SendMessage, _flood(MAX_RETRY_AFTER_SECONDS + 1))
+    session.queue(SendMessage, _flood(MAX_RETRY_SLEEP_SECONDS + 1))
     with pytest.raises(TelegramRetryAfter):
         await make_bot(session).send_message(chat_id=42, text="x")
     assert sleeps.calls == []
@@ -122,9 +123,46 @@ async def test_no_retries_with_zero_attempts() -> None:
 async def test_a_wait_exactly_at_the_cap_is_waited() -> None:
     session, sleeps = FakeTelegramSession(), Sleeps()
     session.middleware(RetryAfterMiddleware(attempts=1, sleep=sleeps))
-    session.queue(SendMessage, _flood(MAX_RETRY_AFTER_SECONDS))
+    session.queue(SendMessage, _flood(MAX_RETRY_SLEEP_SECONDS))
     await make_bot(session).send_message(chat_id=42, text="x")
-    assert sleeps.calls == [MAX_RETRY_AFTER_SECONDS]
+    assert sleeps.calls == [MAX_RETRY_SLEEP_SECONDS]
+
+
+async def test_waits_stop_once_their_total_would_pass_the_cap() -> None:
+    session, sleeps = FakeTelegramSession(), Sleeps()
+    session.middleware(RetryAfterMiddleware(attempts=3, sleep=sleeps))
+    first = MAX_RETRY_SLEEP_SECONDS // 2 + 1
+    session.queue(SendMessage, _flood(first))
+    session.queue(SendMessage, _flood(first))
+    with pytest.raises(TelegramRetryAfter):
+        await make_bot(session).send_message(chat_id=42, text="x")
+    assert sleeps.calls == [first]
+
+
+async def test_calls_of_one_update_share_the_cap() -> None:
+    session, sleeps = FakeTelegramSession(), Sleeps()
+    session.middleware(RetryAfterMiddleware(attempts=3, sleep=sleeps))
+    wait = MAX_RETRY_SLEEP_SECONDS // 2 + 1
+    session.queue(SendMessage, _flood(wait))
+    session.queue(SendChatAction, _flood(wait))
+    bot = make_bot(session)
+    with update_sleep_budget():
+        await bot.send_message(chat_id=42, text="first")
+        with pytest.raises(TelegramRetryAfter):
+            await bot.send_chat_action(chat_id=42, action="typing")
+    assert sleeps.calls == [wait]
+
+
+async def test_calls_outside_an_update_each_get_the_cap() -> None:
+    session, sleeps = FakeTelegramSession(), Sleeps()
+    session.middleware(RetryAfterMiddleware(attempts=3, sleep=sleeps))
+    wait = MAX_RETRY_SLEEP_SECONDS // 2 + 1
+    session.queue(SendMessage, _flood(wait))
+    session.queue(SendChatAction, _flood(wait))
+    bot = make_bot(session)
+    await bot.send_message(chat_id=42, text="first")
+    await bot.send_chat_action(chat_id=42, action="typing")
+    assert sleeps.calls == [wait, wait]
 
 
 async def test_a_retried_call_ending_in_forbidden_is_recorded_once() -> None:

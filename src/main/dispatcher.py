@@ -1,14 +1,17 @@
 from functools import partial
 
-from aiogram import Dispatcher
+from aiogram import Dispatcher, Router
 from aiogram.fsm.storage.base import BaseEventIsolation, BaseStorage
-from aiogram.utils.callback_answer import CallbackAnswerMiddleware
+from aiogram.types import CallbackQuery
 from aiogram.utils.i18n import I18n
 from dishka import AsyncContainer
 from dishka.integrations.aiogram import ContainerMiddleware, inject_router
 
 from src.core.i18n.middleware import UserLocaleMiddleware
 from src.core.telegram.errors import build_errors_router
+from src.core.telegram.middlewares.callback_answer import (
+    SkipAwareCallbackAnswerMiddleware,
+)
 from src.core.telegram.middlewares.update_context import UpdateContextMiddleware
 from src.user.handlers import build_user_router
 from src.user.middlewares import UserMiddleware
@@ -19,7 +22,8 @@ async def create_dispatcher(container: AsyncContainer) -> Dispatcher:
 
     Outer middlewares on `update` run in registration order, after aiogram's
     own (errors, user context, FSM context):
-    1. UpdateContextMiddleware - ids for logs and Sentry, for everything below;
+    1. UpdateContextMiddleware - ids for logs and Sentry and the update's
+       flood-wait budget, for everything below;
     2. dishka's ContainerMiddleware - one request scope per update, which the
        handler shares;
     3. UserMiddleware - stores the sender, needs the request scope;
@@ -40,7 +44,22 @@ async def create_dispatcher(container: AsyncContainer) -> Dispatcher:
     # Wrap every FromDishka handler once, when the dispatcher starts.
     dp.startup.register(partial(inject_router, router=dp))
     # Answers every callback query, so the button's spinner stops even when
-    # the handler fails; handlers may still answer with text themselves.
-    dp.callback_query.middleware(CallbackAnswerMiddleware())
-    dp.include_routers(build_errors_router(), build_user_router())
+    # the handler fails; handlers may still answer with text themselves. An
+    # inner middleware runs only around a matched handler, so the last router
+    # matches whatever no other router took: a stale button, a group chat or
+    # an inline message.
+    dp.callback_query.middleware(SkipAwareCallbackAnswerMiddleware())
+    dp.include_routers(
+        build_errors_router(), build_user_router(), _build_unmatched_router()
+    )
     return dp
+
+
+def _build_unmatched_router() -> Router:
+    router = Router(name="unmatched")
+    router.callback_query.register(_ignore_callback)
+    return router
+
+
+async def _ignore_callback(callback: CallbackQuery) -> None:
+    return None

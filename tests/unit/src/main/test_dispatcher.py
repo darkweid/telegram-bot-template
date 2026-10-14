@@ -7,20 +7,23 @@ from aiogram.dispatcher.middlewares.user_context import UserContextMiddleware
 from aiogram.filters import Command
 from aiogram.fsm.middleware import FSMContextMiddleware
 from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.types import Message
-from aiogram.utils.callback_answer import CallbackAnswerMiddleware
+from aiogram.methods import AnswerCallbackQuery
+from aiogram.types import CallbackQuery, Chat, Message, Update, User
 from aiogram.utils.i18n import I18n
 from dishka import FromDishka, Provider, Scope, provide
 from dishka.integrations.aiogram import ContainerMiddleware
 
 from src.core.i18n.middleware import UserLocaleMiddleware
+from src.core.telegram.middlewares.callback_answer import (
+    SkipAwareCallbackAnswerMiddleware,
+)
 from src.core.telegram.middlewares.update_context import UpdateContextMiddleware
 from src.main.config import Config
 from src.main.dispatcher import create_dispatcher
 from src.user.middlewares import UserMiddleware
 from src.user.schemas import UserProfile
 from src.user.usecases.touch_user import TouchUserUseCase
-from tests.factories.updates import build_message_update
+from tests.factories.updates import build_callback_update, build_message_update
 from tests.fakes.telegram import FakeTelegramSession
 from tests.helpers.dispatcher import running_bot
 from tests.helpers.providers import build_test_container
@@ -40,7 +43,7 @@ async def test_middlewares_run_in_the_documented_order(
             UserLocaleMiddleware,
         ]
         assert [type(m) for m in running.dp.callback_query.middleware] == [
-            CallbackAnswerMiddleware
+            SkipAwareCallbackAnswerMiddleware
         ]
         assert isinstance(running.dp.fsm.storage, MemoryStorage)
 
@@ -129,3 +132,46 @@ async def test_middlewares_and_the_handler_share_one_request_scope(
     # UserMiddleware and the handler asked for it; one scope built it once.
     assert resolved == [counting.touch]
     assert counting.built == 1
+
+
+async def test_a_callback_no_handler_matches_is_still_answered(
+    settings: Config, i18n: I18n
+) -> None:
+    async with running_bot(settings, i18n, CountingTouch()) as running:
+        await running.feed(build_callback_update("unknown:1"))
+        assert len(running.session.sent(AnswerCallbackQuery)) == 1
+
+
+async def test_a_callback_from_an_inline_message_is_still_answered(
+    settings: Config, i18n: I18n
+) -> None:
+    callback = CallbackQuery(
+        id="1",
+        from_user=User(id=42, is_bot=False, first_name="Ann"),
+        chat_instance="instance",
+        inline_message_id="inline-1",
+        data="unknown:1",
+    )
+    async with running_bot(settings, i18n, CountingTouch()) as running:
+        await running.feed(Update(update_id=999_003, callback_query=callback))
+        assert len(running.session.sent(AnswerCallbackQuery)) == 1
+
+
+async def test_a_callback_from_a_group_is_still_answered(
+    settings: Config, i18n: I18n
+) -> None:
+    callback = CallbackQuery(
+        id="1",
+        from_user=User(id=42, is_bot=False, first_name="Ann"),
+        chat_instance="instance",
+        message=Message(
+            message_id=1,
+            date=datetime(2026, 1, 1, tzinfo=UTC),
+            chat=Chat(id=-100123, type="supergroup"),
+            text="menu",
+        ),
+        data="unknown:1",
+    )
+    async with running_bot(settings, i18n, CountingTouch()) as running:
+        await running.feed(Update(update_id=999_004, callback_query=callback))
+        assert len(running.session.sent(AnswerCallbackQuery)) == 1

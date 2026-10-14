@@ -12,6 +12,7 @@ from src.core.errors.exceptions import (
     FilteringError,
     InfrastructureException,
     LogLevel,
+    format_html,
 )
 from src.core.i18n import LOCALES_DIR
 
@@ -28,9 +29,14 @@ def _project_exceptions() -> list[type[CoreException]]:
     for module in pkgutil.walk_packages(src.__path__, prefix="src."):
         if not module.name.endswith("__main__"):
             importlib.import_module(module.name)
-    return sorted(
-        {CoreException, *_all_subclasses(CoreException)}, key=lambda c: c.__qualname__
-    )
+    # Tests define subclasses of their own with untranslated keys; whether they
+    # are imported yet depends on collection order.
+    project = {
+        cls
+        for cls in {CoreException, *_all_subclasses(CoreException)}
+        if cls.__module__.split(".")[0] == "src"
+    }
+    return sorted(project, key=lambda c: c.__qualname__)
 
 
 def _russian_msgids() -> dict[str, str]:
@@ -95,3 +101,29 @@ def test_user_message_fills_placeholders(i18n: I18n) -> None:
 
     with i18n.context(), i18n.use_locale("en"):
         assert Custom(name="Ann").user_message() == "Hello, Ann"
+
+
+def test_user_message_escapes_text_params_for_html(i18n: I18n) -> None:
+    class Custom(CoreException):
+        message_key = "{name} has {count} items"
+
+    with i18n.context(), i18n.use_locale("en"):
+        assert (
+            Custom(name="<b>&", count=3).user_message() == "&lt;b&gt;&amp; has 3 items"
+        )
+
+
+def test_every_field_is_escaped_however_the_placeholder_reaches_it() -> None:
+    class Sender:
+        first_name = "<i>Ann</i>"
+
+        def __str__(self) -> str:
+            return "<b>"
+
+    assert (
+        format_html(
+            "{user.first_name}, {user}, {count:03d}, {share:.1%}",
+            {"user": Sender(), "count": 7, "share": 0.5},
+        )
+        == "&lt;i&gt;Ann&lt;/i&gt;, &lt;b&gt;, 007, 50.0%"
+    )
