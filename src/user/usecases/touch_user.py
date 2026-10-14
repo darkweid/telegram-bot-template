@@ -25,11 +25,13 @@ class TouchUserUseCase:
     so its drop always lands after this write. Cached after the lock is
     released, the snapshot of a row read just before a ban could be stored
     again after the ban dropped it, and the ban would go unnoticed until the
-    snapshot expired. The cost is one Redis call made under a row lock, bounded
-    by the Redis client's socket timeout. `FOR UPDATE` rather than `FOR SHARE`:
-    two updates of one user that both need a write would each hold a share
-    lock and deadlock upgrading it; with `FOR UPDATE` the second waits and reads
-    the row the first wrote.
+    snapshot expired. The cost is one Redis call made under a row lock: against
+    a hung Redis about two socket timeouts (10 s by default), the one retry
+    `create_redis_client` allows; the cache then fails open.
+
+    `FOR UPDATE` rather than `FOR SHARE`: two updates of one user that both
+    need a write would each hold a share lock and deadlock upgrading it; with
+    `FOR UPDATE` the second waits and reads the row the first wrote.
     """
 
     def __init__(

@@ -1,4 +1,6 @@
 from redis.asyncio import Redis
+from redis.asyncio.retry import Retry
+from redis.backoff import NoBackoff
 
 # Every Redis connection of the project, the task broker's included: a
 # blackholed Redis must fail a command in seconds.
@@ -23,4 +25,11 @@ def create_redis_client(
         socket_timeout=socket_timeout,
         socket_connect_timeout=socket_connect_timeout,
         health_check_interval=health_check_interval,
+        # One immediate retry, so a pooled connection that Redis dropped (a
+        # restart) reconnects instead of failing the command. No more: a hung
+        # Redis then costs at most about two socket timeouts per command (10 s
+        # by default), which stays well under the 60 s event-isolation lock and
+        # DB_IDLE_IN_TRANSACTION_TIMEOUT_SECONDS. TouchUserUseCase writes the
+        # user's snapshot while it holds the users row lock and relies on it.
+        retry=Retry(NoBackoff(), retries=1),
     )
