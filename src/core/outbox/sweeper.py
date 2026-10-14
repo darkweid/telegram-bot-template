@@ -4,6 +4,7 @@ from datetime import timedelta
 
 from dishka import FromDishka
 import sentry_sdk
+from sqlalchemy.ext.asyncio import AsyncSession
 from taskiq import AsyncBroker
 
 from loggers import get_logger
@@ -102,18 +103,23 @@ async def sweep_outbox(
     return f"Published {published}, failed {failed}."
 
 
-async def purge_outbox(uow: FromDishka[SQLAlchemyUnitOfWork]) -> str:
+async def purge_outbox(session: FromDishka[AsyncSession]) -> str:
     """Delete published rows older than the retention window, in batches of
-    PURGE_BATCH_SIZE."""
+    PURGE_BATCH_SIZE.
+
+    Each batch commits in a unit of work of its own: in one transaction a
+    failure on a late batch would roll back every earlier one, and a large
+    backlog would hold its locks for the whole run.
+    """
     cutoff = get_utc_now() - timedelta(days=PUBLISHED_RETENTION_DAYS)
     deleted = 0
-    async with uow:
-        while True:
+    while True:
+        async with SQLAlchemyUnitOfWork(session) as uow:
             batch = await _outbox.purge_published(
                 uow.session, cutoff, limit=PURGE_BATCH_SIZE
             )
-            deleted += batch
-            if batch < PURGE_BATCH_SIZE:
-                break
-        await uow.commit()
+            await uow.commit()
+        deleted += batch
+        if batch < PURGE_BATCH_SIZE:
+            break
     return f"Deleted {deleted} published outbox messages."

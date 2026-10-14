@@ -282,7 +282,7 @@ async def test_purge_deletes_published_rows_past_retention_in_batches(
             )
         )
     async with AsyncSession(integration_engine) as session:
-        await purge_outbox(SQLAlchemyUnitOfWork(session))
+        await purge_outbox(session)
     async with AsyncSession(integration_engine) as session:
         for message_id in old:
             assert await session.get(OutboxMessage, message_id) is None
@@ -290,6 +290,56 @@ async def test_purge_deletes_published_rows_past_retention_in_batches(
     assert len(batches) >= 3
     assert all(size <= 2 for size in batches)
     assert batches[-1] < 2
+
+
+async def test_a_failed_purge_batch_keeps_the_earlier_ones_deleted(
+    integration_engine: AsyncEngine,
+    committed_ids: list[UUID],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """In one transaction a late failure would undo the whole night's purge,
+    and the next run would start again from the same backlog."""
+    monkeypatch.setattr(sweeper_module, "PURGE_BATCH_SIZE", 2)
+    original = OutboxRepository.purge_published
+    calls = 0
+
+    async def failing_third(
+        self: OutboxRepository, session: AsyncSession, cutoff: datetime, *, limit: int
+    ) -> int:
+        nonlocal calls
+        calls += 1
+        if calls == 3:
+            raise ConnectionError("database gone")
+        return await original(self, session, cutoff, limit=limit)
+
+    monkeypatch.setattr(OutboxRepository, "purge_published", failing_third)
+    received = Received()
+    broker = await _broker(InMemoryBroker(await_inplace=True), received)
+    try:
+        old = [
+            await _enqueue(integration_engine, committed_ids, broker) for _ in range(6)
+        ]
+    finally:
+        await broker.shutdown()
+    async with AsyncSession(integration_engine) as session, session.begin():
+        await session.execute(
+            update(OutboxMessage)
+            .where(OutboxMessage.id.in_(old))
+            .values(
+                published_at=get_utc_now()
+                - timedelta(days=PUBLISHED_RETENTION_DAYS + 1)
+            )
+        )
+    async with AsyncSession(integration_engine) as session:
+        with pytest.raises(ConnectionError):
+            await purge_outbox(session)
+    async with AsyncSession(integration_engine) as session:
+        left = [
+            message_id
+            for message_id in old
+            if await session.get(OutboxMessage, message_id) is not None
+        ]
+    assert len(left) == 2
 
 
 def _spy_purge_batches(monkeypatch: pytest.MonkeyPatch) -> list[int]:
