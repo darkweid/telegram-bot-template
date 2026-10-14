@@ -134,6 +134,61 @@ test-integration: ## Run the integration suite against a throwaway PostgreSQL an
 .PHONY: test-all
 test-all: test test-integration ## Run the unit suite and then the integration suite
 
+##@ Translations
+
+I18N_DIR = locales
+I18N_DOMAIN = messages
+I18N_PROJECT = tg-bot-template
+I18N_POT ?= $(I18N_DIR)/$(I18N_DOMAIN).pot
+# `_`, `gettext`, `ngettext` and `N_` are Babel's defaults; `__` is the alias
+# the code uses for lazy_gettext. No locations: line numbers would turn every
+# edit above a string into a catalog diff.
+I18N_KEYWORDS = -k __ -k lazy_gettext
+# Overridable so the catalog tests can point at the interpreter's own pybabel
+# when no virtualenv is activated (CI, an IDE's test runner).
+PYBABEL ?= pybabel
+PYTHON ?= python
+# pybabel leaves placeholders and a trailing blank line in the catalogs; the
+# script scrubs them so a repeated i18n-update changes nothing. update and init
+# remove the .pot whether or not pybabel succeeds.
+I18N_NORMALIZE = $(PYTHON) scripts/ops/normalize_catalogs.py
+
+.PHONY: i18n-extract
+i18n-extract: ## Extract messages from the code into the .pot template
+	$(PYBABEL) extract -F babel.cfg $(I18N_KEYWORDS) --no-location --sort-output \
+		--project="$(I18N_PROJECT)" --version=1 -o $(I18N_POT) .
+
+.PHONY: i18n-update
+i18n-update: ## Merge new and changed messages into every catalog
+	@status=0; \
+	$(MAKE) --no-print-directory i18n-extract || status=$$?; \
+	if [ $$status -eq 0 ]; then \
+		$(PYBABEL) update -i $(I18N_POT) -d $(I18N_DIR) -D $(I18N_DOMAIN) \
+			--no-fuzzy-matching --ignore-obsolete --ignore-pot-creation-date || status=$$?; \
+	fi; \
+	rm -f $(I18N_POT); \
+	if [ $$status -eq 0 ]; then $(I18N_NORMALIZE) $(I18N_DIR) --project $(I18N_PROJECT) || status=$$?; fi; \
+	exit $$status
+
+.PHONY: i18n-compile
+i18n-compile: ## Compile the catalogs into the .mo files the bot loads
+	$(PYBABEL) compile -d $(I18N_DIR) -D $(I18N_DOMAIN) --statistics
+
+.PHONY: i18n-init
+i18n-init: ## Start a catalog for a new language: make i18n-init LOCALE=de
+	@test -n "$(LOCALE)" || { echo "LOCALE is required: make i18n-init LOCALE=de"; exit 1; }
+	@status=0; \
+	$(MAKE) --no-print-directory i18n-extract || status=$$?; \
+	if [ $$status -eq 0 ]; then \
+		$(PYBABEL) init -i $(I18N_POT) -d $(I18N_DIR) -D $(I18N_DOMAIN) -l $(LOCALE) || status=$$?; \
+	fi; \
+	rm -f $(I18N_POT); \
+	if [ $$status -eq 0 ]; then $(I18N_NORMALIZE) $(I18N_DIR) --project $(I18N_PROJECT) || status=$$?; fi; \
+	if [ $$status -eq 0 ]; then \
+		echo "Add \"$(LOCALE)\" to SUPPORTED_LOCALES in src/core/i18n/__init__.py, then translate and run make i18n-compile"; \
+	fi; \
+	exit $$status
+
 ##@ Dependencies
 
 .PHONY: req-compile
