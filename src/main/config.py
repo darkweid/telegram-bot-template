@@ -178,8 +178,19 @@ class BotConfig(BaseSettings):
     # NoDecode: without it pydantic-settings expects a JSON list here.
     ADMIN_IDS: Annotated[frozenset[int], NoDecode] = frozenset()
     DEVELOPER_IDS: Annotated[frozenset[int], NoDecode] = frozenset()
+    # Where developer alerts go: a group or channel id. Empty sends each alert
+    # to every DEVELOPER_IDS member in private.
+    DEV_ALERT_CHAT_ID: int | None = None
+    # The same failure (type, origin, place) is alerted once per this many seconds.
+    ALERT_COOLDOWN_SECONDS: int = Field(300, gt=0)
 
     model_config = SettingsConfigDict(extra="ignore", hide_input_in_errors=True)
+
+    @field_validator("DEV_ALERT_CHAT_ID", mode="before")
+    @classmethod
+    def empty_alert_chat_is_none(cls, value: object) -> object:
+        # `DEV_ALERT_CHAT_ID=` in .env means "not set", not an invalid int.
+        return None if value == "" else value
 
     @field_validator("ADMIN_IDS", "DEVELOPER_IDS", mode="before")
     @classmethod

@@ -14,6 +14,7 @@ from src.core.cache.serializer import JsonSerializer
 from src.core.limiter.limiter import RateLimiter
 from src.core.outbox.interface import TaskPublisher
 from src.core.redis.degradation import RedisDegradationReporter
+from src.core.telegram.alerts import AlertLimiter, AlertSession
 from src.core.telegram.middlewares.throttling import ThrottleLimiter
 from src.core.telegram.session import UnreachableUserRecorder
 from src.main.config import Config
@@ -47,9 +48,18 @@ class SessionOnly(Provider):
     __test__ = False
     scope = Scope.APP
 
-    def __init__(self, session: FakeTelegramSession, i18n: I18n) -> None:
+    def __init__(
+        self,
+        session: FakeTelegramSession,
+        i18n: I18n,
+        *,
+        alert_session: FakeTelegramSession | None = None,
+    ) -> None:
         super().__init__()
         self._session = session
+        # Its own fake: the alert Bot registers its middleware on its session,
+        # and on the handlers' fake it would wrap every call twice.
+        self.alert_session = alert_session or FakeTelegramSession()
         self._i18n = i18n
 
     @provide(override=True)
@@ -62,6 +72,11 @@ class SessionOnly(Provider):
     def i18n(self) -> I18n:
         return self._i18n
 
+    @provide(override=True)
+    async def alert_telegram_session(self) -> AsyncIterator[AlertSession]:
+        yield AlertSession(self.alert_session)
+        await self.alert_session.close()
+
 
 class TestOverrides(SessionOnly):
     """What every in-process test replaces: the network, Redis-backed FSM, and
@@ -70,8 +85,14 @@ class TestOverrides(SessionOnly):
 
     __test__ = False  # not a test class, despite the name
 
-    def __init__(self, session: FakeTelegramSession, i18n: I18n) -> None:
-        super().__init__(session, i18n)
+    def __init__(
+        self,
+        session: FakeTelegramSession,
+        i18n: I18n,
+        *,
+        alert_session: FakeTelegramSession | None = None,
+    ) -> None:
+        super().__init__(session, i18n, alert_session=alert_session)
         self.recorder = RecordingUnreachableRecorder()
         self.publisher = RecordingTaskPublisher()
 
@@ -109,8 +130,25 @@ class TestOverrides(SessionOnly):
         # the task inline, inside the test's update.
         return self.publisher
 
+    @provide(override=True)
+    def alert_limiter(self) -> AlertLimiter:
+        # A fake per container: a cooldown never carries over between tests.
+        return AlertLimiter(
+            RateLimiter(
+                InMemoryRedis(),
+                prefix="alerts",
+                reporter=RedisDegradationReporter("Alerts"),
+            )
+        )
+
 
 def build_test_container(
-    config: Config, session: FakeTelegramSession, i18n: I18n, *providers: Provider
+    config: Config,
+    session: FakeTelegramSession,
+    i18n: I18n,
+    *providers: Provider,
+    alert_session: FakeTelegramSession | None = None,
 ) -> AsyncContainer:
-    return build_container(config, TestOverrides(session, i18n), *providers)
+    return build_container(
+        config, TestOverrides(session, i18n, alert_session=alert_session), *providers
+    )

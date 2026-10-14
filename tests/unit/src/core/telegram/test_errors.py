@@ -50,9 +50,12 @@ async def _raise(
     update: Update | None = None,
     *,
     session: FakeTelegramSession | None = None,
+    alert_session: FakeTelegramSession | None = None,
 ) -> FakeTelegramSession:
     session = session or FakeTelegramSession()
-    container = build_test_container(settings, session, i18n)
+    container = build_test_container(
+        settings, session, i18n, alert_session=alert_session
+    )
     dp = Dispatcher()
     setup_dishka(container, router=dp, auto_inject=True)
     failing = Router()
@@ -335,3 +338,92 @@ async def test_a_param_the_template_cannot_read_falls_back_to_the_generic_reply(
         assert reply.text == GENERIC_RU
         [warning] = [r for r in records if r.levelno == logging.WARNING]
         assert Profile.message_key in warning.getMessage()
+
+
+def _with_developer(settings: Config, developer: int) -> Config:
+    return settings.model_copy(
+        update={
+            "bot": settings.bot.model_copy(
+                update={"DEVELOPER_IDS": frozenset({developer})}
+            )
+        }
+    )
+
+
+async def test_an_unexpected_error_alerts_the_developers(
+    settings: Config, i18n: I18n, sentry: Captured
+) -> None:
+    alerts = FakeTelegramSession()
+    session = await _raise(
+        _with_developer(settings, 99), i18n, RuntimeError("boom"), alert_session=alerts
+    )
+    # The user is answered by the handlers' Bot, the developers by the alert one.
+    assert [sent.chat_id for sent in session.sent(SendMessage)] == [7]
+    [alert] = alerts.sent(SendMessage)
+    assert alert.chat_id == 99
+    assert "RuntimeError" in alert.text
+    assert "update message" in alert.text
+    assert "user 7" in alert.text
+
+
+async def test_the_alert_carries_ids_and_never_what_the_user_sent(
+    settings: Config, i18n: I18n, sentry: Captured
+) -> None:
+    """The alert chat is read by people who must not see users' messages or
+    names; the user id is enough to find the rest."""
+    update = build_message_update(
+        "my secret text", user_id=7, first_name="Ann Example", language_code="ru"
+    )
+    alerts = FakeTelegramSession()
+    await _raise(
+        _with_developer(settings, 99),
+        i18n,
+        RuntimeError("boom"),
+        update,
+        alert_session=alerts,
+    )
+    [alert] = alerts.sent(SendMessage)
+    assert "my secret text" not in alert.text
+    assert "Ann Example" not in alert.text
+
+
+async def test_a_core_exception_does_not_alert(
+    settings: Config, i18n: I18n, sentry: Captured
+) -> None:
+    """A CoreException is an expected refusal: the user is told, developers
+    are not paged."""
+    alerts = FakeTelegramSession()
+    session = await _raise(
+        _with_developer(settings, 99), i18n, CoreException(), alert_session=alerts
+    )
+    assert [sent.chat_id for sent in session.sent(SendMessage)] == [7]
+    assert alerts.sent(SendMessage) == []
+
+
+async def test_the_alert_carries_the_sentry_event_id(
+    settings: Config, i18n: I18n, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        errors_module.sentry_sdk, "capture_exception", lambda error: "event-1"
+    )
+    alerts = FakeTelegramSession()
+    await _raise(
+        _with_developer(settings, 99), i18n, RuntimeError("boom"), alert_session=alerts
+    )
+    [alert] = alerts.sent(SendMessage)
+    assert "sentry event-1" in alert.text
+
+
+async def test_a_driver_error_reaches_the_alert_scrubbed(
+    settings: Config, i18n: I18n, sentry: Captured
+) -> None:
+    """The alert chat is one more place PostgreSQL's DETAIL must not reach."""
+    alerts = FakeTelegramSession()
+    await _raise(
+        _with_developer(settings, 99),
+        i18n,
+        IntegrityError("INSERT ...", {}, Exception("Key (username)=(ann) exists")),
+        alert_session=alerts,
+    )
+    [alert] = alerts.sent(SendMessage)
+    assert "(ann)" not in alert.text

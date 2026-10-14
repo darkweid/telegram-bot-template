@@ -311,6 +311,11 @@ _REQUIRED: dict[type, dict[str, object]] = {
         ),
         (
             BotConfig,
+            {"BOT_TOKEN": VALID_TOKEN, "ALERT_COOLDOWN_SECONDS": 0},
+            "ALERT_COOLDOWN_SECONDS",
+        ),
+        (
+            BotConfig,
             {"BOT_TOKEN": VALID_TOKEN, "BOT_MODE": "longpoll"},
             "BOT_MODE",
         ),
@@ -394,6 +399,18 @@ def test_role_ids_reject_a_group_id_passed_as_a_collection() -> None:
     in through a code path other than the environment."""
     with pytest.raises(ValidationError):
         _bot(ADMIN_IDS=frozenset({-100123}))
+
+
+def test_an_empty_alert_chat_means_private_alerts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("DEV_ALERT_CHAT_ID", "")
+    assert _bot().DEV_ALERT_CHAT_ID is None
+
+
+def test_an_alert_chat_id_is_read(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DEV_ALERT_CHAT_ID", "-1001234567890")
+    assert _bot().DEV_ALERT_CHAT_ID == -1001234567890
 
 
 @pytest.mark.parametrize(

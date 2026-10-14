@@ -14,6 +14,7 @@ from loggers import get_logger
 from src.core.errors.exceptions import CoreException, format_html
 from src.core.errors.scrubbed import reportable
 from src.core.i18n import resolve_locale
+from src.core.telegram.alerts import Alert, DeveloperAlerter
 from src.core.telegram.context import sentry_scope_for, update_context_from
 from src.core.update_context import bind_update_context
 
@@ -28,8 +29,14 @@ _LEVELS = {
 }
 
 
-async def handle_error(event: ErrorEvent, bot: Bot, i18n: FromDishka[I18n]) -> bool:
-    """Log, report and answer one handler failure.
+async def handle_error(
+    event: ErrorEvent,
+    bot: Bot,
+    i18n: FromDishka[I18n],
+    alerter: FromDishka[DeveloperAlerter],
+) -> bool:
+    """Log, report and answer one handler failure; an unexpected one also
+    alerts the developers.
 
     Runs from aiogram's ErrorsMiddleware, outside every middleware of ours: the
     update context and the stored user are gone, so the context is rebuilt from
@@ -37,6 +44,7 @@ async def handle_error(event: ErrorEvent, bot: Bot, i18n: FromDishka[I18n]) -> b
     """
     update, error = event.update, event.exception
     context = update_context_from(update)
+    alert: Alert | None = None
     with bind_update_context(context), sentry_scope_for(context):
         if isinstance(error, TelegramForbiddenError):
             # The user can no longer be reached (ForbiddenMiddleware records
@@ -61,8 +69,14 @@ async def handle_error(event: ErrorEvent, bot: Bot, i18n: FromDishka[I18n]) -> b
         else:
             safe = reportable(error)
             logger.error("Unhandled %s", type(error).__name__, exc_info=safe)
-            sentry_sdk.capture_exception(safe)
+            event_id = sentry_sdk.capture_exception(safe)
             message_key, params = CoreException.message_key, {}
+            alert = Alert(
+                safe,
+                origin=f"update {context.update_type}",
+                user_id=context.user_id,
+                sentry_event_id=event_id,
+            )
 
         if context.chat_id is not None:
             sender = UserContextMiddleware.resolve_event_context(event=update).user
@@ -88,6 +102,9 @@ async def handle_error(event: ErrorEvent, bot: Bot, i18n: FromDishka[I18n]) -> b
                 logger.warning(
                     "Could not tell the user about the error: %s", reply_error.message
                 )
+        if alert is not None:
+            # After the reply: the user is not kept waiting on the alert chat.
+            await alerter.alert_error(alert)
     return True
 
 

@@ -8,6 +8,8 @@ from taskiq import InMemoryBroker
 
 from src.core.outbox.interface import TaskPublisher
 from src.core.outbox.publisher import UnregisteredTaskError
+from src.core.tasks.middlewares import FAILURE_REPORTER_STATE
+from src.core.telegram.alerts import DeveloperAlerter
 from src.main import worker as worker_module
 from src.main.config import Config
 from src.main.runtime import DependencyUnavailableError
@@ -97,3 +99,33 @@ async def test_the_workers_publisher_never_starts_the_clis_broker(
         await broker.shutdown()
     assert result.return_value == "refused"
     assert starts == [broker]
+
+
+async def test_a_started_worker_alerts_through_its_alerter(
+    settings: Config, i18n: I18n
+) -> None:
+    session = FakeTelegramSession()
+    broker = create_worker(settings, TestOverrides(session, i18n), Stubs(session))
+    await broker.startup()
+    try:
+        reporter = broker.state[FAILURE_REPORTER_STATE]
+    finally:
+        await broker.shutdown()
+    assert isinstance(reporter, DeveloperAlerter)
+
+
+async def test_the_worker_closes_http_clients_on_shutdown(
+    settings: Config, i18n: I18n, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A client's session belongs to the worker's loop and must close on it."""
+    calls: list[str] = []
+
+    async def close_http_clients() -> None:
+        calls.append("http")
+
+    monkeypatch.setattr(worker_module, "close_http_clients", close_http_clients)
+    session = FakeTelegramSession()
+    broker = create_worker(settings, TestOverrides(session, i18n), Stubs(session))
+    await broker.startup()
+    await broker.shutdown()
+    assert calls == ["http"]

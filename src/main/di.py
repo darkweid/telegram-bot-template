@@ -12,6 +12,7 @@ from aiogram.fsm.storage.base import BaseEventIsolation, BaseStorage
 from aiogram.types import LinkPreviewOptions
 from aiogram.utils.i18n import I18n
 from dishka import (
+    AnyOf,
     AsyncContainer,
     Provider,
     Scope,
@@ -37,8 +38,14 @@ from src.core.limiter.limiter import RateLimiter
 from src.core.outbox.interface import TaskPublisher
 from src.core.outbox.publisher import OutboxPublisher
 from src.core.redis.core import create_redis_client
-from src.core.redis.degradation import RedisDegradationReporter
+from src.core.redis.degradation import DegradationNotifier, RedisDegradationReporter
 from src.core.tasks.broker import TasksRedis
+from src.core.telegram.alerts import (
+    AlertBot,
+    AlertLimiter,
+    AlertSession,
+    DeveloperAlerter,
+)
 from src.core.telegram.fsm import create_event_isolation, create_fsm_storage
 from src.core.telegram.middlewares.throttling import (
     Throttle,
@@ -189,7 +196,9 @@ class CacheProvider(Provider):
     scope = Scope.APP
 
     @provide
-    def cache(self, redis: Redis, config: CacheConfig) -> Cache:
+    def cache(
+        self, redis: Redis, config: CacheConfig, notifier: DegradationNotifier
+    ) -> Cache:
         return RedisCache(
             redis,
             JsonSerializer(),
@@ -197,7 +206,7 @@ class CacheProvider(Provider):
             default_ttl=config.CACHE_DEFAULT_TTL,
             version_ttl=config.CACHE_VERSION_TTL,
             enabled=config.CACHE_ENABLED,
-            reporter=RedisDegradationReporter("Cache"),
+            reporter=RedisDegradationReporter("Cache", notifier=notifier),
         )
 
 
@@ -205,12 +214,12 @@ class ThrottlingProvider(Provider):
     scope = Scope.APP
 
     @provide
-    def limiter(self, redis: Redis) -> ThrottleLimiter:
+    def limiter(self, redis: Redis, notifier: DegradationNotifier) -> ThrottleLimiter:
         return ThrottleLimiter(
             RateLimiter(
                 redis,
                 prefix="throttle",
-                reporter=RedisDegradationReporter("Throttling"),
+                reporter=RedisDegradationReporter("Throttling", notifier=notifier),
             )
         )
 
@@ -231,6 +240,15 @@ class ThrottlingProvider(Provider):
                 ),
             },
         )
+
+
+def _bot_defaults() -> DefaultBotProperties:
+    return DefaultBotProperties(
+        parse_mode=ParseMode.HTML,
+        # A link in a reply would otherwise unfold into a preview card nobody
+        # asked for.
+        link_preview=LinkPreviewOptions(is_disabled=True),
+    )
 
 
 class TelegramProvider(Provider):
@@ -256,13 +274,63 @@ class TelegramProvider(Provider):
         return Bot(
             token=bot_config.BOT_TOKEN.get_secret_value(),
             session=session,
-            default=DefaultBotProperties(
-                parse_mode=ParseMode.HTML,
-                # A link in a reply would otherwise unfold into a preview card
-                # nobody asked for.
-                link_preview=LinkPreviewOptions(is_disabled=True),
-            ),
+            default=_bot_defaults(),
         )
+
+
+class AlertProvider(Provider):
+    scope = Scope.APP
+
+    @provide
+    async def session(self) -> AsyncIterator[AlertSession]:
+        session = AiohttpSession()
+        yield AlertSession(session)
+        await session.close()
+
+    @provide
+    def bot(self, bot_config: BotConfig, session: AlertSession) -> AlertBot:
+        # Flood control only: no ForbiddenMiddleware, see AlertBot.
+        session.middleware(RetryAfterMiddleware(bot_config.TELEGRAM_RETRY_ATTEMPTS))
+        return AlertBot(
+            Bot(
+                token=bot_config.BOT_TOKEN.get_secret_value(),
+                session=session,
+                default=_bot_defaults(),
+            )
+        )
+
+    @provide
+    def limiter(self, redis: Redis) -> AlertLimiter:
+        # No notifier: an outage of this limiter is reported by its siblings,
+        # and an alert about the alerter would go through itself.
+        return AlertLimiter(
+            RateLimiter(
+                redis, prefix="alerts", reporter=RedisDegradationReporter("Alerts")
+            )
+        )
+
+    @provide(provides=AnyOf[DeveloperAlerter, DegradationNotifier])
+    async def alerter(
+        self,
+        bot: AlertBot,
+        limiter: AlertLimiter,
+        bot_config: BotConfig,
+        roles: Roles,
+    ) -> AsyncIterator[DeveloperAlerter]:
+        recipients = (
+            (bot_config.DEV_ALERT_CHAT_ID,)
+            if bot_config.DEV_ALERT_CHAT_ID is not None
+            else tuple(sorted(roles.developers))
+        )
+        alerter = DeveloperAlerter(
+            bot,
+            limiter,
+            recipients=recipients,
+            cooldown_seconds=bot_config.ALERT_COOLDOWN_SECONDS,
+        )
+        yield alerter
+        # Created after the alert Bot, so finalized before its session closes.
+        await alerter.drain()
 
 
 class I18nProvider(Provider):
@@ -330,6 +398,7 @@ def build_container(
         CacheProvider(),
         ThrottlingProvider(),
         TelegramProvider(),
+        AlertProvider(),
         I18nProvider(),
         HttpProvider(),
         BrokerProvider(),

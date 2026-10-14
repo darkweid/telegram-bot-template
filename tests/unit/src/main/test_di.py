@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock
 from uuid import uuid4
 
 from aiogram import Bot
+from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.client.session.base import BaseSession
 from aiogram.enums import ParseMode
 from aiogram.fsm.storage.base import BaseEventIsolation, BaseStorage
@@ -23,7 +24,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 from taskiq import AsyncBroker, InMemoryBroker
 from taskiq.message import BrokerMessage
 
-from src.core.cache.interface import Cache
+from src.core.cache.interface import Cache, CacheKey
 from src.core.cache.redis_cache import RedisCache
 from src.core.database.uow import SQLAlchemyUnitOfWork
 from src.core.events.registry import event_subscribers, set_event_subscribers
@@ -32,6 +33,9 @@ from src.core.http.user_agent import UserAgent
 from src.core.outbox.interface import TaskPublisher
 from src.core.outbox.models import OutboxMessage
 from src.core.outbox.publisher import UnregisteredTaskError
+from src.core.redis.degradation import DegradationNotifier
+from src.core.telegram.alerts import AlertBot, AlertSession, DeveloperAlerter
+from src.core.telegram.middlewares.throttling import ThrottleLimiter
 from src.core.telegram.session import ForbiddenMiddleware, RetryAfterMiddleware
 from src.main import di as di_module
 from src.main.config import BotConfig, Config
@@ -43,6 +47,7 @@ from src.user.schemas import TelegramProfile, UserProfile
 from src.user.usecases.touch_user import TouchUserUseCase
 from tests.factories.updates import build_message_update
 from tests.fakes.db import FakeAsyncSession
+from tests.fakes.redis import InMemoryRedis
 from tests.fakes.telegram import FakeTelegramSession
 from tests.helpers.logs import captured_logs
 from tests.helpers.providers import SessionOnly, TestOverrides, build_test_container
@@ -454,3 +459,161 @@ async def test_a_tasks_redis_outage_does_not_fail_an_update(
     assert row.task_name == "test.task"
     # Logged as an outage, not a failed hook; never marked published.
     assert [r.levelno for r in records] == [logging.WARNING]
+
+
+class RecordingNotifier:
+    def __init__(self) -> None:
+        self.messages: list[str] = []
+
+    def notify(self, message: str) -> None:
+        self.messages.append(message)
+
+
+class DownRedis(Provider):
+    """A Redis that refuses every command and a notifier that records,
+    with the cache and the throttle limiter left real."""
+
+    scope = Scope.APP
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.notifier = RecordingNotifier()
+
+    @provide(override=True)
+    def redis(self) -> Redis:
+        redis = InMemoryRedis()
+        redis.fail_next_commands(1000)
+        return redis  # type: ignore[return-value]
+
+    @provide(override=True)
+    def notifier_override(self) -> DegradationNotifier:
+        return self.notifier
+
+
+async def test_a_redis_outage_reaches_the_developers(settings: Config) -> None:
+    """The cache and the throttle limiter both run on without Redis; the
+    outage would otherwise reach developers only through Sentry."""
+    down = DownRedis()
+    # The production container: TestOverrides replaces the cache and the
+    # throttle limiter, and this is about the real ones.
+    container = build_container(settings, down)
+    try:
+        cache = await container.get(Cache)
+        await cache.get(CacheKey("probe", "1"))
+        limiter = await container.get(ThrottleLimiter)
+        await limiter.hit("probe", limit=1, window_ms=1000)
+    finally:
+        await container.close()
+    assert len(down.notifier.messages) == 2
+    assert any("Cache" in message for message in down.notifier.messages)
+    assert any("Throttling" in message for message in down.notifier.messages)
+
+
+async def test_the_alerter_is_the_degradation_notifier(
+    settings: Config, i18n: I18n
+) -> None:
+    container = build_test_container(settings, FakeTelegramSession(), i18n)
+    try:
+        notifier = await container.get(DegradationNotifier)
+        assert notifier is await container.get(DeveloperAlerter)
+    finally:
+        await container.close()
+
+
+async def test_alerts_go_to_the_alert_chat_when_one_is_set(
+    settings: Config, i18n: I18n
+) -> None:
+    config = settings.model_copy(
+        update={
+            "bot": settings.bot.model_copy(
+                update={"DEV_ALERT_CHAT_ID": -100500, "DEVELOPER_IDS": frozenset({7})}
+            )
+        }
+    )
+    alerts = FakeTelegramSession()
+    container = build_test_container(
+        config, FakeTelegramSession(), i18n, alert_session=alerts
+    )
+    try:
+        await (await container.get(DeveloperAlerter)).send("probe")
+    finally:
+        await container.close()
+    assert [sent.chat_id for sent in alerts.sent(SendMessage)] == [-100500]
+
+
+async def test_without_an_alert_chat_each_developer_is_alerted(
+    settings: Config, i18n: I18n
+) -> None:
+    config = settings.model_copy(
+        update={
+            "bot": settings.bot.model_copy(
+                update={"DEVELOPER_IDS": frozenset({8, 7}), "ADMIN_IDS": frozenset({9})}
+            )
+        }
+    )
+    alerts = FakeTelegramSession()
+    container = build_test_container(
+        config, FakeTelegramSession(), i18n, alert_session=alerts
+    )
+    try:
+        await (await container.get(DeveloperAlerter)).send("probe")
+    finally:
+        await container.close()
+    assert [sent.chat_id for sent in alerts.sent(SendMessage)] == [7, 8]
+
+
+async def test_closing_the_container_waits_for_background_alerts(
+    settings: Config, i18n: I18n
+) -> None:
+    """A degradation notice still in flight when the process stops would be
+    cut off by the closing bot session."""
+    config = settings.model_copy(
+        update={
+            "bot": settings.bot.model_copy(update={"DEVELOPER_IDS": frozenset({7})})
+        }
+    )
+    alerts = FakeTelegramSession()
+    container = build_test_container(
+        config, FakeTelegramSession(), i18n, alert_session=alerts
+    )
+    try:
+        (await container.get(DegradationNotifier)).notify("Redis is degraded")
+    finally:
+        await container.close()
+    assert [sent.text for sent in alerts.sent(SendMessage)] == ["Redis is degraded"]
+
+
+async def test_alerts_leave_through_a_bot_of_their_own(
+    settings: Config, i18n: I18n
+) -> None:
+    """The handlers' Bot reports a Forbidden to the user domain, which needs
+    the cache, which reports its outages through the alerter: sharing that Bot
+    would be a dependency cycle."""
+    alerts = FakeTelegramSession()
+    container = build_test_container(
+        settings, FakeTelegramSession(), i18n, alert_session=alerts
+    )
+    try:
+        bot = await container.get(AlertBot)
+        assert bot is not await container.get(Bot)
+        assert bot.session is alerts
+        assert bot.default.parse_mode == ParseMode.HTML
+        # Flood control, and no ForbiddenMiddleware: the alert chat is no user.
+        assert [type(m) for m in alerts.middleware] == [RetryAfterMiddleware]
+    finally:
+        await container.close()
+
+
+async def test_closing_the_container_releases_the_alert_session(
+    settings: Config, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    closed = spy(monkeypatch, AiohttpSession, "close")
+    container = build_container(settings)
+    bot_session = await container.get(BaseSession)
+    alert_session = await container.get(AlertSession)
+    assert alert_session is not bot_session
+
+    await container.close()
+
+    assert closed.count(alert_session) == 1
+    assert closed.count(bot_session) == 1
