@@ -277,6 +277,23 @@ async def test_an_album_is_refused_and_the_draft_waits_for_a_single_message(
     assert len(running.session.sent(CopyMessage)) == 1
 
 
+async def test_an_album_is_refused_once_however_many_parts_it_has(
+    settings: Config, i18n: I18n
+) -> None:
+    """An album of ten photos would otherwise bury the draft under ten
+    identical refusals."""
+    stub = BroadcastStub()
+    refusal = "Albums are not supported: send a single message."
+    async with running_bot(_admin(settings), i18n, UseCases(), stub) as running:
+        await running.feed(build_message_update("/broadcast", user_id=ADMIN))
+        await running.feed(_photo(media_group_id="first"))
+        await running.feed(_photo(media_group_id="first"))
+        await running.feed(_photo(media_group_id="second"))
+    texts = [sent.text for sent in running.session.sent(SendMessage)]
+    assert texts.count(refusal) == 2
+    assert running.session.sent(CopyMessage) == []
+
+
 async def test_stop_on_a_finished_broadcast_says_so(
     settings: Config, i18n: I18n
 ) -> None:

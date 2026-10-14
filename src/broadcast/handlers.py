@@ -46,7 +46,14 @@ async def cancel_draft(message: Message, state: FSMContext) -> None:
     await message.answer(_("Broadcast cancelled."))
 
 
-async def reject_album(message: Message) -> None:
+async def reject_album(message: Message, state: FSMContext) -> None:
+    # Every part of an album arrives as a message of its own: one refusal per
+    # album, not one per photo. The parts of one user's album are handled one
+    # after another (event isolation), so the read and the write do not race.
+    data = await state.get_data()
+    if data.get("refused_media_group_id") == message.media_group_id:
+        return
+    await state.update_data(refused_media_group_id=message.media_group_id)
     await message.answer(_("Albums are not supported: send a single message."))
 
 
