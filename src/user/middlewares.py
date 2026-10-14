@@ -2,6 +2,7 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 
 from aiogram import BaseMiddleware
+from aiogram.enums import ChatType
 from aiogram.types import Chat, TelegramObject, Update, User
 from dishka import AsyncContainer
 from dishka.integrations.aiogram import CONTAINER_NAME
@@ -34,7 +35,7 @@ class UserMiddleware(BaseMiddleware):
             sender is None
             or sender.is_bot
             or chat is None
-            or chat.type != "private"
+            or chat.type != ChatType.PRIVATE
             or (isinstance(event, Update) and event.my_chat_member is not None)
         ):
             return await handler(event, data)

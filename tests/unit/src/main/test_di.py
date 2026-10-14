@@ -75,15 +75,18 @@ async def test_session_middlewares_are_registered_retry_first(
         await container.close()
 
 
-async def test_request_scope_shares_one_session_and_unit_of_work(
+async def test_each_unit_of_work_of_a_request_runs_on_its_one_session(
     settings: Config, i18n: I18n
 ) -> None:
     container = build_test_container(settings, FakeTelegramSession(), i18n)
     try:
         async with container() as first:
+            session = await first.get(AsyncSession)
             uow = await first.get(SQLAlchemyUnitOfWork)
-            assert uow is await first.get(SQLAlchemyUnitOfWork)
-            assert uow.session is await first.get(AsyncSession)
+            other = await first.get(SQLAlchemyUnitOfWork)
+            assert other is not uow
+            assert uow.session is session
+            assert other.session is session
         async with container() as second:
             assert await second.get(SQLAlchemyUnitOfWork) is not uow
     finally:

@@ -103,7 +103,9 @@ class DatabaseProvider(Provider):
         async with sessionmaker() as session:
             yield session
 
-    uow = provide(SQLAlchemyUnitOfWork, scope=Scope.REQUEST)
+    # Not cached: a unit of work is single-use, and one update can run several
+    # use cases (UserMiddleware's, then the handler's) over its one session.
+    uow = provide(SQLAlchemyUnitOfWork, scope=Scope.REQUEST, cache=False)
 
 
 class RedisProvider(Provider):

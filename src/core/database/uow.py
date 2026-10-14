@@ -12,8 +12,10 @@ AfterCommitHook = Callable[[], Awaitable[None]]
 
 class SQLAlchemyUnitOfWork:
     """
-    Transaction boundary over an AsyncSession, shared by every use case of one update.
+    Single-use transaction boundary over an AsyncSession.
 
+    Each use case of an update gets a unit of work of its own over the
+    update's one session, so their transactions run there one after another.
     A unit of work is always the top-level transaction: entering one on a
     session that is already in a transaction raises. Commit is strictly
     explicit: leaving the context without calling commit() rolls the
@@ -36,9 +38,9 @@ class SQLAlchemyUnitOfWork:
         that outer transaction too, work this unit never saw included. Nothing
         is touched on refusal: the session stays in its transaction.
 
-        Also raises once this unit has been committed or rolled back: the
-        per-update instance is shared by every use case a handler calls, and a
-        second entry would open a transaction nothing ends.
+        Also raises once this unit has been committed or rolled back: it is
+        single-use, and a second entry would open a transaction nothing ends.
+        Another transaction on the same session takes another unit of work.
         """
         self._ensure_not_completed()
         if self._session.in_transaction():

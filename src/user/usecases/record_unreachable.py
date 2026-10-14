@@ -9,9 +9,7 @@ logger = get_logger(__name__)
 
 
 class RecordUnreachableUseCase:
-    """Mark a user the bot can no longer reach as unreachable.
-
-    Telegram refuses delivery when the user blocked the bot or deleted their
+    """Telegram refuses delivery when the user blocked the bot or deleted their
     account, among other causes.
 
     Called from the Bot API session, not from a handler, so it opens a
