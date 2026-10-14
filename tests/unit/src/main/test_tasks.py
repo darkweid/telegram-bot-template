@@ -23,3 +23,11 @@ def test_task_names_are_unique() -> None:
     """A second registration under one name silently replaces the first."""
     names = [spec.name for spec in tasks_module.TASKS]
     assert len(names) == len(set(names))
+
+
+def test_the_outbox_is_swept_every_minute_and_purged_daily() -> None:
+    """Without the sweep a failed after-commit publish is never sent; without
+    the purge the table grows forever."""
+    schedules = {spec.name: spec.schedule for spec in TASKS}
+    assert schedules["outbox.sweep"] == ({"cron": "* * * * *"},)
+    assert schedules["outbox.purge"] == ({"cron": "0 3 * * *"},)

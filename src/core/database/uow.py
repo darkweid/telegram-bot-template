@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 import uuid6
 
 from loggers import get_logger
+from src.core.errors.scrubbed import reportable
 from src.core.events.registry import event_subscribers
 from src.core.events.schemas import Actor, DomainEvent, PublishedEvent
 from src.core.outbox.interface import TaskPublisher
@@ -185,11 +186,12 @@ class SQLAlchemyUnitOfWork:
         for hook in hooks:
             # Best-effort by design: the data is committed, so a failed hook
             # must not turn the update into an error. This is the one
-            # sanctioned exception swallow.
+            # sanctioned exception swallow. A hook may write (the outbox
+            # publisher does), so its error is scrubbed like any other.
             try:
                 await hook()
-            except Exception:
-                logger.exception("After-commit hook failed")
+            except Exception as error:
+                logger.error("After-commit hook failed", exc_info=reportable(error))
 
     @property
     def completed(self) -> bool:

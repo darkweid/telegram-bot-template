@@ -6,11 +6,17 @@ publish a name nobody runs.
 
 from taskiq import AsyncBroker, InMemoryBroker
 
+from src.core.outbox.sweeper import purge_outbox, sweep_outbox
 from src.core.tasks.broker import create_stream_broker
 from src.core.tasks.registry import TaskSpec, register_tasks
 from src.main.config import Config
 
-TASKS: tuple[TaskSpec, ...] = ()
+TASKS: tuple[TaskSpec, ...] = (
+    # Every minute: rows whose after-commit publish failed reach the worker
+    # within a couple of minutes.
+    TaskSpec("outbox.sweep", sweep_outbox, schedule=({"cron": "* * * * *"},)),
+    TaskSpec("outbox.purge", purge_outbox, schedule=({"cron": "0 3 * * *"},)),
+)
 
 
 def build_broker(config: Config) -> AsyncBroker:

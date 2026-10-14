@@ -1,9 +1,12 @@
+import traceback
 from unittest.mock import AsyncMock
 
 import pytest
+from sqlalchemy.exc import IntegrityError
 
 from src.core.database.uow import SQLAlchemyUnitOfWork
 from tests.fakes.db import FakeAsyncSession
+from tests.helpers.logs import captured_logs
 
 
 @pytest.fixture
@@ -72,3 +75,26 @@ async def test_add_hook_after_completion_raises(uow: SQLAlchemyUnitOfWork) -> No
         await uow.commit()
     with pytest.raises(RuntimeError):
         uow.add_after_commit_hook(AsyncMock())
+
+
+async def test_a_failed_hook_reaches_the_log_scrubbed() -> None:
+    """A hook that writes (the outbox publisher marking its row) can fail
+    with a driver error that carries PostgreSQL's DETAIL."""
+    uow = SQLAlchemyUnitOfWork(FakeAsyncSession())
+
+    async with uow:
+        uow.add_after_commit_hook(_raise_integrity_error)
+        with captured_logs("src.core.database.uow") as records:
+            await uow.commit()
+    [record] = records
+    assert record.exc_info is not None
+    rendered = "".join(traceback.format_exception(*record.exc_info))
+    assert "secret@example.com" not in rendered
+
+
+async def _raise_integrity_error() -> None:
+    raise IntegrityError(
+        "INSERT ...",
+        {"email": "secret@example.com"},
+        Exception("DETAIL:  Key (email)=(secret@example.com) already exists."),
+    )

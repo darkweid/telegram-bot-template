@@ -23,6 +23,7 @@ from dishka.entities.validation_settings import STRICT_VALIDATION
 from dishka.integrations.aiogram import AiogramProvider
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
+from taskiq import AsyncBroker
 
 from src.core.cache.interface import Cache
 from src.core.cache.redis_cache import RedisCache
@@ -33,6 +34,8 @@ from src.core.events.registry import set_event_subscribers
 from src.core.http.user_agent import UserAgent, build_user_agent
 from src.core.i18n import LOCALES_DIR, build_i18n
 from src.core.limiter.limiter import RateLimiter
+from src.core.outbox.interface import TaskPublisher
+from src.core.outbox.publisher import OutboxPublisher
 from src.core.redis.core import create_redis_client
 from src.core.redis.degradation import RedisDegradationReporter
 from src.core.tasks.broker import TasksRedis
@@ -62,6 +65,7 @@ from src.main.config import (
     WebServerConfig,
 )
 from src.main.event_subscribers import EVENT_SUBSCRIBERS
+from src.main.tasks import build_broker
 from src.system.di import SystemProvider
 from src.user.di import UserProvider
 
@@ -141,10 +145,10 @@ class DatabaseProvider(Provider):
     # Not cached: a unit of work is single-use, and one update can run several
     # use cases (UserMiddleware's, then the handler's) over its one session.
     @provide(scope=Scope.REQUEST, cache=False)
-    def uow(self, session: AsyncSession) -> SQLAlchemyUnitOfWork:
-        # An explicit factory: given the class, dishka would look for a factory
-        # of the constructor's optional `publisher` and refuse to build.
-        return SQLAlchemyUnitOfWork(session)
+    def uow(
+        self, session: AsyncSession, publisher: TaskPublisher
+    ) -> SQLAlchemyUnitOfWork:
+        return SQLAlchemyUnitOfWork(session, publisher=publisher)
 
 
 class RedisProvider(Provider):
@@ -279,6 +283,33 @@ class HttpProvider(Provider):
         )
 
 
+class BrokerProvider(Provider):
+    """The bot's side of the task queue: it only sends.
+
+    The worker gets its broker from the taskiq CLI instead (WorkerProvider),
+    which also starts and stops it. Here the broker starts when an update first
+    needs it (a unit of work asks for the publisher), and its startup already
+    talks to Redis (it declares the stream's consumer group). A wrong
+    REDIS_TASKS_DATABASE is still caught before the first update: the startup
+    check pings the same database through TasksRedis.
+    """
+
+    scope = Scope.APP
+
+    @provide
+    async def broker(self, config: Config) -> AsyncIterator[AsyncBroker]:
+        broker = build_broker(config)
+        await broker.startup()
+        yield broker
+        await broker.shutdown()
+
+    @provide
+    def publisher(
+        self, broker: AsyncBroker, sessionmaker: async_sessionmaker[AsyncSession]
+    ) -> TaskPublisher:
+        return OutboxPublisher(broker, sessionmaker)
+
+
 def build_container(
     config: Config,
     *providers: Provider,
@@ -299,6 +330,7 @@ def build_container(
         TelegramProvider(),
         I18nProvider(),
         HttpProvider(),
+        BrokerProvider(),
         UserProvider(),
         SystemProvider(),
         AiogramProvider(),

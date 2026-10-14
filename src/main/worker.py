@@ -18,7 +18,8 @@ from src.main.tasks import build_broker
 
 
 class WorkerProvider(Provider):
-    broker = from_context(provides=AsyncBroker, scope=Scope.APP)
+    # The CLI's broker, which the CLI starts and stops; replaces the bot's.
+    broker = from_context(provides=AsyncBroker, scope=Scope.APP, override=True)
 
 
 class WorkerLifecycle:

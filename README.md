@@ -123,6 +123,29 @@ In the dev stack the worker restarts on a change to a `.py` file under `src/`,
 `loggers/` or `models/`, like the bot. The scheduler does not run under
 watchfiles: after changing a schedule, run `make restart s=scheduler`.
 
+A use case enqueues a task inside its unit of work:
+
+```python
+async with self._uow as uow:
+    ...
+    await uow.enqueue_task("reports.send", user_id=user.id)
+    await uow.commit()
+```
+
+The task is stored as a row in `outbox_messages` in the same transaction, so it
+exists only if the work that caused it commits. Arguments must be plain JSON
+values (ids, strings, numbers, lists, dicts); anything a JSON round-trip would
+change is refused. Right after commit the bot sends the task to the queue. If
+that send fails, the `outbox.sweep` task, which runs every minute, sends the row
+within a minute or two; the row id is the task id, so a row sent twice runs
+once. `outbox.purge` deletes published rows older than
+`PUBLISHED_RETENTION_DAYS` (7) every day at 03:00 UTC.
+
+Every task is registered in one place: a `TaskSpec` in `TASKS`
+(`src/main/tasks.py`), with its name, function, optional cron schedule and
+retry flag. A name missing there is never run, and the sweeper marks its rows
+failed.
+
 ## Throttling
 
 Each user gets `THROTTLE_DEFAULT_LIMIT` handler calls per

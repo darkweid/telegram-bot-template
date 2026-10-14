@@ -8,10 +8,12 @@ from aiogram.fsm.storage.base import BaseEventIsolation, BaseStorage
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.fsm.storage.redis import RedisEventIsolation, RedisStorage
 from aiogram.utils.i18n import I18n
+from dishka import Provider, Scope, provide
 from dishka.exceptions import NoFactoryError
 import pytest
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
+from taskiq import AsyncBroker, InMemoryBroker
 
 from src.core.cache.interface import Cache
 from src.core.cache.redis_cache import RedisCache
@@ -25,8 +27,9 @@ from src.main.config import BotConfig, Config
 from src.main.di import build_container
 from src.system.repositories import SystemRepository
 from src.system.services import HealthService
+from tests.fakes.db import FakeAsyncSession
 from tests.fakes.telegram import FakeTelegramSession
-from tests.helpers.providers import build_test_container
+from tests.helpers.providers import SessionOnly, TestOverrides, build_test_container
 
 
 async def test_production_container_resolves_every_app_dependency(
@@ -287,3 +290,49 @@ async def test_the_cache_is_one_redis_cache_per_process(settings: Config) -> Non
         assert await container.get(Cache) is first
     finally:
         await container.close()
+
+
+class FakeSession(Provider):
+    """A unit test must not reach PostgreSQL: TestOverrides keeps the real
+    engine, which a commit would connect through."""
+
+    @provide(scope=Scope.REQUEST, override=True)
+    def session(self) -> AsyncSession:
+        return FakeAsyncSession()
+
+
+async def test_a_unit_of_work_publishes_after_commit(
+    settings: Config, i18n: I18n
+) -> None:
+    """Without the publisher every task would wait for the sweeper, a minute
+    or more, instead of starting at once."""
+    session = FakeTelegramSession()
+    overrides = TestOverrides(session, i18n)
+    container = build_container(settings, overrides, FakeSession())
+    try:
+        async with container() as scope:
+            uow = await scope.get(SQLAlchemyUnitOfWork)
+            async with uow:
+                await uow.enqueue_task("test.task", user_id=7)
+                await uow.commit()
+    finally:
+        await container.close()
+    assert overrides.publisher.published == [("test.task", [], {"user_id": 7})]
+
+
+async def test_the_bots_broker_starts_and_stops_with_the_container(
+    settings: Config, i18n: I18n, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The bot has no taskiq CLI to start and stop its broker; without the
+    shutdown its Redis connection pool would outlive the container."""
+    started = spy(monkeypatch, InMemoryBroker, "startup")
+    stopped = spy(monkeypatch, InMemoryBroker, "shutdown")
+    container = build_container(settings, SessionOnly(FakeTelegramSession(), i18n))
+    try:
+        broker = await container.get(AsyncBroker)
+        assert isinstance(broker, InMemoryBroker)
+        assert {"outbox.sweep", "outbox.purge"} <= set(broker.get_all_tasks())
+        assert (started, stopped) == ([broker], [])
+    finally:
+        await container.close()
+    assert stopped == [broker]
