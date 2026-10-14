@@ -5,7 +5,11 @@ from taskiq_redis import RedisStreamBroker
 from src.core.tasks.middlewares import TaskFailureAlertMiddleware
 from src.main import tasks as tasks_module
 from src.main.config import Config
+from src.main.event_subscribers import EVENT_SUBSCRIBERS
 from src.main.tasks import TASKS, build_broker
+from src.user.events import UserRegistered
+from src.user.subscribers import enqueue_new_user_notice
+from src.user.tasks import NOTIFY_ADMINS_OF_NEW_USER
 
 
 def test_tests_get_the_in_memory_broker(settings: Config) -> None:
@@ -48,3 +52,19 @@ def test_the_failure_alert_runs_after_the_retry_decision(settings: Config) -> No
 def test_the_test_broker_alerts_on_a_failed_task(settings: Config) -> None:
     kinds = [type(middleware) for middleware in build_broker(settings).middlewares]
     assert TaskFailureAlertMiddleware in kinds
+
+
+def test_the_registration_subscriber_is_installed() -> None:
+    """Without it a new user is stored and nobody is told."""
+    assert enqueue_new_user_notice in EVENT_SUBSCRIBERS[UserRegistered]
+
+
+def test_the_notice_task_is_registered() -> None:
+    """The outbox would store the notice under a name no worker runs."""
+    assert NOTIFY_ADMINS_OF_NEW_USER in {spec.name for spec in TASKS}
+
+
+def test_the_notice_is_never_retried() -> None:
+    """A retry would repeat the notice to every admin who already got it."""
+    [spec] = [spec for spec in TASKS if spec.name == NOTIFY_ADMINS_OF_NEW_USER]
+    assert spec.retry_on_error is False

@@ -5,6 +5,7 @@ from src.user.repositories import UserRepository
 from src.user.usecases.change_ban import ChangeBanUseCase
 from src.user.usecases.change_membership import ChangeMembershipUseCase
 from src.user.usecases.get_user_stats import GetUserStatsUseCase
+from src.user.usecases.notify_admins import NotifyAdminsOfNewUserUseCase
 from src.user.usecases.record_unreachable import RecordUnreachableUseCase
 from src.user.usecases.set_locale import SetLocaleUseCase
 from src.user.usecases.touch_user import TouchUserUseCase
@@ -22,3 +23,4 @@ class UserProvider(Provider):
     change_membership = provide(ChangeMembershipUseCase, scope=Scope.REQUEST)
     change_ban = provide(ChangeBanUseCase, scope=Scope.REQUEST)
     get_user_stats = provide(GetUserStatsUseCase, scope=Scope.REQUEST)
+    notify_admins = provide(NotifyAdminsOfNewUserUseCase, scope=Scope.REQUEST)

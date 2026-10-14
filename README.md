@@ -197,6 +197,17 @@ Every task is registered in one place: a `TaskSpec` in `TASKS`
 retry flag. A name missing there is never run, and the sweeper marks its rows
 failed.
 
+A domain event is the other way to start a task. A use case publishes it
+inside its unit of work (`uow.publish`); the event's subscribers, mapped in
+`src/main/event_subscribers.py`, run in that same transaction and enqueue
+tasks. The reference path is the new-user notice: `TouchUserUseCase` publishes
+`UserRegistered` when the upsert inserted the user, `enqueue_new_user_notice`
+stores `user.notify_admins_of_new_user` in the outbox, and the worker sends
+every admin in `ADMIN_IDS` who has opened the bot a message in that admin's
+language. The task is not retried: a retry would repeat the message to the
+admins who already got it. `NOTIFY_ADMINS_ON_NEW_USER=false` keeps the event
+and the task and sends nothing.
+
 ## Throttling
 
 Each user gets `THROTTLE_DEFAULT_LIMIT` handler calls per

@@ -11,12 +11,14 @@ from src.core.tasks.broker import create_stream_broker
 from src.core.tasks.middlewares import TaskFailureAlertMiddleware
 from src.core.tasks.registry import TaskSpec, register_tasks
 from src.main.config import Config
+from src.user.tasks import USER_TASKS
 
 TASKS: tuple[TaskSpec, ...] = (
     # Every minute: rows whose after-commit publish failed reach the worker
     # within a couple of minutes.
     TaskSpec("outbox.sweep", sweep_outbox, schedule=({"cron": "* * * * *"},)),
     TaskSpec("outbox.purge", purge_outbox, schedule=({"cron": "0 3 * * *"},)),
+    *USER_TASKS,
 )
 
 

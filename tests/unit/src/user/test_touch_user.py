@@ -1,3 +1,4 @@
+from collections.abc import Iterator
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -9,8 +10,11 @@ from src.core.cache.interface import Cache, CacheKey
 from src.core.cache.memory_cache import InMemoryCache
 from src.core.cache.serializer import JsonSerializer
 from src.core.database.uow import SQLAlchemyUnitOfWork
+from src.core.events.registry import event_subscribers, set_event_subscribers
+from src.core.events.schemas import Actor, PublishedEvent
 from src.main.config import Config
 from src.user.cache import user_cache_key
+from src.user.events import UserRegistered
 from src.user.models import User
 from src.user.repositories import UpsertedUser, UserRepository
 from src.user.schemas import TelegramProfile, UserProfile
@@ -238,4 +242,71 @@ async def test_a_failed_commit_drops_the_snapshot_it_cached(settings: Config) ->
     session.commit.side_effect = ConnectionError("database down")
     with pytest.raises(ConnectionError):
         await use_case.execute(PROFILE)
+    assert await cache.get(user_cache_key(PROFILE.id), model=UserProfile) is None
+
+
+@pytest.fixture
+def published() -> Iterator[list[PublishedEvent]]:
+    """Record what the use case publishes, then put the real registry back."""
+    seen: list[PublishedEvent] = []
+
+    async def record(_uow: SQLAlchemyUnitOfWork, event: PublishedEvent) -> None:
+        seen.append(event)
+
+    saved = event_subscribers()
+    set_event_subscribers({UserRegistered: [record]})
+    yield seen
+    set_event_subscribers(saved)
+
+
+async def test_a_new_user_publishes_user_registered(
+    settings: Config, published: list[PublishedEvent]
+) -> None:
+    users = AsyncMock(spec=UserRepository)
+    users.get_single.return_value = None
+    users.upsert_from_telegram.return_value = UpsertedUser(user=_model(), created=True)
+    use_case, _session = _use_case(settings, users)
+    await use_case.execute(PROFILE)
+    [event] = published
+    assert event.event == UserRegistered(user_id=PROFILE.id)
+    assert event.actor == Actor.telegram_user(PROFILE.id)
+
+
+async def test_a_refreshed_user_publishes_nothing(
+    settings: Config, published: list[PublishedEvent]
+) -> None:
+    """A user who returns after an hour is not new; admins would get a
+    notice for every comeback."""
+    users = AsyncMock(spec=UserRepository)
+    users.get_single.return_value = _model(last_seen_at=NOW - timedelta(hours=1))
+    users.upsert_from_telegram.return_value = UpsertedUser(user=_model(), created=False)
+    use_case, _session = _use_case(settings, users)
+    await use_case.execute(PROFILE)
+    assert published == []
+
+
+async def test_a_failed_subscriber_leaves_nothing_cached_or_committed(
+    settings: Config,
+) -> None:
+    """The registration and its outbox row commit together or not at all; a
+    snapshot cached anyway would describe a user who was never stored."""
+
+    async def broken(_uow: SQLAlchemyUnitOfWork, _event: PublishedEvent) -> None:
+        raise ConnectionError("outbox insert failed")
+
+    saved = event_subscribers()
+    set_event_subscribers({UserRegistered: [broken]})
+    try:
+        users = AsyncMock(spec=UserRepository)
+        users.get_single.return_value = None
+        users.upsert_from_telegram.return_value = UpsertedUser(
+            user=_model(), created=True
+        )
+        cache = build_cache()
+        use_case, session = _use_case(settings, users, cache)
+        with pytest.raises(ConnectionError):
+            await use_case.execute(PROFILE)
+    finally:
+        set_event_subscribers(saved)
+    session.commit.assert_not_awaited()
     assert await cache.get(user_cache_key(PROFILE.id), model=UserProfile) is None

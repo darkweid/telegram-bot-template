@@ -186,6 +186,9 @@ class BotConfig(BaseSettings):
     DEV_ALERT_CHAT_ID: int | None = None
     # The same failure (type, origin, place) is alerted once per this many seconds.
     ALERT_COOLDOWN_SECONDS: int = Field(300, gt=0)
+    # Message every admin when a user starts the bot for the first time. Off,
+    # the notice task still runs and sends nothing.
+    NOTIFY_ADMINS_ON_NEW_USER: bool = True
 
     model_config = SettingsConfigDict(extra="ignore", hide_input_in_errors=True)
 

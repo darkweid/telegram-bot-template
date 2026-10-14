@@ -3,9 +3,11 @@ from datetime import datetime, timedelta
 from loggers import get_logger
 from src.core.cache.interface import Cache
 from src.core.database.uow import SQLAlchemyUnitOfWork
+from src.core.events.schemas import Actor
 from src.core.utils.datetime_utils import get_utc_now
 from src.main.config import BotConfig
 from src.user.cache import user_cache_key
+from src.user.events import UserRegistered
 from src.user.repositories import UserRepository
 from src.user.schemas import TelegramProfile, UserProfile
 from src.user.services import needs_write
@@ -28,6 +30,10 @@ class TouchUserUseCase:
     snapshot expired. The cost is one Redis call made under a row lock: against
     a hung Redis about two socket timeouts (10 s by default), the one retry
     `create_redis_client` allows; the cache then fails open.
+
+    A user stored for the first time publishes `UserRegistered` in the same
+    transaction. "First" is the upsert's own `created` flag, not a cache miss,
+    so two concurrent first updates of one user publish it once.
 
     `FOR UPDATE` rather than `FOR SHARE`: two updates of one user that both
     need a write would each hold a share lock and deadlock upgrading it; with
@@ -74,6 +80,13 @@ class TouchUserUseCase:
                 await self._cache.set(key, snapshot, ttl=self._ttl)
                 return snapshot, False
             upserted = await self._users.upsert_from_telegram(uow.session, profile, now)
+            if upserted.created:
+                # Inside the upsert's transaction, and before the snapshot is
+                # cached: the outbox row a subscriber writes commits with the
+                # user or neither does, and a failed subscriber caches nothing.
+                await uow.publish(
+                    Actor.telegram_user(profile.id), UserRegistered(user_id=profile.id)
+                )
             snapshot = UserProfile.from_model(upserted.user)
             await self._cache.set(key, snapshot, ttl=self._ttl)
             try:

@@ -75,6 +75,10 @@ def test_default_locale_is_normalized() -> None:
     assert _bot(DEFAULT_LOCALE="RU").DEFAULT_LOCALE == "ru"
 
 
+def test_admins_hear_of_new_users_by_default() -> None:
+    assert _bot().NOTIFY_ADMINS_ON_NEW_USER is True
+
+
 @pytest.mark.parametrize(
     "path",
     [
