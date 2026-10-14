@@ -44,7 +44,7 @@ run: ## Build and start the prod-like stack; with BOT_IMAGE set, pull it instead
 	@if $(DOCKER_COMPOSE) config --images | grep -qxF '$(LOCAL_BOT_IMAGE)'; then \
 		$(DOCKER_COMPOSE) up --build -d; \
 	else \
-		$(DOCKER_COMPOSE) pull migrate bot && \
+		$(DOCKER_COMPOSE) pull migrate bot worker scheduler && \
 		$(DOCKER_COMPOSE) build postgres && \
 		$(DOCKER_COMPOSE) up -d; \
 	fi

@@ -7,6 +7,7 @@ from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from loggers import get_logger
+from src.core.tasks.broker import TasksRedis
 from src.main.config import AppConfig, BotConfig
 from src.system.repositories import SystemRepository
 from src.system.schemas import HealthReport, Readiness
@@ -37,6 +38,7 @@ class HealthService:
         session: AsyncSession,
         redis: Redis,
         storage: BaseStorage,
+        tasks_redis: TasksRedis,
         app_config: AppConfig,
         bot_config: BotConfig,
     ) -> None:
@@ -44,17 +46,19 @@ class HealthService:
         self.session = session
         self.redis = redis
         self.storage = storage
+        self.tasks_redis = tasks_redis
         self.app_config = app_config
         self.bot_config = bot_config
 
     async def check_readiness(self) -> Readiness:
         # Concurrently, so the whole check stays within one probe budget.
-        postgres, redis, fsm = await asyncio.gather(
+        postgres, redis, fsm, tasks = await asyncio.gather(
             self._probe("Postgres", self.repository.ping(self.session)),
             self._probe("Redis", self.redis.ping()),
             self._probe("Redis FSM", self._ping_fsm_storage()),
+            self._probe("Redis tasks", self.tasks_redis.ping()),
         )
-        return Readiness(postgres=postgres, redis=redis and fsm)
+        return Readiness(postgres=postgres, redis=redis and fsm and tasks)
 
     async def get_report(self) -> HealthReport:
         """Never raises: monitoring reads this to find out *which* dependency

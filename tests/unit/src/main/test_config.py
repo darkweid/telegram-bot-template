@@ -194,6 +194,17 @@ def test_redis_fsm_dsn_uses_its_own_database() -> None:
     assert redis.dsn != redis.fsm_dsn
 
 
+def test_each_redis_role_has_its_own_database(settings: Config) -> None:
+    redis = settings.redis
+    databases = {
+        redis.REDIS_DATABASE,
+        redis.REDIS_FSM_DATABASE,
+        redis.REDIS_TASKS_DATABASE,
+    }
+    assert len(databases) == 3
+    assert redis.tasks_dsn.endswith(f"/{redis.REDIS_TASKS_DATABASE}")
+
+
 def test_redis_dsn_escapes_special_characters_in_password() -> None:
     raw_password = "p@ss/word%:x"
     redis_config = RedisConfig(

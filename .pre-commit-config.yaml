@@ -87,6 +87,8 @@ repos:
           - redis==8.1.0
           - sentry-sdk==2.72.0
           - sqlalchemy==2.1.4
+          - taskiq==0.13.0
+          - taskiq-redis==1.2.4
           - uuid6==2025.0.1
 
   # Layering rules (.importlinter): core stays independent of domain packages,

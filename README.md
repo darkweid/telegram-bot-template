@@ -99,6 +99,24 @@ Put a reverse proxy with a valid certificate in front of the bot and forward
 `tg-bot-template-network` Docker network. The compose file publishes no port
 of the bot.
 
+## Background tasks
+
+Background work runs on [taskiq](https://taskiq-python.github.io/) over Redis
+Streams, in two more services of the same image:
+
+- `worker` runs the tasks: one process, up to 20 tasks at once. Scale it with
+  replicas. It waits for the migrations like the bot, and a delivery of a task
+  that already completed or is running elsewhere is skipped.
+- `scheduler` fires cron schedules and the worker's delayed retries. Run
+  exactly one: taskiq has no duplicate-fire protection, so two schedulers fire
+  every cron twice. Its healthcheck reads a heartbeat the scheduler loop
+  writes every 30 seconds.
+
+The queue lives in its own Redis database, `REDIS_TASKS_DATABASE` (default
+`1`), which must differ from `REDIS_DATABASE` and `REDIS_FSM_DATABASE`.
+`make run` and `make run-dev` start both services; `make logs s=worker` and
+`make logs s=scheduler` show their output.
+
 ## Roles
 
 Two optional roles, set in `.env` as comma-separated Telegram user ids:
@@ -127,10 +145,10 @@ loggers/            logging setup: plain-text or JSON lines on stdout
 migrations/         Alembic environment and revisions
 models/             every SQLAlchemy model, imported for Alembic autogenerate
 scripts/ops/        helpers behind make targets and pre-commit hooks
-src/core/           shared infrastructure: database, Redis, errors, i18n, Telegram helpers
+src/core/           shared infrastructure: database, Redis, task queue, errors, i18n, Telegram helpers
 src/admin/          admin role: commands and handlers
 src/developer/      developer role: commands and handlers
-src/main/           entry point, config, dependency container, dispatcher, polling and webhook
+src/main/           entry points (bot, worker, scheduler), config, dependency container, dispatcher
 src/system/         health checks behind the probes
 src/user/           users: handlers, keyboards, middleware, use cases, repository
 tests/unit/         tests that need no Docker

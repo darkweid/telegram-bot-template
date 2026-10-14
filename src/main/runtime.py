@@ -53,7 +53,7 @@ async def bot_runtime(
     """
     container = build_container(config, *providers)
     try:
-        await _require_dependencies(container)
+        await require_dependencies(container)
         dp = await create_dispatcher(container)
         bot = await container.get(Bot)
         await set_bot_commands(
@@ -67,7 +67,7 @@ async def bot_runtime(
         await container.close()
 
 
-async def _require_dependencies(container: AsyncContainer) -> None:
+async def require_dependencies(container: AsyncContainer) -> None:
     async with container() as scope:
         readiness = await (await scope.get(HealthService)).check_readiness()
     missing = [

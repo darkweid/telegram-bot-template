@@ -23,6 +23,7 @@ class RedisConfig(BaseSettings):
     REDIS_PASSWORD: str
     REDIS_DATABASE: str
     REDIS_FSM_DATABASE: str = "2"
+    REDIS_TASKS_DATABASE: str = "1"
 
     model_config = SettingsConfigDict(extra="ignore")
 
@@ -44,6 +45,10 @@ class RedisConfig(BaseSettings):
     @property
     def fsm_dsn(self) -> str:
         return self._dsn(self.REDIS_FSM_DATABASE)
+
+    @property
+    def tasks_dsn(self) -> str:
+        return self._dsn(self.REDIS_TASKS_DATABASE)
 
 
 class CacheConfig(BaseSettings):

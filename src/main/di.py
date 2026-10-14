@@ -1,7 +1,7 @@
 """The composition root: everything with a lifetime is created here, once,
 and released when the container closes."""
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Mapping
 
 from aiogram import Bot
 from aiogram.client.default import DefaultBotProperties
@@ -34,6 +34,7 @@ from src.core.http.user_agent import UserAgent, build_user_agent
 from src.core.i18n import LOCALES_DIR, build_i18n
 from src.core.redis.core import create_redis_client
 from src.core.redis.degradation import RedisDegradationReporter
+from src.core.tasks.broker import TasksRedis
 from src.core.telegram.fsm import create_event_isolation, create_fsm_storage
 from src.core.telegram.roles import Roles
 from src.core.telegram.session import (
@@ -144,6 +145,13 @@ class RedisProvider(Provider):
         await client.aclose()
 
     @provide
+    async def tasks_client(self, redis: RedisConfig) -> AsyncIterator[TasksRedis]:
+        # The task queue's database: heartbeat and queue length are read here.
+        client = TasksRedis(create_redis_client(redis.tasks_dsn))
+        yield client
+        await client.aclose()
+
+    @provide
     async def fsm_storage(self, redis: RedisConfig) -> AsyncIterator[BaseStorage]:
         storage = create_fsm_storage(redis.fsm_dsn)
         # The storage keeps its own client on purpose: its close() shuts the
@@ -227,8 +235,14 @@ class HttpProvider(Provider):
         )
 
 
-def build_container(config: Config, *providers: Provider) -> AsyncContainer:
-    """The bot's container. `providers` override production ones in tests."""
+def build_container(
+    config: Config,
+    *providers: Provider,
+    context: Mapping[object, object] | None = None,
+) -> AsyncContainer:
+    """The bot's or the worker's container. `providers` override production
+    ones in tests; `context` adds values the process already holds (the
+    worker's broker)."""
     # Every process that builds a container (bot, worker, tests) runs the
     # same subscribers; the registry is replaced, never merged.
     set_event_subscribers(EVENT_SUBSCRIBERS)
@@ -244,7 +258,7 @@ def build_container(config: Config, *providers: Provider) -> AsyncContainer:
         SystemProvider(),
         AiogramProvider(),
         *providers,
-        context={Config: config},
+        context={Config: config, **(context or {})},
         # An override that replaces nothing, or a factory registered twice by
         # accident, is a startup error rather than a silent surprise.
         validation_settings=STRICT_VALIDATION,

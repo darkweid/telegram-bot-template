@@ -16,6 +16,7 @@ from src.core.cache.redis_scripts import (
     CACHE_SET_SCRIPT,
 )
 from src.core.limiter.script import RATE_LIMIT_SCRIPT
+from src.core.tasks.receiver import RELEASE_CLAIM_SCRIPT, RENEW_CLAIM_SCRIPT
 
 
 def _normalize_key(key: str | bytes) -> str:
@@ -314,6 +315,17 @@ class InMemoryRedis:
             return self._eval_cache_delete(counters, *args)
         if normalized == CACHE_INVALIDATE_SCRIPT.strip():
             return self._eval_cache_invalidate(counters, *args)
+        if normalized == RELEASE_CLAIM_SCRIPT.strip():
+            key = _normalize_key(keys_and_args[0])
+            if self._read(key) != _normalize_value(keys_and_args[1]):
+                return 0
+            return self._drop(key)
+        if normalized == RENEW_CLAIM_SCRIPT.strip():
+            key = _normalize_key(keys_and_args[0])
+            if self._read(key) != _normalize_value(keys_and_args[1]):
+                return 0
+            self._expire(key, int(keys_and_args[2]))
+            return 1
         raise NotImplementedError("Script not supported in fake Redis.")
 
     # Every script body below is synchronous, and a new one must be too: an

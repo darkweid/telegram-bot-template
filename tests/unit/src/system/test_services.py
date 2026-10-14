@@ -9,6 +9,7 @@ from redis.asyncio import Redis
 from redis.exceptions import ConnectionError as RedisConnectionError, ResponseError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.core.tasks.broker import TasksRedis
 from src.main.config import Config
 from src.system import services
 from src.system.repositories import SystemRepository
@@ -25,11 +26,12 @@ def _service(
     postgres: Callable[..., Awaitable[None]] | BaseException | None = None,
     redis: Callable[..., Awaitable[None]] | BaseException | None = None,
     fsm: Callable[..., Awaitable[None]] | BaseException | None = None,
+    tasks: Callable[..., Awaitable[None]] | BaseException | None = None,
     memory: dict[str, int] | BaseException | None = None,
 ) -> HealthService:
-    """`postgres`/`redis`/`fsm`: None answers, an exception is raised, a
-    coroutine function runs instead (e.g. `_hang`). `memory`: what INFO memory
-    returns."""
+    """`postgres`/`redis`/`fsm`/`tasks`: None answers, an exception is raised,
+    a coroutine function runs instead (e.g. `_hang`). `memory`: what INFO
+    memory returns."""
     repository = AsyncMock(spec=SystemRepository)
     repository.ping.side_effect = postgres
     client = AsyncMock(spec=Redis)
@@ -42,11 +44,14 @@ def _service(
     )
     fsm_client = AsyncMock(spec=Redis)
     fsm_client.ping = AsyncMock(return_value=True, side_effect=fsm)
+    tasks_client = AsyncMock(spec=Redis)
+    tasks_client.ping = AsyncMock(return_value=True, side_effect=tasks)
     return HealthService(
         repository,
         AsyncMock(spec=AsyncSession),
         client,
         RedisStorage(redis=fsm_client),
+        TasksRedis(tasks_client),
         settings.app,
         settings.bot,
     )
@@ -77,6 +82,14 @@ async def test_not_ready_when_the_fsm_database_refuses(settings: Config) -> None
     assert (readiness.postgres, readiness.redis, readiness.ok) == (True, False, False)
 
 
+async def test_not_ready_when_the_task_database_refuses(settings: Config) -> None:
+    """The bot sends every task there after commit; a refused index fails each
+    send while the cache client still answers."""
+    service = _service(settings, tasks=ResponseError("DB index is out of range"))
+    readiness = await service.check_readiness()
+    assert (readiness.postgres, readiness.redis, readiness.ok) == (True, False, False)
+
+
 async def test_in_process_fsm_storage_needs_no_probe(settings: Config) -> None:
     service = _service(settings)
     service.storage = MemoryStorage()
@@ -89,7 +102,7 @@ async def test_a_hanging_dependency_fails_within_the_budget(
     monkeypatch.setattr(services, "PROBE_TIMEOUT_SECONDS", 0.05)
     async with asyncio.timeout(1):
         readiness = await _service(
-            settings, postgres=_hang, redis=_hang, fsm=_hang
+            settings, postgres=_hang, redis=_hang, fsm=_hang, tasks=_hang
         ).check_readiness()
     assert (readiness.postgres, readiness.redis) == (False, False)
 
