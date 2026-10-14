@@ -19,3 +19,6 @@ msgstr ""
 
 msgid "Something went wrong. Please try again later."
 msgstr "Что-то пошло не так. Попробуйте ещё раз чуть позже."
+
+msgid "This language is not available."
+msgstr "Этот язык недоступен."

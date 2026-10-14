@@ -1,0 +1,26 @@
+from src.core.database.uow import SQLAlchemyUnitOfWork
+from src.core.utils.datetime_utils import get_utc_now
+from src.user.repositories import UserRepository
+from src.user.schemas import TelegramProfile
+
+
+class ChangeMembershipUseCase:
+    """Follow the bot's membership in a user's private chat.
+
+    Telegram reports "kicked" when the user blocks the bot and "member" when
+    they unblock or restart it - the only way to learn of a block without
+    trying to send something.
+    """
+
+    def __init__(self, uow: SQLAlchemyUnitOfWork, users: UserRepository) -> None:
+        self._uow = uow
+        self._users = users
+
+    async def execute(self, profile: TelegramProfile, *, is_member: bool) -> None:
+        now = get_utc_now()
+        async with self._uow as uow:
+            if is_member:
+                await self._users.upsert_from_telegram(uow.session, profile, now)
+            else:
+                await self._users.set_blocked(uow.session, profile.id, True, now)
+            await uow.commit()

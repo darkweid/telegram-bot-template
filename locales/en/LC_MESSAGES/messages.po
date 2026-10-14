@@ -18,3 +18,6 @@ msgstr ""
 
 msgid "Something went wrong. Please try again later."
 msgstr ""
+
+msgid "This language is not available."
+msgstr ""
