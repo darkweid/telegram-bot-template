@@ -1,0 +1,494 @@
+from __future__ import annotations
+
+from datetime import UTC, date, datetime, timedelta
+import re
+from zoneinfo import ZoneInfo
+
+import pytest
+from sqlalchemy import Boolean, DateTime, Integer, String, select
+from sqlalchemy.dialects import postgresql
+from sqlalchemy.ext.hybrid import hybrid_property
+from sqlalchemy.orm import Mapped, aliased, mapped_column
+from sqlalchemy.sql.compiler import Compiled
+from sqlalchemy.sql.elements import ColumnElement
+
+from src.core.database.base import Base as SQLAlchemyBase
+from src.core.database.filters import FilterCondition
+from src.core.database.query import (
+    MAX_SEARCH_WORDS,
+    ListQuery,
+    RelatedSearch,
+    escape_like_literal,
+    search_words,
+)
+from src.core.database.repositories import BaseRepository
+from src.core.errors.exceptions import FilteringError
+from src.core.utils.datetime_utils import get_utc_now
+
+
+class QueryModel(SQLAlchemyBase):
+    __tablename__ = "query_models"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(64))
+    email: Mapped[str] = mapped_column(String(64))
+    created_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    is_deleted: Mapped[bool] = mapped_column(Boolean, default=False)
+
+    @hybrid_property
+    def computed_created_at(self) -> datetime | None:
+        return self.created_at
+
+    @computed_created_at.expression
+    def computed_created_at(cls) -> object:  # noqa: N805
+        return cls.created_at + timedelta()
+
+
+SEARCHABLE = ("name", "email")
+
+
+def compile_clauses(clauses: list[ColumnElement[bool]]) -> Compiled:
+    statement = select(QueryModel)
+    for clause in clauses:
+        statement = statement.where(clause)
+    return statement.compile(dialect=postgresql.dialect())
+
+
+def search_patterns(compiled: Compiled) -> list[str]:
+    """The ILIKE patterns a compiled search binds, in clause order."""
+    return [
+        value
+        for value in compiled.params.values()
+        if isinstance(value, str) and value.startswith("%")
+    ]
+
+
+def test_escape_like_literal_escapes_wildcards() -> None:
+    assert escape_like_literal(r"100%_match\value") == r"100\%\_match\\value"
+
+
+def test_build_where_clauses_returns_nothing_for_empty_query() -> None:
+    assert ListQuery().build_where_clauses(QueryModel, SEARCHABLE) == []
+
+
+def test_build_where_clauses_searches_all_searchable_fields_with_or() -> None:
+    clauses = ListQuery(search="anne").build_where_clauses(QueryModel, SEARCHABLE)
+
+    compiled = compile_clauses(clauses)
+
+    assert len(clauses) == 1
+    assert compiled.string.count("ILIKE") == 2
+    assert " OR " in compiled.string
+    assert search_patterns(compiled) == ["%anne%", "%anne%"]
+
+
+def test_build_where_clauses_requires_every_word_in_some_field() -> None:
+    clauses = ListQuery(search="anne  smith anne").build_where_clauses(
+        QueryModel, SEARCHABLE
+    )
+
+    compiled = compile_clauses(clauses)
+
+    assert compiled.string.count("ILIKE") == 4
+    assert " AND " in compiled.string
+    assert sorted(set(search_patterns(compiled))) == ["%anne%", "%smith%"]
+
+
+def test_build_where_clauses_searches_related_columns_without_own_fields() -> None:
+    related = select(QueryModel.email).scalar_subquery()
+
+    clauses = ListQuery(search="anne").build_where_clauses(
+        QueryModel, (), related_search_columns=[related]
+    )
+
+    assert compile_clauses(clauses).string.count("ILIKE") == 1
+
+
+def test_build_where_clauses_escapes_search_wildcards() -> None:
+    clauses = ListQuery(search=r"100%_match").build_where_clauses(QueryModel, ("name",))
+
+    compiled = compile_clauses(clauses)
+
+    # The dialect doubles the backslash in the compiled text or not depending
+    # on the SQLAlchemy dialect options; either spelling is one escape char.
+    assert re.search(r"ESCAPE '\\{1,2}'", compiled.string)
+    assert search_patterns(compiled) == [r"%100\%\_match%"]
+
+
+@pytest.mark.parametrize("search", ["", "   ", None])
+def test_build_where_clauses_ignores_blank_search(search: str | None) -> None:
+    assert ListQuery(search=search).build_where_clauses(QueryModel, SEARCHABLE) == []
+
+
+def test_build_where_clauses_rejects_search_when_no_fields_allowed() -> None:
+    with pytest.raises(FilteringError):
+        ListQuery(search="anne").build_where_clauses(QueryModel, ())
+
+
+def test_build_where_clauses_applies_inclusive_date_bounds() -> None:
+    now = get_utc_now()
+    query = ListQuery(date_from=now - timedelta(days=7), date_to=now)
+
+    clauses = query.build_where_clauses(QueryModel, SEARCHABLE)
+
+    compiled = compile_clauses(clauses)
+
+    assert len(clauses) == 2
+    assert "created_at >=" in compiled.string
+    assert "created_at <=" in compiled.string
+
+
+def test_build_where_clauses_applies_single_date_bound() -> None:
+    query = ListQuery(date_from=get_utc_now() - timedelta(days=1))
+
+    clauses = query.build_where_clauses(QueryModel, SEARCHABLE)
+
+    assert len(clauses) == 1
+    assert "created_at >=" in compile_clauses(clauses).string
+
+
+def test_build_where_clauses_rejects_inverted_date_range() -> None:
+    now = get_utc_now()
+    query = ListQuery(date_from=now, date_to=now - timedelta(days=1))
+
+    with pytest.raises(FilteringError):
+        query.build_where_clauses(QueryModel, SEARCHABLE)
+
+
+def test_build_where_clauses_accepts_mixed_naive_and_aware_date_bounds() -> None:
+    # A caller can pass one bound with an offset and one without. Comparing
+    # those two raises `TypeError`, which is not a `FilteringError` and so
+    # escapes the error handling as an unexpected failure. A naive bound is
+    # read as UTC.
+    now = get_utc_now()
+    query = ListQuery(
+        date_from=(now - timedelta(days=7)).replace(tzinfo=None),
+        date_to=now,
+    )
+
+    clauses = query.build_where_clauses(QueryModel, SEARCHABLE)
+
+    assert len(clauses) == 2
+    compiled = compile_clauses(clauses)
+    assert "created_at >=" in compiled.string
+    assert "created_at <=" in compiled.string
+
+
+def test_build_where_clauses_rejects_inverted_range_across_timezones() -> None:
+    # Inverted only once both bounds are in UTC: 10:00+02:00 is 08:00Z, which
+    # is earlier than the naive 09:00 the caller passed as the range start.
+    query = ListQuery(
+        date_from=datetime.fromisoformat("2026-08-14T09:00:00"),
+        date_to=datetime.fromisoformat("2026-08-14T10:00:00+02:00"),
+    )
+
+    with pytest.raises(FilteringError):
+        query.build_where_clauses(QueryModel, SEARCHABLE)
+
+
+def test_build_where_clauses_binds_naive_date_bound_as_utc() -> None:
+    naive = datetime.fromisoformat("2026-08-14T09:00:00")
+    query = ListQuery(date_from=naive)
+
+    clauses = query.build_where_clauses(QueryModel, SEARCHABLE)
+    bound = compile_clauses(clauses).params["created_at_1"]
+
+    assert bound.tzinfo is not None
+    assert bound == naive.replace(tzinfo=UTC)
+
+
+TASHKENT = ZoneInfo("Asia/Tashkent")
+
+
+def test_bare_date_to_covers_the_whole_day() -> None:
+    """A bare `date_to=2026-09-24` used to become midnight at the start of that
+    day, so a list asked for "up to the 24th" silently dropped the 24th."""
+    query = ListQuery(date_to=date(2026, 9, 24))
+
+    compiled = compile_clauses(query.build_where_clauses(QueryModel, SEARCHABLE))
+
+    assert "created_at <" in compiled.string
+    assert "created_at <=" not in compiled.string
+    assert compiled.params["created_at_1"] == datetime(2026, 9, 25, tzinfo=UTC)
+
+
+def test_bare_date_from_starts_at_midnight() -> None:
+    query = ListQuery(date_from=date(2026, 9, 24))
+
+    compiled = compile_clauses(query.build_where_clauses(QueryModel, SEARCHABLE))
+
+    assert "created_at >=" in compiled.string
+    assert compiled.params["created_at_1"] == datetime(2026, 9, 24, tzinfo=UTC)
+
+
+def test_bare_dates_follow_the_local_calendar() -> None:
+    """A day in Tashkent starts at 19:00 UTC the evening before; reading a bare
+    date in UTC would shift the whole period by five hours."""
+    query = ListQuery(
+        date_from=date(2026, 9, 24),
+        date_to=date(2026, 9, 24),
+        local_timezone=TASHKENT,
+    )
+
+    compiled = compile_clauses(query.build_where_clauses(QueryModel, SEARCHABLE))
+
+    assert compiled.params["created_at_1"] == datetime(2026, 9, 23, 19, tzinfo=UTC)
+    assert compiled.params["created_at_2"] == datetime(2026, 9, 24, 19, tzinfo=UTC)
+
+
+def test_naive_datetime_bound_is_read_in_the_local_timezone() -> None:
+    query = ListQuery(date_from=datetime(2026, 9, 24, 9, 0), local_timezone=TASHKENT)
+
+    compiled = compile_clauses(query.build_where_clauses(QueryModel, SEARCHABLE))
+
+    assert compiled.params["created_at_1"] == datetime(2026, 9, 24, 4, tzinfo=UTC)
+
+
+def test_aware_datetime_bound_ignores_the_local_timezone() -> None:
+    query = ListQuery(
+        date_to=datetime(2026, 9, 24, 9, 0, tzinfo=UTC), local_timezone=TASHKENT
+    )
+
+    compiled = compile_clauses(query.build_where_clauses(QueryModel, SEARCHABLE))
+
+    assert "created_at <=" in compiled.string
+    assert compiled.params["created_at_1"] == datetime(2026, 9, 24, 9, tzinfo=UTC)
+
+
+def test_period_ending_on_a_day_before_its_start_is_inverted() -> None:
+    query = ListQuery(
+        date_from=datetime(2026, 9, 25, 0, 0, tzinfo=UTC),
+        date_to=date(2026, 9, 24),
+    )
+
+    with pytest.raises(FilteringError):
+        query.build_where_clauses(QueryModel, SEARCHABLE)
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        ListQuery(date_to=date.max),
+        ListQuery(date_from=datetime.fromisoformat("0001-01-01T00:00:00+05:00")),
+    ],
+    ids=["day-after-the-last-date", "before-the-first-instant"],
+)
+def test_date_bound_outside_the_calendar_is_a_filtering_error(
+    query: ListQuery,
+) -> None:
+    """Moving such a bound to UTC raises OverflowError, which no handler maps,
+    so the user got an unexpected failure for a malformed period."""
+    with pytest.raises(FilteringError):
+        query.build_where_clauses(QueryModel, SEARCHABLE)
+
+
+def test_build_where_clauses_rejects_unknown_date_field() -> None:
+    query = ListQuery(date_from=get_utc_now(), date_field="published_at")
+
+    with pytest.raises(FilteringError):
+        query.build_where_clauses(QueryModel, SEARCHABLE)
+
+
+def test_build_where_clauses_rejects_non_column_date_field() -> None:
+    # A hybrid property is a real, existing attribute (unlike the "unknown
+    # date field" case above), but its expression is not column-shaped;
+    # comparing it directly would silently build the wrong SQL instead of
+    # raising, so it must be rejected the same way as a missing attribute.
+    query = ListQuery(date_from=get_utc_now(), date_field="computed_created_at")
+
+    with pytest.raises(FilteringError):
+        query.build_where_clauses(QueryModel, SEARCHABLE)
+
+
+def test_build_where_clauses_ignores_date_field_without_bounds() -> None:
+    query = ListQuery(date_field="published_at")
+
+    assert query.build_where_clauses(QueryModel, SEARCHABLE) == []
+
+
+def test_build_where_clauses_includes_filter_conditions() -> None:
+    query = ListQuery(conditions=FilterCondition(gte={"id": 10}))
+
+    clauses = query.build_where_clauses(QueryModel, SEARCHABLE)
+
+    assert len(clauses) == 1
+    assert "id >=" in compile_clauses(clauses).string
+
+
+def test_build_where_clauses_ignores_empty_filter_conditions() -> None:
+    query = ListQuery(conditions=FilterCondition())
+
+    assert query.build_where_clauses(QueryModel, SEARCHABLE) == []
+
+
+def order_by_strings(
+    query: ListQuery,
+    sortable: tuple[str, ...] = ("created_at", "name"),
+    default: str | None = "created_at",
+) -> list[str]:
+    return [
+        str(clause) for clause in query.build_order_by(QueryModel, sortable, default)
+    ]
+
+
+def test_build_order_by_uses_requested_column_and_direction() -> None:
+    clauses = order_by_strings(ListQuery(order_by="name", order="asc"))
+
+    assert clauses[0] == "query_models.name ASC"
+
+
+def test_build_order_by_puts_nulls_last_only_on_a_nullable_column() -> None:
+    """`DESC NULLS LAST` on a NOT NULL column changes no row but cannot use a
+    plain btree scanned backwards, so every such list paid a full Sort."""
+    not_null = order_by_strings(ListQuery(order_by="name"))
+    nullable = order_by_strings(ListQuery(order_by="created_at"))
+
+    assert not_null[0] == "query_models.name DESC"
+    assert nullable[0] == "query_models.created_at DESC NULLS LAST"
+
+
+def test_build_order_by_keeps_nulls_last_when_nullability_is_unknown() -> None:
+    clauses = order_by_strings(
+        ListQuery(order_by="computed_created_at"),
+        sortable=("computed_created_at",),
+    )
+
+    assert clauses[0].endswith("DESC NULLS LAST")
+
+
+def test_build_order_by_appends_primary_key_tiebreaker() -> None:
+    clauses = order_by_strings(ListQuery(order_by="name", order="asc"))
+
+    assert clauses[1] == "query_models.id ASC"
+
+
+def test_build_order_by_does_not_duplicate_primary_key() -> None:
+    clauses = order_by_strings(ListQuery(order_by="id"), sortable=("id",))
+
+    assert clauses == ["query_models.id DESC"]
+
+
+def test_build_order_by_rejects_field_outside_allowlist() -> None:
+    with pytest.raises(FilteringError):
+        ListQuery(order_by="email").build_order_by(
+            QueryModel, ("created_at", "name"), "created_at"
+        )
+
+
+def test_build_order_by_rejects_any_field_when_sorting_disabled() -> None:
+    with pytest.raises(FilteringError):
+        ListQuery(order_by="name").build_order_by(QueryModel, (), None)
+
+
+def test_build_order_by_falls_back_to_default_column() -> None:
+    clauses = order_by_strings(ListQuery())
+
+    assert clauses[0] == "query_models.created_at DESC NULLS LAST"
+    assert clauses[1] == "query_models.id DESC"
+
+
+def test_build_order_by_falls_back_to_created_at_without_default() -> None:
+    clauses = order_by_strings(ListQuery(), default=None)
+
+    assert clauses[0] == "query_models.created_at DESC NULLS LAST"
+    assert clauses[1] == "query_models.id DESC"
+
+
+def test_build_order_by_falls_back_to_primary_key_without_created_at() -> None:
+    class OrderlessModel(SQLAlchemyBase):
+        __tablename__ = "orderless_models"
+
+        id: Mapped[int] = mapped_column(Integer, primary_key=True)
+
+    clauses = [
+        str(clause) for clause in ListQuery().build_order_by(OrderlessModel, (), None)
+    ]
+
+    assert clauses == ["orderless_models.id DESC"]
+
+
+def test_search_words_drop_case_duplicates_and_stop_at_the_cap() -> None:
+    """Every word costs an OR over every column, correlated subqueries
+    included, so a search of fifty one-letter words must not reach SQL."""
+    words = search_words("Ivan ivan " + " ".join(f"w{index}" for index in range(10)))
+
+    assert words[0] == "Ivan"
+    assert len(words) == MAX_SEARCH_WORDS
+
+
+class QueryParent(SQLAlchemyBase):
+    __tablename__ = "query_parents"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    title: Mapped[str] = mapped_column(String(64))
+
+
+class QueryModelRepository(BaseRepository[QueryModel]):
+    model = QueryModel
+    searchable_fields = ("name",)
+
+    def _related_search(self) -> list[RelatedSearch]:
+        return [
+            RelatedSearch(
+                QueryParent, QueryParent.id == QueryModel.id, (QueryParent.title,)
+            )
+        ]
+
+
+@pytest.mark.parametrize(("search", "joined"), [(None, False), ("anne", True)])
+def test_related_search_joins_only_while_searching(
+    search: str | None, joined: bool
+) -> None:
+    """A list read without a search must not pay for the join."""
+    repository = QueryModelRepository()
+    query = ListQuery(search=search)
+
+    (statement,) = repository._apply_list_filters(query, select(QueryModel))
+    compiled = statement.compile(dialect=postgresql.dialect()).string
+
+    assert ("LEFT OUTER JOIN query_parents" in compiled) is joined
+    assert ("translate(query_parents.title" in compiled) is joined
+
+
+class AliasedParentRepository(BaseRepository[QueryModel]):
+    """Builds a fresh alias on every hook call, as a repository searching two
+    foreign keys to one table must."""
+
+    model = QueryModel
+
+    def _related_search(self) -> list[RelatedSearch]:
+        parent = aliased(QueryParent)
+        return [RelatedSearch(parent, parent.id == QueryModel.id, (parent.title,))]
+
+
+def test_related_search_filters_on_the_alias_it_joins() -> None:
+    """Two hook reads would join one alias and filter on another, which
+    SQLAlchemy turns into an implicit cross join."""
+    (statement,) = AliasedParentRepository()._apply_list_filters(
+        ListQuery(search="anne"), select(QueryModel)
+    )
+
+    compiled = statement.compile(dialect=postgresql.dialect()).string
+
+    assert compiled.count("query_parents AS") == 1
+
+
+def test_search_reads_yo_as_ye_on_both_sides() -> None:
+    clauses = ListQuery(search="Алёна").build_where_clauses(QueryModel, ("name",))
+
+    compiled = compile_clauses(clauses)
+
+    assert "translate(query_models.name, 'Ёё', 'Ее') ILIKE" in compiled.string
+    assert search_patterns(compiled) == ["%Алена%"]
+
+
+def test_search_words_keep_words_ilike_tells_apart() -> None:
+    """`casefold` reads `ß` as `ss`; `ILIKE` does not, so both stay."""
+    assert search_words("STRASSE straße") == ["STRASSE", "straße"]
+
+
+def test_search_words_cap_keeps_the_first_distinct_words() -> None:
+    """A repeat after the cap must not push an earlier word out of it."""
+    assert search_words("a b c d e f a") == ["a", "b", "c", "d", "e"]
