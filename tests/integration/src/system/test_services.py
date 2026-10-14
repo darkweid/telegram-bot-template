@@ -1,9 +1,12 @@
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.core.outbox.repositories import OutboxRepository
 from src.core.redis.core import create_redis_client
-from src.core.tasks.broker import TasksRedis
+from src.core.tasks.broker import STREAM_CONSUMER_GROUP, STREAM_QUEUE_NAME, TasksRedis
 from src.core.tasks.heartbeat import LAST_BEAT_KEY
 from src.core.telegram.fsm import create_fsm_storage
 from src.core.utils.datetime_utils import get_utc_now
@@ -66,36 +69,72 @@ async def test_a_task_database_the_server_refuses_fails_readiness(
     )
 
 
-async def test_the_report_reads_the_queue_and_the_heartbeat(
-    settings: Config, db_session: AsyncSession
-) -> None:
-    """XLEN of a stream nobody created yet is 0, and the heartbeat comes back
-    as bytes; both must reach the report as numbers."""
+@asynccontextmanager
+async def _health(
+    settings: Config, session: AsyncSession
+) -> AsyncIterator[tuple[HealthService, TasksRedis]]:
+    """The service on real clients, with the task stream emptied before and
+    after, so no other test's tasks count."""
     redis = create_redis_client(settings.redis.dsn)
     storage = create_fsm_storage(settings.redis.fsm_dsn)
     tasks = TasksRedis(create_redis_client(settings.redis.tasks_dsn))
-    await tasks.set(LAST_BEAT_KEY, get_utc_now().isoformat())
-    service = HealthService(
-        SystemRepository(),
-        OutboxRepository(),
-        db_session,
-        redis,
-        storage,
-        tasks,
-        settings.app,
-        settings.bot,
-    )
+    await tasks.delete(STREAM_QUEUE_NAME)
     try:
-        report = await service.get_report()
+        yield (
+            HealthService(
+                SystemRepository(),
+                OutboxRepository(),
+                session,
+                redis,
+                storage,
+                tasks,
+                settings.app,
+                settings.bot,
+            ),
+            tasks,
+        )
     finally:
-        await tasks.delete(LAST_BEAT_KEY)
+        await tasks.delete(STREAM_QUEUE_NAME, LAST_BEAT_KEY)
         await tasks.aclose()
         await storage.close()
         await redis.aclose()
-    assert report.task_queue_length is not None and report.task_queue_length >= 0
+
+
+async def test_the_report_reads_the_queue_and_the_heartbeat(
+    settings: Config, db_session: AsyncSession
+) -> None:
+    """A stream nobody created yet has nothing waiting, and the heartbeat
+    comes back as a string; both must reach the report as numbers."""
+    async with _health(settings, db_session) as (service, tasks):
+        await tasks.set(LAST_BEAT_KEY, get_utc_now().isoformat())
+        report = await service.get_report()
+    assert report.task_queue_length == 0
     assert report.scheduler_heartbeat_age_seconds is not None
     assert 0 <= report.scheduler_heartbeat_age_seconds < 60
     assert report.outbox_pending is not None
     # /status reads the report inside an update; an open transaction would sit
     # idle on the update's connection while the reply is sent.
     assert not db_session.in_transaction()
+
+
+async def test_an_acked_task_leaves_the_queue(
+    settings: Config, db_session: AsyncSession
+) -> None:
+    """Acked entries stay in the stream until MAXLEN trims them: the queue is
+    what the workers' group has not delivered or not acked, never XLEN."""
+    async with _health(settings, db_session) as (service, tasks):
+        await tasks.xgroup_create(
+            STREAM_QUEUE_NAME, STREAM_CONSUMER_GROUP, id="$", mkstream=True
+        )
+        await tasks.xadd(STREAM_QUEUE_NAME, {"data": "first"})
+        await tasks.xadd(STREAM_QUEUE_NAME, {"data": "second"})
+        undelivered = (await service.get_report()).task_queue_length
+        [[_, [(delivered_id, _)]]] = await tasks.xreadgroup(
+            STREAM_CONSUMER_GROUP, "worker", {STREAM_QUEUE_NAME: ">"}, count=1
+        )
+        delivered = (await service.get_report()).task_queue_length
+        await tasks.xack(STREAM_QUEUE_NAME, STREAM_CONSUMER_GROUP, delivered_id)
+        acked = (await service.get_report()).task_queue_length
+        length = await tasks.xlen(STREAM_QUEUE_NAME)
+    assert (undelivered, delivered, acked) == (2, 2, 1)
+    assert length == 2

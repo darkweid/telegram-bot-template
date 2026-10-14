@@ -38,8 +38,11 @@ class HealthReport:
     # down or the count failed.
     outbox_pending: int | None
     outbox_oldest_pending_seconds: float | None
-    # Messages in the task stream (XLEN); None when the task Redis is down.
+    # Tasks waiting in the workers' consumer group: not yet delivered plus
+    # delivered and not acked. None when any Redis client is down (readiness),
+    # when the read fails or times out, or when Redis cannot count the lag.
     task_queue_length: int | None
-    # Since the scheduler's last heartbeat; None when none was ever written or
-    # it could not be read.
+    # Since the scheduler's last heartbeat; None when none was ever written,
+    # when any Redis client is down (readiness), or when the read fails or
+    # times out.
     scheduler_heartbeat_age_seconds: float | None

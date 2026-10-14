@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from loggers import get_logger
 from src.core.database.detached import detached_read
 from src.core.outbox.repositories import OutboxRepository
-from src.core.tasks.broker import STREAM_QUEUE_NAME, TasksRedis
+from src.core.tasks.broker import STREAM_CONSUMER_GROUP, STREAM_QUEUE_NAME, TasksRedis
 from src.core.tasks.heartbeat import HEARTBEAT_TTL_SECONDS, last_beat_age
 from src.core.utils.datetime_utils import get_utc_now
 from src.main.config import AppConfig, BotConfig
@@ -33,6 +33,11 @@ REDIS_MEMORY_DEGRADED_RATIO = 0.9
 # The sweeper retries every minute after a 60-second grace; rows this old mean
 # publishing keeps failing.
 OUTBOX_STALE_SECONDS = 300
+
+
+class StreamLagUnknownError(Exception):
+    """Redis cannot count the group's undelivered entries (XINFO GROUPS lag is
+    nil after some trims and deletions); the reading is skipped, not guessed."""
 
 
 class HealthService:
@@ -87,7 +92,7 @@ class HealthService:
             self._measure(
                 "Redis memory", self._redis_memory_used_ratio, readiness.redis
             ),
-            self._measure("Task queue", self._task_queue_length, readiness.redis),
+            self._measure("Task queue", self._task_backlog, readiness.redis),
             self._measure(
                 "Scheduler heartbeat",
                 partial(last_beat_age, self.tasks_redis, now),
@@ -170,8 +175,21 @@ class HealthService:
             return None
         return round(used / limit, 4)
 
-    async def _task_queue_length(self) -> int:
-        return int(await self.tasks_redis.xlen(STREAM_QUEUE_NAME))
+    async def _task_backlog(self) -> int:
+        """Tasks not yet delivered to a worker plus those delivered and not
+        acked. Not XLEN: acked entries stay in the stream until MAXLEN trims
+        them, so the stream's length is history, not work waiting."""
+        if not await self.tasks_redis.exists(STREAM_QUEUE_NAME):
+            return 0
+        for group in await self.tasks_redis.xinfo_groups(STREAM_QUEUE_NAME):
+            if group["name"] != STREAM_CONSUMER_GROUP:
+                continue
+            if group["lag"] is None:
+                raise StreamLagUnknownError
+            return int(group["lag"]) + int(group["pending"])
+        # No broker has started yet: the group is created at "$" on the first
+        # startup, so nothing written before it is waiting for a worker.
+        return 0
 
 
 def _seconds(age: timedelta | None) -> float | None:

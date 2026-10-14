@@ -13,6 +13,9 @@ from src.core.tasks.middlewares import SentryMiddleware
 TasksRedis = NewType("TasksRedis", Redis)
 
 STREAM_QUEUE_NAME = "taskiq"
+# The consumer group every worker reads the stream through; /health reads its
+# backlog. Spelled out (taskiq_redis's default) so the two cannot drift apart.
+STREAM_CONSUMER_GROUP = "taskiq"
 
 # taskiq_redis never removes acked entries (XACK only clears the consumer
 # group's pending-entries list), so an uncapped stream grows forever. XADD
@@ -57,6 +60,7 @@ def create_stream_broker(dsn: str, *first: TaskiqMiddleware) -> RedisStreamBroke
     broker = RedisStreamBroker(
         url=dsn,
         queue_name=STREAM_QUEUE_NAME,
+        consumer_group_name=STREAM_CONSUMER_GROUP,
         maxlen=STREAM_MAXLEN,
         approximate=True,
         idle_timeout=STREAM_IDLE_TIMEOUT_SECONDS * 1000,

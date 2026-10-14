@@ -114,13 +114,20 @@ network only:
   `degraded`), `version`, `commit`, `mode`, `postgres`, `redis`,
   `redis_memory_used_ratio`, `outbox_pending`, `outbox_oldest_pending_seconds`,
   `task_queue_length` and `scheduler_heartbeat_age_seconds`. A reading that
-  failed or timed out is `null`.
+  failed or timed out is `null`, and so is every Redis reading while any
+  Redis database is down.
+
+`task_queue_length` is the workers' backlog: tasks their consumer group has
+not delivered yet plus those delivered and not acknowledged. It is not the
+stream's length, which keeps acknowledged tasks until the stream is trimmed.
+It is `null` when Redis cannot count the undelivered ones, which happens after
+some trims and deletions.
 
 `/health` reports `degraded` when PostgreSQL or Redis is down, when Redis is at
 90% of `maxmemory`, when the scheduler has not beaten for more than 90 seconds
 (no cron task, delayed retry or outbox sweep runs without it), or when an
-outbox row has waited for publishing longer than 5 minutes. The queue length
-never changes the status: there is no length that is wrong for every bot.
+outbox row has waited for publishing longer than 5 minutes. The task queue
+never changes the status: there is no backlog that is wrong for every bot.
 Developers see the same report with `/status`.
 
 ## Alerts
