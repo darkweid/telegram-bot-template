@@ -29,9 +29,10 @@ class NotifyAdminsOfNewUserUseCase:
 
     Each admin hears it in their own language, chosen like every reply: their
     /language choice, then their Telegram language, then DEFAULT_LOCALE. An
-    admin with no stored row is skipped: Telegram refuses a bot's first
-    message. A failed delivery to one admin is logged and the rest still get
-    theirs; the task is not retried, so nobody gets the notice twice.
+    admin with no stored row is skipped (Telegram refuses a bot's first
+    message), and so is one marked unreachable (they blocked the bot). A
+    failed delivery to one admin is logged and the rest still get theirs; the
+    task is not retried, so nobody gets the notice twice.
     """
 
     def __init__(
@@ -53,7 +54,8 @@ class NotifyAdminsOfNewUserUseCase:
 
     async def execute(self, user_id: int) -> int:
         """Send the notice; returns how many admins received it."""
-        if not self._enabled:
+        admin_ids = sorted(self._roles.admins - {user_id})
+        if not self._enabled or not admin_ids:
             return 0
         # Values are copied out inside the block: leaving it without a commit
         # rolls back and expires the ORM objects.
@@ -64,9 +66,11 @@ class NotifyAdminsOfNewUserUseCase:
                 return 0
             params = {"name": user.first_name, "username": user.username, "id": user_id}
             recipients: list[_Recipient] = []
-            for admin_id in sorted(self._roles.admins - {user_id}):
+            for admin_id in admin_ids:
                 admin = await self._users.get_single(uow.session, id=admin_id)
-                if admin is None:
+                # Never wrote to the bot, or blocked it: Telegram would refuse
+                # the message on every registration.
+                if admin is None or not admin.is_reachable:
                     continue
                 locale = resolve_locale(
                     admin.locale, admin.language_code, default=self._default_locale

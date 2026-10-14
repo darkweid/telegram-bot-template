@@ -106,6 +106,33 @@ async def test_an_admin_who_never_wrote_to_the_bot_is_skipped(
     assert [call.chat_id for call in session.sent(SendMessage)] == [ADMIN_EN]
 
 
+async def test_an_admin_who_blocked_the_bot_is_skipped(
+    settings: Config, i18n: I18n
+) -> None:
+    """They would fail with Forbidden on every registration until they come
+    back, and their next update marks them reachable again."""
+    session = FakeTelegramSession()
+    blocked = build_user_model(id=3, is_reachable=False)
+    use_case = _use_case(
+        settings, i18n, session, _users(*_stored(), blocked), ADMIN_EN, 3
+    )
+    assert await use_case.execute(NEW) == 1
+    assert [call.chat_id for call in session.sent(SendMessage)] == [ADMIN_EN]
+
+
+async def test_no_admins_configured_sends_nothing(settings: Config, i18n: I18n) -> None:
+    """Most bots run without ADMIN_IDS; every registration would otherwise
+    cost a database read for nobody. The only admin being the new user is the
+    same case."""
+    for admins in ((), (NEW,)):
+        session = FakeTelegramSession()
+        users = _users(*_stored())
+        use_case = _use_case(settings, i18n, session, users, *admins)
+        assert await use_case.execute(NEW) == 0
+        assert session.sent(SendMessage) == []
+        users.get_single.assert_not_awaited()
+
+
 async def test_an_admin_registering_is_not_told_about_themselves(
     settings: Config, i18n: I18n
 ) -> None:
