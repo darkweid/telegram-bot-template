@@ -78,7 +78,21 @@ class DownBroker(InMemoryBroker):
 
     async def startup(self) -> None:
         self.starts += 1
+        # Yields first, as a refused connection does: concurrent sends queue.
+        await asyncio.sleep(0)
         raise redis_exceptions.ConnectionError("tasks Redis down")
+
+
+class HangingStartBroker(InMemoryBroker):
+    """Its start never answers, like a blackholed tasks Redis."""
+
+    def __init__(self) -> None:
+        super().__init__(await_inplace=True)
+        self.starts = 0
+
+    async def startup(self) -> None:
+        self.starts += 1
+        await asyncio.Event().wait()
 
 
 @pytest.mark.parametrize(
@@ -148,3 +162,41 @@ async def test_a_started_broker_is_not_started_again() -> None:
     with pytest.raises(UnregisteredTaskError):
         await publisher.publish(uuid4(), "test.missing", [], {})
     assert broker.starts == 0
+
+
+async def test_concurrent_first_sends_share_one_bounded_start(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Each send waits in an update's after-commit hook: queued behind one
+    another, N sends would hold the Nth update N bounds, past its lock."""
+    monkeypatch.setattr(publisher_module, "SEND_TIMEOUT_SECONDS", 0.2)
+    broker = HangingStartBroker()
+    sessionmaker = MagicMock()
+    publisher = OutboxPublisher(broker, sessionmaker, start_broker=True)
+    loop = asyncio.get_running_loop()
+    began = loop.time()
+    async with asyncio.timeout(5):
+        await asyncio.gather(
+            *(publisher.publish(uuid4(), "test.task", [], {}) for _ in range(5))
+        )
+    assert loop.time() - began < 0.6
+    assert broker.starts == 1
+    sessionmaker.assert_not_called()
+
+
+async def test_sends_queued_behind_a_failed_start_leave_their_rows() -> None:
+    """A start that just failed says the broker is down: the sends that
+    waited for it go to the sweeper instead of starting it again each."""
+    broker = DownBroker()
+    sessionmaker = MagicMock()
+    publisher = OutboxPublisher(broker, sessionmaker, start_broker=True)
+    with captured_logs("src.core.outbox.publisher") as records:
+        await asyncio.gather(
+            *(publisher.publish(uuid4(), "test.task", [], {}) for _ in range(3))
+        )
+    assert broker.starts == 1
+    assert [r.levelno for r in records] == [logging.WARNING] * 3
+    sessionmaker.assert_not_called()
+    # Later sends try again.
+    await publisher.publish(uuid4(), "test.task", [], {})
+    assert broker.starts == 2

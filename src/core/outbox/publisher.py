@@ -95,6 +95,9 @@ class OutboxPublisher:
         self._outbox = OutboxRepository()
         self._needs_start = start_broker
         self._start_lock = asyncio.Lock()
+        # Failed starts so far: a send that queued behind a start tells by
+        # it whether that start failed.
+        self._failed_starts = 0
 
     async def publish(
         self, message_id: UUID, task_name: str, args: list[Any], kwargs: dict[str, Any]
@@ -124,10 +127,21 @@ class OutboxPublisher:
     async def _ensure_started(self) -> None:
         if not self._needs_start:
             return
-        # One start for concurrent first sends; a failed start is retried by
-        # the next send.
-        async with self._start_lock:
-            if self._needs_start:
-                async with asyncio.timeout(SEND_TIMEOUT_SECONDS):
-                    await self._broker.startup()
-                self._needs_start = False
+        failed_before = self._failed_starts
+        # The wait for the lock counts against the same bound as the start:
+        # concurrent first sends behind a hanging start must not each wait
+        # their own SEND_TIMEOUT_SECONDS in turn, past the update's lock.
+        async with asyncio.timeout(SEND_TIMEOUT_SECONDS), self._start_lock:
+            if not self._needs_start:
+                return
+            if self._failed_starts != failed_before:
+                # A start failed while this send waited: trying again at once
+                # would only queue the next sends behind another one.
+                raise ConnectionError("The broker failed to start a moment ago")
+            try:
+                await self._broker.startup()
+            except BaseException:
+                # BaseException: a start cut off by the timeout failed too.
+                self._failed_starts += 1
+                raise
+            self._needs_start = False
