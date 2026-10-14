@@ -69,11 +69,12 @@ class InMemoryRedis:
         self.cache_eval_calls = 0
         self._failures = 0
         self._failure_error: Exception = redis_exc.ConnectionError("fake redis down")
-        # A full instance under noeviction. Real Redis refuses only commands that
-        # may grow memory, so only a script's first write of a new key is
-        # refused: reads, DEL and EXPIRE keep working, and a fake refusing them
-        # too would hide code that treats a successful read as proof the
-        # instance recovered.
+        # A full instance under noeviction. Real Redis refuses a script at the
+        # first write command that may grow memory, and INCR and SET both are
+        # such commands: so every admitted limiter call is refused, while a call
+        # past the limit only reads (GET, PTTL) and still answers. A fake
+        # refusing reads too would hide code that treats a successful read as
+        # proof the instance recovered.
         self.out_of_memory = False
 
     def fail_next_commands(
@@ -279,15 +280,15 @@ class InMemoryRedis:
     # cannot.
     def _eval_rate_limit(self, key: str, limit: int, window_ms: int) -> int:
         current = int(self._read(key) or 0)
-        if current > 0:
-            if current + 1 > limit:
-                return max(self._pttl(key), 1)
-            self._store[key] = str(current + 1)
-            return 0
+        if current > 0 and current + 1 > limit:
+            return max(self._pttl(key), 1)
         if self.out_of_memory:
             raise redis_exc.OutOfMemoryError(
                 "OOM command not allowed when used memory > 'maxmemory'."
             )
+        if current > 0:
+            self._store[key] = str(current + 1)
+            return 0
         self._store[key] = "1"
         self._expire_ms(key, window_ms)
         return 0

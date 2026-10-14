@@ -60,7 +60,9 @@ class RateLimiter:
         try:
             result = await self._eval(f"{self._prefix}:{key}", limit, window_ms)
         except FAIL_OPEN_ERRORS as error:
-            logger.warning(
+            # Debug: during an outage this is one line per call; the reporter
+            # carries the incident.
+            logger.debug(
                 "[RateLimiter] Redis unavailable, counting in memory: %s", error
             )
             self._reporter.report_degraded(error)
@@ -94,7 +96,7 @@ class RateLimiter:
             del self._fallback_windows[key]
             window = None
         if window is None:
-            self._make_room(now_ms)
+            self._make_room()
             self._fallback_windows[key] = _Window(1, now_ms + window_ms)
             return 0
         if window.count + 1 > limit:
@@ -102,21 +104,16 @@ class RateLimiter:
         window.count += 1
         return 0
 
-    def _make_room(self, now_ms: int) -> None:
+    def _make_room(self) -> None:
         if len(self._fallback_windows) < self._fallback_max_entries:
             return
-        expired = [
-            k for k, w in self._fallback_windows.items() if w.expires_at_ms <= now_ms
-        ]
-        for expired_key in expired:
-            del self._fallback_windows[expired_key]
-        if len(self._fallback_windows) >= self._fallback_max_entries:
-            oldest = min(
-                self._fallback_windows,
-                key=lambda k: self._fallback_windows[k].expires_at_ms,
-            )
-            del self._fallback_windows[oldest]
-            logger.warning(
-                "[RateLimiter] In-memory fallback full (%s keys), evicted the oldest",
-                self._fallback_max_entries,
-            )
+        # The oldest-inserted window goes, in O(1): dicts keep insertion order,
+        # and an expired window is deleted and re-inserted on its next hit. Not
+        # the earliest-expiring one, which would cost a scan on every new key
+        # while the fallback is full, the very moment of a flood of keys.
+        oldest = next(iter(self._fallback_windows))
+        del self._fallback_windows[oldest]
+        logger.debug(
+            "[RateLimiter] In-memory fallback full (%s keys), evicted the oldest",
+            self._fallback_max_entries,
+        )

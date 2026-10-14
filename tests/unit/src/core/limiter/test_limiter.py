@@ -79,6 +79,29 @@ async def test_an_unreachable_redis_falls_back_to_counting_in_memory(
     assert sentry_capture.call_count == 1
 
 
+async def test_an_admitted_call_on_a_full_redis_falls_back_and_degrades(
+    redis: InMemoryRedis, sentry_capture: MagicMock
+) -> None:
+    """A full Redis refuses INCR as it refuses SET: treating the call on an
+    existing key as success would report recovery in the middle of an outage."""
+    limiter = _limiter(redis)
+    await limiter.hit("a", limit=5, window_ms=60_000)
+    redis.out_of_memory = True
+    assert await limiter.hit("a", limit=5, window_ms=60_000) == 0
+    assert sentry_capture.call_count == 1
+    assert "degraded" in sentry_capture.call_args.args[0]
+
+
+async def test_a_refusal_on_a_full_redis_is_still_answered_by_redis(
+    redis: InMemoryRedis, sentry_capture: MagicMock
+) -> None:
+    limiter = _limiter(redis)
+    await limiter.hit("a", limit=1, window_ms=60_000)
+    redis.out_of_memory = True
+    assert await limiter.hit("a", limit=1, window_ms=60_000) > 0
+    assert sentry_capture.call_count == 0
+
+
 async def test_a_broken_script_is_raised_not_hidden(redis: InMemoryRedis) -> None:
     """A ResponseError is a bug in the script or its arguments; falling back
     would hide it behind a fake outage."""
