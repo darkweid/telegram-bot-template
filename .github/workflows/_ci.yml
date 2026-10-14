@@ -467,8 +467,11 @@ jobs:
         run: |
           image_lower="$(echo "ghcr.io/${{ github.repository }}" | tr '[:upper:]' '[:lower:]')"
           short_sha="$(echo "${{ github.sha }}" | cut -c1-12)"
-          echo "image=${image_lower}" >> "$GITHUB_OUTPUT"
-          echo "tag=sha-${short_sha}" >> "$GITHUB_OUTPUT"
+          {
+            echo "image=${image_lower}"
+            echo "tag=sha-${short_sha}"
+            echo "short_sha=${short_sha}"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Set up Buildx
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
@@ -493,5 +496,7 @@ jobs:
           # Records which commit an image tag was built from.
           labels: |
             org.opencontainers.image.revision=${{ github.sha }}
+          build-args: |
+            COMMIT_SHA=${{ steps.meta.outputs.short_sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max

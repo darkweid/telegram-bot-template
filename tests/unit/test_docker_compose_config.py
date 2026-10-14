@@ -177,3 +177,13 @@ def test_the_scheduler_beats_as_often_as_its_heartbeat_expects() -> None:
 def test_the_makefile_pulls_every_service_of_the_bot_image() -> None:
     makefile = (PROJECT_ROOT / "Makefile").read_text(encoding="utf-8")
     assert "pull migrate bot worker scheduler" in makefile
+
+
+def test_the_image_build_receives_the_commit() -> None:
+    """/status and /health name the commit; the value exists only at build
+    time, since .git never enters the image."""
+    args = _services()["bot-builder"]["build"]["args"]
+    assert args["COMMIT_SHA"] == "${COMMIT_SHA:-unknown}"
+    dockerfile = (PROJECT_ROOT / "infra/docker/Dockerfile").read_text(encoding="utf-8")
+    assert "ARG COMMIT_SHA=unknown" in dockerfile
+    assert "ENV COMMIT_SHA=${COMMIT_SHA}" in dockerfile

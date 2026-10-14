@@ -33,3 +33,13 @@ class HealthReport:
     # Under `noeviction` a full Redis refuses writes, so FSM state stops saving
     # before anything is down.
     redis_memory_used_ratio: float | None
+    commit: str
+    # PENDING outbox rows and the age of the oldest; None when PostgreSQL is
+    # down or the count failed.
+    outbox_pending: int | None
+    outbox_oldest_pending_seconds: float | None
+    # Messages in the task stream (XLEN); None when the task Redis is down.
+    task_queue_length: int | None
+    # Since the scheduler's last heartbeat; None when none was ever written or
+    # it could not be read.
+    scheduler_heartbeat_age_seconds: float | None

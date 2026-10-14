@@ -8,6 +8,8 @@ services:
     build:
       context: ..
       dockerfile: infra/docker/Dockerfile
+      args:
+        COMMIT_SHA: ${COMMIT_SHA:-unknown}
     image: ${BOT_IMAGE:-tg-bot-template-bot:latest}
     # Only builds the image; must not start a second bot when the stack comes up.
     command: ["true"]

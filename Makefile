@@ -15,6 +15,9 @@ HOST_USER := $(shell id -u):$(shell id -g)
 APP_CONTAINER = bot
 # The bot image's name when BOT_IMAGE is unset; matches the default in COMPOSE_BASE.
 LOCAL_BOT_IMAGE = tg-bot-template-bot:latest
+# The commit baked into a locally built image; /status and /health show it.
+# Twelve characters, like the sha- tag CI gives the image.
+export COMMIT_SHA ?= $(shell git rev-parse --short=12 HEAD 2>/dev/null || echo unknown)
 
 # Requirements management
 REQ_DIR = infra/requirements

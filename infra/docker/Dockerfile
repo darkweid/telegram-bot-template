@@ -44,4 +44,8 @@ COPY --from=builder --chown=appuser:appuser /app/locales ./locales
 
 USER appuser
 
+# Last, so a new commit rebuilds only this layer.
+ARG COMMIT_SHA=unknown
+ENV COMMIT_SHA=${COMMIT_SHA}
+
 CMD ["python", "-m", "src.main"]

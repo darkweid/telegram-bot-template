@@ -142,6 +142,9 @@ class PostgresConfig(BaseSettings):
 class AppConfig(BaseSettings):
     PROJECT_NAME: str
     VERSION: str
+    # Baked into the image at build time (Dockerfile ARG, set by make and CI);
+    # shown by /status and /health.
+    COMMIT_SHA: str = "unknown"
     DEBUG: bool = False
     TESTING: bool = False
     # Read by loggers/ straight from the environment at import time as well, so

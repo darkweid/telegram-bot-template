@@ -61,11 +61,17 @@ msgstr ""
 msgid "Reachable: {count}"
 msgstr ""
 
+msgid "Send a test alert"
+msgstr ""
+
 #, python-brace-format
 msgid "Several users have had @{username}. Use the numeric id instead."
 msgstr ""
 
 msgid "Show help"
+msgstr ""
+
+msgid "Show the bot's status"
 msgstr ""
 
 msgid "Show user statistics"

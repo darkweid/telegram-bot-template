@@ -26,12 +26,18 @@ class RunningBot:
 
 @asynccontextmanager
 async def running_bot(
-    config: Config, i18n: I18n, *providers: Provider
+    config: Config,
+    i18n: I18n,
+    *providers: Provider,
+    alert_session: FakeTelegramSession | None = None,
 ) -> AsyncIterator[RunningBot]:
     """The production dispatcher on a fake network, started and stopped the
-    way polling and webhook start and stop it."""
+    way polling and webhook start and stop it. Developer alerts leave through
+    `alert_session`, never through `RunningBot.session`."""
     session = FakeTelegramSession()
-    container = build_test_container(config, session, i18n, *providers)
+    container = build_test_container(
+        config, session, i18n, *providers, alert_session=alert_session
+    )
     try:
         dp = await create_dispatcher(container)
         bot = await container.get(Bot)

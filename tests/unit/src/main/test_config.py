@@ -7,6 +7,7 @@ from redis.connection import parse_url
 from sqlalchemy.engine import make_url
 
 from src.main.config import (
+    AppConfig,
     BotConfig,
     CacheConfig,
     Config,
@@ -346,6 +347,12 @@ def test_port_bounds_accept_their_edges(port: int) -> None:
     )
     assert redis.REDIS_PORT == port
     assert _postgres(POSTGRES_PORT=port).POSTGRES_PORT == port
+
+
+def test_an_image_without_a_commit_says_unknown() -> None:
+    """A local build outside git must still start; /status shows the gap."""
+    config = AppConfig(_env_file=None, PROJECT_NAME="Bot", VERSION="1.0.0")
+    assert config.COMMIT_SHA == "unknown"
 
 
 def test_get_settings_loads_the_test_env_file(monkeypatch: pytest.MonkeyPatch) -> None:

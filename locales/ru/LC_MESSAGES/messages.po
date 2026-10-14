@@ -65,12 +65,18 @@ msgstr "Такого пользователя нет. Сначала он дол
 msgid "Reachable: {count}"
 msgstr "Достижимы: {count}"
 
+msgid "Send a test alert"
+msgstr "Отправить тестовый алерт"
+
 #, python-brace-format
 msgid "Several users have had @{username}. Use the numeric id instead."
 msgstr "@{username} был у нескольких пользователей. Укажите числовой id."
 
 msgid "Show help"
 msgstr "Показать справку"
+
+msgid "Show the bot's status"
+msgstr "Состояние бота"
 
 msgid "Show user statistics"
 msgstr "Статистика пользователей"

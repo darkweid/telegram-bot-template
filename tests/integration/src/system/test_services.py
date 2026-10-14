@@ -1,9 +1,12 @@
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.core.outbox.repositories import OutboxRepository
 from src.core.redis.core import create_redis_client
 from src.core.tasks.broker import TasksRedis
+from src.core.tasks.heartbeat import LAST_BEAT_KEY
 from src.core.telegram.fsm import create_fsm_storage
+from src.core.utils.datetime_utils import get_utc_now
 from src.main.config import Config
 from src.system.repositories import SystemRepository
 from src.system.services import HealthService
@@ -29,7 +32,14 @@ async def _readiness(
     storage = create_fsm_storage(redis_config.fsm_dsn)
     tasks = TasksRedis(create_redis_client(redis_config.tasks_dsn))
     service = HealthService(
-        SystemRepository(), session, redis, storage, tasks, config.app, config.bot
+        SystemRepository(),
+        OutboxRepository(),
+        session,
+        redis,
+        storage,
+        tasks,
+        config.app,
+        config.bot,
     )
     try:
         return (await service.check_readiness()).redis
@@ -54,3 +64,38 @@ async def test_a_task_database_the_server_refuses_fails_readiness(
     assert not await _readiness(
         settings, db_session, settings.redis.REDIS_FSM_DATABASE, tasks_database="100000"
     )
+
+
+async def test_the_report_reads_the_queue_and_the_heartbeat(
+    settings: Config, db_session: AsyncSession
+) -> None:
+    """XLEN of a stream nobody created yet is 0, and the heartbeat comes back
+    as bytes; both must reach the report as numbers."""
+    redis = create_redis_client(settings.redis.dsn)
+    storage = create_fsm_storage(settings.redis.fsm_dsn)
+    tasks = TasksRedis(create_redis_client(settings.redis.tasks_dsn))
+    await tasks.set(LAST_BEAT_KEY, get_utc_now().isoformat())
+    service = HealthService(
+        SystemRepository(),
+        OutboxRepository(),
+        db_session,
+        redis,
+        storage,
+        tasks,
+        settings.app,
+        settings.bot,
+    )
+    try:
+        report = await service.get_report()
+    finally:
+        await tasks.delete(LAST_BEAT_KEY)
+        await tasks.aclose()
+        await storage.close()
+        await redis.aclose()
+    assert report.task_queue_length is not None and report.task_queue_length >= 0
+    assert report.scheduler_heartbeat_age_seconds is not None
+    assert 0 <= report.scheduler_heartbeat_age_seconds < 60
+    assert report.outbox_pending is not None
+    # /status reads the report inside an update; an open transaction would sit
+    # idle on the update's connection while the reply is sent.
+    assert not db_session.in_transaction()
