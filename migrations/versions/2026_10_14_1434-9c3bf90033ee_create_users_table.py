@@ -36,9 +36,15 @@ def upgrade() -> None:
         sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
         sa.PrimaryKeyConstraint("id", name=op.f("pk_users")),
     )
-    op.create_index(op.f("ix_users_is_blocked"), "users", ["is_blocked"], unique=False)
+    op.create_index(
+        op.f("ix_users_active"),
+        "users",
+        ["id"],
+        unique=False,
+        postgresql_where=sa.text("NOT is_blocked"),
+    )
 
 
 def downgrade() -> None:
-    op.drop_index(op.f("ix_users_is_blocked"), table_name="users")
+    op.drop_index(op.f("ix_users_active"), table_name="users")
     op.drop_table("users")

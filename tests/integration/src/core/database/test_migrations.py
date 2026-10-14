@@ -111,3 +111,25 @@ async def test_the_chain_reverses_and_reapplies(
         )
 
     assert EXPECTED_TABLES <= set(tables)
+
+
+async def test_reachable_users_have_a_partial_index_on_id(
+    integration_engine: AsyncEngine,
+) -> None:
+    """A broadcast pages through `WHERE NOT is_blocked AND id > :cursor`.
+
+    Only the partial index serves that keyset scan, and nothing else fails if the
+    predicate is lost: the query still runs, just as a sequential scan.
+    """
+    async with integration_engine.connect() as connection:
+        definition = (
+            await connection.execute(
+                text(
+                    "SELECT indexdef FROM pg_indexes"
+                    " WHERE tablename = 'users' AND indexname = 'ix_users_active'"
+                )
+            )
+        ).scalar_one()
+
+    assert "(id)" in definition
+    assert definition.endswith("WHERE (NOT is_blocked)")
