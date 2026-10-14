@@ -3,6 +3,7 @@ from unittest.mock import AsyncMock
 from aiogram.methods import SendMessage
 from aiogram.utils.i18n import I18n
 from dishka import Provider, Scope, provide
+import pytest
 
 from src.main.config import Config
 from src.user.exceptions import ProtectedUserError
@@ -103,16 +104,17 @@ async def test_a_repeated_ban_says_so(settings: Config, i18n: I18n) -> None:
 async def test_a_non_admin_cannot_ban(settings: Config, i18n: I18n) -> None:
     """The command must not even be acknowledged as existing."""
     stub = BanStub()
-    await _reply(settings, i18n, "/ban 5", stub, user_id=77)
+    replies = await _reply(settings, i18n, "/ban 5", stub, user_id=77)
     stub.change.execute.assert_not_awaited()
+    assert replies == []
 
 
 class StatsStub(Provider):
-    def __init__(self) -> None:
+    def __init__(self, total: int = 1) -> None:
         super().__init__()
         self.stats = AsyncMock(spec=GetUserStatsUseCase)
         self.stats.execute.return_value = UserStats(
-            total=1,
+            total=total,
             reachable=1,
             banned=0,
             active_day=1,
@@ -152,4 +154,26 @@ async def test_stats_are_hidden_from_everyone_else(
     stub = StatsStub()
     async with running_bot(_admin(settings), i18n, UseCases(), stub) as running:
         await running.feed(build_message_update("/stats", user_id=77))
+        replies = running.session.sent(SendMessage)
     stub.stats.execute.assert_not_awaited()
+    assert replies == []
+
+
+@pytest.mark.parametrize(
+    ("total", "first_line"),
+    [(1, "1 пользователь"), (2, "2 пользователя"), (5, "5 пользователей")],
+)
+async def test_stats_are_translated_with_all_three_plural_forms(
+    settings: Config, i18n: I18n, total: int, first_line: str
+) -> None:
+    """Russian has three plural forms; a broken msgstr shows up only here, at
+    the handler, not in the catalog structure checks."""
+    stub = StatsStub(total)
+    async with running_bot(
+        _admin(settings), i18n, UseCases(locale="ru"), stub
+    ) as running:
+        await running.feed(build_message_update("/stats", user_id=ADMIN))
+        [reply] = running.session.sent(SendMessage)
+    assert reply.text is not None
+    assert reply.text.splitlines()[0] == first_line
+    assert "Забанены: 0" in reply.text
