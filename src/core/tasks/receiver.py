@@ -9,6 +9,7 @@ broker would redeliver it forever.
 
 import asyncio
 from collections.abc import Awaitable, Callable
+from datetime import timedelta
 from typing import Any, cast
 from uuid import uuid4
 
@@ -21,10 +22,17 @@ from taskiq.result import TaskiqResult
 from taskiq_redis.redis_broker import BaseRedisBroker
 
 from loggers import get_logger
+from src.core.outbox.sweeper import PUBLISHED_RETENTION_DAYS
 
 logger = get_logger(__name__)
 
-IDEMPOTENCY_MARKER_TTL_SECONDS = 3600
+# The sweeper republishes a row whose send went out but whose mark_published
+# failed, under the same task id, once PostgreSQL is back - however long that
+# takes. The marker has to outlive such an outage or the task runs twice, so it
+# lives as long as a published row is kept.
+IDEMPOTENCY_MARKER_TTL_SECONDS = int(
+    timedelta(days=PUBLISHED_RETENTION_DAYS).total_seconds()
+)
 
 # The claim is short-lived and renewed every CLAIM_RENEW_INTERVAL_SECONDS while
 # its run is alive, so a task of any length keeps it and a crashed worker's claim
