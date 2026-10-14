@@ -1,8 +1,13 @@
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import Any, Protocol, TypeVar
+from typing import Any, Protocol, TypeVar, overload
 
 T = TypeVar("T")
+
+# What `json.loads` returns: a value read without a model is exactly this.
+type JsonValue = (
+    None | bool | int | float | str | list[JsonValue] | dict[str, JsonValue]
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -37,11 +42,19 @@ class CacheKey:
 class Serializer(Protocol):
     def dumps(self, value: Any) -> str: ...
 
-    def loads(self, raw: str, model: type[T] | None = None) -> Any: ...
+    @overload
+    def loads(self, raw: str, model: type[T]) -> T: ...
+
+    @overload
+    def loads(self, raw: str, model: None = None) -> JsonValue: ...
 
 
 class Cache(Protocol):
-    async def get(self, key: CacheKey, *, model: type[T] | None = None) -> Any: ...
+    @overload
+    async def get(self, key: CacheKey, *, model: type[T]) -> T | None: ...
+
+    @overload
+    async def get(self, key: CacheKey, *, model: None = None) -> JsonValue: ...
 
     async def set(
         self, key: CacheKey, value: Any, *, ttl: int | None = None

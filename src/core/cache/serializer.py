@@ -2,10 +2,12 @@ from dataclasses import asdict, is_dataclass
 from datetime import date, datetime
 from decimal import Decimal
 import json
-from typing import Any, TypeVar
+from typing import Any, TypeVar, cast, overload
 from uuid import UUID
 
 from pydantic import BaseModel, TypeAdapter
+
+from src.core.cache.interface import JsonValue
 
 T = TypeVar("T")
 
@@ -14,10 +16,11 @@ T = TypeVar("T")
 _adapters: dict[type[Any], TypeAdapter[Any]] = {}
 
 
-def _adapter(model: type[Any]) -> TypeAdapter[Any]:
+def _adapter(model: type[T]) -> TypeAdapter[T]:
     if model not in _adapters:
         _adapters[model] = TypeAdapter(model)
-    return _adapters[model]
+    # The dict loses the pairing of each model with its adapter.
+    return cast(TypeAdapter[T], _adapters[model])
 
 
 def _encode_unknown(value: Any) -> Any:
@@ -40,10 +43,16 @@ class JsonSerializer:
     def dumps(self, value: Any) -> str:
         return json.dumps(value, default=_encode_unknown)
 
-    def loads(self, raw: str, model: type[T] | None = None) -> Any:
+    @overload
+    def loads(self, raw: str, model: type[T]) -> T: ...
+
+    @overload
+    def loads(self, raw: str, model: None = None) -> JsonValue: ...
+
+    def loads(self, raw: str, model: type[T] | None = None) -> T | JsonValue:
         # Without `model`, non-string types (Decimal, UUID, datetime) come back
         # as plain strings: typed decoding is required wherever they are expected.
-        payload = json.loads(raw)
+        payload: JsonValue = json.loads(raw)
         if model is None:
             return payload
         return _adapter(model).validate_python(payload)

@@ -1,11 +1,11 @@
 from abc import ABC, abstractmethod
 from collections.abc import Awaitable, Callable, Sequence
-from typing import Any, TypeVar, cast
+from typing import Any, TypeVar, cast, overload
 
 from pydantic import ValidationError
 
 from loggers import get_logger
-from src.core.cache.interface import CacheKey, Serializer
+from src.core.cache.interface import CacheKey, JsonValue, Serializer
 from src.core.cache.keys import tag_version_key, version_key
 
 logger = get_logger(__name__)
@@ -67,7 +67,15 @@ class BaseCache(ABC):
             )
         return resolved
 
-    async def get(self, key: CacheKey, *, model: type[T] | None = None) -> Any:
+    @overload
+    async def get(self, key: CacheKey, *, model: type[T]) -> T | None: ...
+
+    @overload
+    async def get(self, key: CacheKey, *, model: None = None) -> JsonValue: ...
+
+    async def get(
+        self, key: CacheKey, *, model: type[T] | None = None
+    ) -> T | JsonValue | None:
         raw = await self.get_raw(key)
         if raw is None:
             return None
@@ -126,8 +134,8 @@ class BaseCache(ABC):
     ) -> T:
         cached = await self.get(key, model=model)
         if cached is not None:
-            # get() is typed Any because JsonSerializer.loads is untyped without a
-            # model; get_or_set's own contract guarantees the stored value is T.
+            # Without a model get() returns the JSON value as stored;
+            # get_or_set's own contract guarantees that value is T.
             return cast(T, cached)
         value = await factory()
         await self.set(key, value, ttl=ttl)
