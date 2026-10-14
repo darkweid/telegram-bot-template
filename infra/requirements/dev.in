@@ -6,6 +6,7 @@ import-linter
 mypy
 pip-tools
 pre-commit
+ruff==0.16.10
 
 # Testing dependencies
 pytest

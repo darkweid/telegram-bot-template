@@ -167,6 +167,8 @@ redis==8.1.0
     # via -r base.in
 rich==15.0.0
     # via import-linter
+ruff==0.16.10
+    # via -r dev.in
 sentry-sdk==2.72.0
     # via -r base.in
 sqlalchemy[asyncio]==2.1.4
