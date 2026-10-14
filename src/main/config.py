@@ -192,6 +192,14 @@ class BotConfig(BaseSettings):
         # `DEV_ALERT_CHAT_ID=` in .env means "not set", not an invalid int.
         return None if value == "" else value
 
+    @field_validator("DEV_ALERT_CHAT_ID")
+    @classmethod
+    def require_an_alert_chat(cls, value: int | None) -> int | None:
+        # 0 is no chat: Telegram would refuse every alert, and they are only logged.
+        if value == 0:
+            raise ValueError("DEV_ALERT_CHAT_ID must be a chat id or empty, not 0")
+        return value
+
     @field_validator("ADMIN_IDS", "DEVELOPER_IDS", mode="before")
     @classmethod
     def split_user_ids(cls, value: object) -> object:

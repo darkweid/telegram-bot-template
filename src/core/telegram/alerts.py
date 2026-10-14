@@ -3,6 +3,7 @@
 import asyncio
 from dataclasses import dataclass
 import hashlib
+from pathlib import Path
 import traceback
 from typing import NewType, Protocol
 
@@ -14,6 +15,11 @@ from loggers import get_logger
 from src.core.limiter.limiter import RateLimiter
 
 logger = get_logger(__name__)
+
+# The checkout (or the image's working directory): frames under it are ours,
+# except those of an environment installed inside it.
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
+_INSTALLED_PACKAGE_DIRS = frozenset({"site-packages", "dist-packages"})
 
 # The alert is one Telegram message; an error message can be anything long.
 MAX_ERROR_MESSAGE_LENGTH = 500
@@ -52,14 +58,30 @@ class TaskFailureReporter(Protocol):
     async def alert_error(self, alert: Alert) -> None: ...
 
 
+def _is_project_file(filename: str) -> bool:
+    path = Path(filename).resolve()
+    return path.is_relative_to(PROJECT_ROOT) and not _INSTALLED_PACKAGE_DIRS & set(
+        path.parts
+    )
+
+
 def _raised_in(error: BaseException) -> str:
-    """The function the error was raised in, `file:function`; line numbers
-    are left out so a fingerprint survives an unrelated edit above."""
+    """The innermost project function the error passed through, `file:function`.
+
+    An error raised inside a library (a Bot API refusal, a driver error) ends
+    in the same library frame whichever handler made the call; that frame
+    would give every broken handler one fingerprint and mute all but the
+    first. The last frame stands in only when no frame is ours. Line numbers
+    are left out so a fingerprint survives an unrelated edit above.
+    """
     frames = traceback.extract_tb(error.__traceback__)
     if not frames:
         return "-"
-    frame = frames[-1]
-    return f"{frame.filename.rsplit('/', 1)[-1]}:{frame.name}"
+    frame = next(
+        (frame for frame in reversed(frames) if _is_project_file(frame.filename)),
+        frames[-1],
+    )
+    return f"{Path(frame.filename).name}:{frame.name}"
 
 
 class DeveloperAlerter:
@@ -67,8 +89,12 @@ class DeveloperAlerter:
 
     Shared by the bot and the worker. The same failure (type, origin, place)
     is sent once per cooldown. Sending is direct, not through the outbox: an
-    alert must leave even when the database is what broke. A delivery that
-    fails is logged and nothing more.
+    alert must leave even when the database is what broke.
+
+    No method raises: an alert is reported from inside the failure it is
+    about, and an error escaping it would replace that failure (in the
+    worker, before the delivery is acked, so the task would run again). A
+    failure of the alert path is logged by its class name and nothing more.
     """
 
     def __init__(
@@ -86,6 +112,16 @@ class DeveloperAlerter:
         self._background: set[asyncio.Task[None]] = set()
 
     async def alert_error(self, alert: Alert) -> None:
+        if not self._recipients:
+            return
+        try:
+            await self._alert_error(alert)
+        except Exception as error:
+            # The limiter fails open only on an outage; anything else it
+            # raises is a bug that must not take the alert's caller with it.
+            logger.error("Alert not sent: %s", type(error).__name__)
+
+    async def _alert_error(self, alert: Alert) -> None:
         # The task id is counted first, so a task whose first failure fell
         # inside its fingerprint's cooldown stays silent on a redelivery too.
         if alert.task_id is not None and await self._limiter.hit(
@@ -108,6 +144,12 @@ class DeveloperAlerter:
                 logger.warning(
                     "Alert not delivered to %s: %s", chat_id, type(error).__name__
                 )
+            except Exception as error:
+                # An undecodable answer, a session closed under a stopping
+                # process: the next recipient still gets the alert.
+                logger.error(
+                    "Alert not delivered to %s: %s", chat_id, type(error).__name__
+                )
 
     def notify(self, message: str) -> None:
         """DegradationNotifier: called from synchronous code, so the message
@@ -117,7 +159,14 @@ class DeveloperAlerter:
         except RuntimeError:
             logger.warning("Alert not sent: no running event loop")
             return
-        task = loop.create_task(self.send(html.quote(message)))
+        sending = self.send(html.quote(message))
+        try:
+            task = loop.create_task(sending)
+        except Exception as error:
+            # A loop that is closing refuses new tasks.
+            sending.close()
+            logger.error("Alert not sent: %s", type(error).__name__)
+            return
         self._background.add(task)
         task.add_done_callback(self._background.discard)
 

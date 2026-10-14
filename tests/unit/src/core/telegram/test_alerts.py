@@ -1,6 +1,10 @@
-from aiogram.exceptions import TelegramBadRequest
+import json
+import logging
+
+from aiogram.exceptions import ClientDecodeError, TelegramBadRequest
 from aiogram.methods import SendMessage
 import pytest
+import redis.exceptions as redis_exc
 
 from src.core.limiter.limiter import RateLimiter
 from src.core.redis.degradation import RedisDegradationReporter
@@ -44,6 +48,22 @@ def _other_failure() -> RuntimeError:
         raise RuntimeError("boom")
     except RuntimeError as error:
         return error
+
+
+def _read_settings() -> object:
+    return json.loads("{")
+
+
+def _read_profile() -> object:
+    return json.loads("[")
+
+
+def _library_failure(read: object) -> json.JSONDecodeError:
+    try:
+        read()  # type: ignore[operator]
+    except json.JSONDecodeError as error:
+        return error
+    raise AssertionError("expected a decode error")
 
 
 class Clock:
@@ -177,13 +197,73 @@ def test_notify_outside_a_running_loop_is_only_logged() -> None:
     with captured_logs("src.core.telegram.alerts") as records:
         _alerter(session).notify("Redis unavailable for Cache")
     assert session.sent(SendMessage) == []
-    assert records
+    [record] = records
+    assert record.levelno == logging.WARNING
+    assert record.getMessage() == "Alert not sent: no running event loop"
 
 
 async def test_without_recipients_nothing_is_sent() -> None:
-    """No alert chat and no developers: a fresh bot must still start and run."""
+    """No alert chat and no developers: a fresh bot must still start and run,
+    without a Redis round trip per failure for an alert nobody gets."""
     session = FakeTelegramSession()
-    await _alerter(session, recipients=()).alert_error(
+    redis = InMemoryRedis()
+    await _alerter(session, recipients=(), limiter=_limiter(redis)).alert_error(
         Alert(_failure(), origin="update message")
     )
     assert session.sent(SendMessage) == []
+    assert redis.evalsha_keys == []
+    assert redis.keys_snapshot() == []
+
+
+async def test_an_undecodable_answer_is_only_logged() -> None:
+    """The alert is sent from inside the failure it reports; an error of its
+    own would replace that failure."""
+    session = FakeTelegramSession()
+    session.queue(
+        SendMessage, ClientDecodeError("bad answer", ValueError("x"), "<html>")
+    )
+    with captured_logs("src.core.telegram.alerts") as records:
+        await _alerter(session, recipients=(11, 22)).alert_error(
+            Alert(_failure(), origin="update message")
+        )
+    assert [sent.chat_id for sent in session.sent(SendMessage)] == [11, 22]
+    [record] = records
+    assert record.levelno == logging.ERROR
+    assert record.getMessage() == "Alert not delivered to 11: ClientDecodeError"
+
+
+async def test_a_limiter_bug_fails_no_alert() -> None:
+    """A ResponseError is no outage, so the limiter does not fail open on it;
+    the alert still must not raise into the failure it reports."""
+    redis = InMemoryRedis()
+    redis.fail_next_commands(
+        100, error=redis_exc.ResponseError("WRONGTYPE secret-key-name")
+    )
+    session = FakeTelegramSession()
+    with captured_logs("src.core.telegram.alerts") as records:
+        await _alerter(session, limiter=_limiter(redis)).alert_error(
+            Alert(_failure(), origin="update message")
+        )
+    assert session.sent(SendMessage) == []
+    [record] = records
+    # The class name only: a Redis error can name a key.
+    assert record.getMessage() == "Alert not sent: ResponseError"
+
+
+async def test_a_library_error_from_two_handlers_is_alerted_twice() -> None:
+    """A Bot API refusal or a driver error is raised inside the library, the
+    same frame whichever handler called it: placing it there would mute every
+    broken handler but the first."""
+    session = FakeTelegramSession()
+    alerter = _alerter(session)
+    await alerter.alert_error(
+        Alert(_library_failure(_read_settings), origin="update message")
+    )
+    await alerter.alert_error(
+        Alert(_library_failure(_read_profile), origin="update message")
+    )
+    texts = [sent.text for sent in session.sent(SendMessage)]
+    assert len(texts) == 2
+    # The innermost frame of ours, not the library's.
+    assert "test_alerts.py:_read_settings" in texts[0]
+    assert "test_alerts.py:_read_profile" in texts[1]

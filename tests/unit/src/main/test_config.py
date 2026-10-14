@@ -316,6 +316,11 @@ _REQUIRED: dict[type, dict[str, object]] = {
         ),
         (
             BotConfig,
+            {"BOT_TOKEN": VALID_TOKEN, "DEV_ALERT_CHAT_ID": 0},
+            "DEV_ALERT_CHAT_ID",
+        ),
+        (
+            BotConfig,
             {"BOT_TOKEN": VALID_TOKEN, "BOT_MODE": "longpoll"},
             "BOT_MODE",
         ),

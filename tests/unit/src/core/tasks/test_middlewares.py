@@ -3,12 +3,15 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 
 import pytest
+import redis.exceptions as redis_exc
 import sentry_sdk
 from sqlalchemy.exc import DBAPIError
 from taskiq import InMemoryBroker, TaskiqMessage, TaskiqResult
 from taskiq.middlewares import SmartRetryMiddleware
 
 from src.core.errors.scrubbed import ScrubbedError
+from src.core.limiter.limiter import RateLimiter
+from src.core.redis.degradation import RedisDegradationReporter
 from src.core.tasks import middlewares as middlewares_module
 from src.core.tasks.middlewares import (
     FAILURE_REPORTER_STATE,
@@ -16,7 +19,9 @@ from src.core.tasks.middlewares import (
     SentryMiddleware,
     TaskFailureAlertMiddleware,
 )
-from src.core.telegram.alerts import Alert
+from src.core.telegram.alerts import Alert, DeveloperAlerter, TaskFailureReporter
+from tests.fakes.redis import InMemoryRedis
+from tests.fakes.telegram import FakeTelegramSession, make_bot
 from tests.helpers.logs import captured_logs
 
 
@@ -127,7 +132,10 @@ def _failing_task(
 
 
 async def _run_failing(
-    *, retry: bool, error: BaseException | None = None
+    *,
+    retry: bool,
+    error: BaseException | None = None,
+    reporter: TaskFailureReporter | None = None,
 ) -> tuple[RecordingReporter, Attempts]:
     broker = InMemoryBroker(await_inplace=True)
     broker.add_middlewares(
@@ -137,8 +145,8 @@ async def _run_failing(
         ),
         SentryMiddleware(),
     )
-    reporter = RecordingReporter()
-    broker.state[FAILURE_REPORTER_STATE] = reporter
+    recording = RecordingReporter()
+    broker.state[FAILURE_REPORTER_STATE] = reporter or recording
     attempts = Attempts()
     labels = {"retry_on_error": True} if retry else {}
     broker.register_task(
@@ -149,7 +157,7 @@ async def _run_failing(
         await broker.find_task("test.fail").kiq()
     finally:
         await broker.shutdown()
-    return reporter, attempts
+    return recording, attempts
 
 
 async def test_a_retried_task_alerts_once_on_the_final_failure(
@@ -226,3 +234,26 @@ async def test_a_worker_without_a_reporter_only_logs(
     finally:
         await broker.shutdown()
     assert any("no failure reporter" in record.getMessage() for record in records)
+
+
+async def test_a_failing_alert_does_not_fail_the_middleware(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An error escaping on_error would come out of the receiver before the
+    ack, and the task would be reclaimed and run again."""
+    monkeypatch.setattr(
+        middlewares_module.sentry_sdk, "capture_exception", lambda e: None
+    )
+    redis = InMemoryRedis()
+    redis.fail_next_commands(100, error=redis_exc.ResponseError("WRONGTYPE"))
+    session = FakeTelegramSession()
+    alerter = DeveloperAlerter(
+        make_bot(session),
+        RateLimiter(
+            redis, prefix="alerts", reporter=RedisDegradationReporter("Alerts")
+        ),
+        recipients=(11,),
+        cooldown_seconds=300,
+    )
+    _, attempts = await _run_failing(retry=False, reporter=alerter)
+    assert attempts.count == 1

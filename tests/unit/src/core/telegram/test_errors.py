@@ -427,3 +427,16 @@ async def test_a_driver_error_reaches_the_alert_scrubbed(
     )
     [alert] = alerts.sent(SendMessage)
     assert "(ann)" not in alert.text
+
+
+async def test_a_blocked_bot_does_not_alert(
+    settings: Config, i18n: I18n, sentry: Captured
+) -> None:
+    """A user who blocked the bot is nothing to fix; paging developers for it
+    would bury the alerts that are."""
+    alerts = FakeTelegramSession()
+    error = TelegramForbiddenError(
+        SendMessage(chat_id=7, text="x"), "bot was blocked by the user"
+    )
+    await _raise(_with_developer(settings, 99), i18n, error, alert_session=alerts)
+    assert alerts.sent(SendMessage) == []
