@@ -114,11 +114,7 @@ async def test_language_offers_every_supported_language(
     [reply] = await _replies(settings, i18n, build_message_update("/language"))
     markup = reply.reply_markup
     assert markup is not None
-    data = [
-        button.callback_data
-        for row in markup.inline_keyboard  # type: ignore[union-attr]
-        for button in row
-    ]
+    data = [button.callback_data for row in markup.inline_keyboard for button in row]
     assert data == [
         LanguageCallback(code="en").pack(),
         LanguageCallback(code="ru").pack(),
@@ -204,7 +200,7 @@ async def test_membership_changes_are_recorded(
     settings: Config, i18n: I18n, status: str, is_member: bool
 ) -> None:
     use_cases = UseCases()
-    update = build_my_chat_member_update(status, user_id=42)  # type: ignore[arg-type]
+    update = build_my_chat_member_update(status, user_id=42)
     replies = await _replies(settings, i18n, update, use_cases)
     assert replies == []
     use_cases.touch.execute.assert_not_awaited()

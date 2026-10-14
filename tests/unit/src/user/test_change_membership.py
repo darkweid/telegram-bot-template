@@ -12,7 +12,7 @@ PROFILE = TelegramProfile(
 
 
 def _use_case(session: FakeAsyncSession, users: AsyncMock) -> ChangeMembershipUseCase:
-    return ChangeMembershipUseCase(SQLAlchemyUnitOfWork(session), users)  # type: ignore[arg-type]
+    return ChangeMembershipUseCase(SQLAlchemyUnitOfWork(session), users)
 
 
 async def test_kicking_the_bot_marks_the_user_unreachable() -> None:

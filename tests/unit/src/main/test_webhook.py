@@ -69,7 +69,7 @@ async def test_shutdown_lets_an_update_in_progress_finish(
 ) -> None:
     gate = Gate()
     session = FakeTelegramSession()
-    session.close = AsyncMock()  # type: ignore[method-assign]
+    session.close = AsyncMock()
     stubs = Stubs(session, gate=gate)
     config = configured(settings, webhook=True)
     async with bot_runtime(config, TestOverrides(session, i18n), stubs) as runtime:

@@ -10,7 +10,7 @@ from tests.fakes.db import FakeAsyncSession
 
 
 def _use_case(session: FakeAsyncSession, users: AsyncMock) -> SetLocaleUseCase:
-    return SetLocaleUseCase(SQLAlchemyUnitOfWork(session), users)  # type: ignore[arg-type]
+    return SetLocaleUseCase(SQLAlchemyUnitOfWork(session), users)
 
 
 async def test_saves_a_supported_locale() -> None:

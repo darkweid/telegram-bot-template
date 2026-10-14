@@ -70,7 +70,7 @@ async def test_polling_leaves_the_bot_session_to_the_container(
     settings: Config, i18n: I18n
 ) -> None:
     session = PollingSession()
-    session.close = AsyncMock()  # type: ignore[method-assign]
+    session.close = AsyncMock()
     config = configured(settings)
     async with bot_runtime(
         config, TestOverrides(session, i18n), Stubs(session)

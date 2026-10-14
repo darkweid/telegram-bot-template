@@ -13,7 +13,7 @@ def _config_env_keys() -> frozenset[str]:
         frozenset(
             name
             for section in Config.model_fields.values()
-            for name in section.annotation.model_fields  # type: ignore[union-attr]
+            for name in section.annotation.model_fields
         )
         - _KEPT_ENV_KEYS
     )

@@ -166,7 +166,7 @@ async def test_errors_that_echo_user_data_are_scrubbed(
     secret = "secret-value"
     with captured_logs(errors_module.__name__) as records:
         try:
-            Model(age=secret)  # type: ignore[arg-type]
+            Model(age=secret)
         except ValidationError as validation_error:
             await _raise(settings, i18n, validation_error)
         await _raise(
@@ -265,7 +265,7 @@ async def test_user_data_anywhere_in_the_chain_is_reported_scrubbed(
     secret = "secret-value"
     with captured_logs(errors_module.__name__) as records:
         try:
-            Model(age=secret)  # type: ignore[arg-type]
+            Model(age=secret)
         except ValidationError as validation_error:
             # Below a scrubbed link the chain goes on.
             validation_error.__context__ = LookupError("cache miss below")

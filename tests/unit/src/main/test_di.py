@@ -104,7 +104,7 @@ async def test_closing_the_container_releases_the_bot_session(
         closed.append(True)
         await original_close()
 
-    session.close = tracking_close  # type: ignore[method-assign]
+    session.close = tracking_close
     container = build_test_container(settings, session, i18n)
     await container.get(Bot)
     await container.close()

@@ -139,7 +139,7 @@ async def test_ends_the_transaction_it_opened_and_gives_the_connection_back(
             read.detach(await _load_shelf(session))
 
         assert not session.in_transaction()
-        assert engine.pool.checkedout() == 0  # type: ignore[attr-defined]
+        assert engine.pool.checkedout() == 0
 
 
 async def test_ends_it_when_the_block_raises(engine: AsyncEngine) -> None:
@@ -152,4 +152,4 @@ async def test_ends_it_when_the_block_raises(engine: AsyncEngine) -> None:
                 raise LookupError
 
         assert not session.in_transaction()
-        assert engine.pool.checkedout() == 0  # type: ignore[attr-defined]
+        assert engine.pool.checkedout() == 0

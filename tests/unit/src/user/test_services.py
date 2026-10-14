@@ -23,7 +23,7 @@ def _stored(**overrides: object) -> UserProfile:
         "is_reachable": True,
         "last_seen_at": NOW - timedelta(minutes=1),
     }
-    return UserProfile(**(fields | overrides))  # type: ignore[arg-type]
+    return UserProfile(**(fields | overrides))
 
 
 @pytest.mark.parametrize(

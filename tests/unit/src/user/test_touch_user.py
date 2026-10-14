@@ -42,7 +42,7 @@ def _use_case(
     settings: Config, users: AsyncMock
 ) -> tuple[TouchUserUseCase, FakeAsyncSession]:
     session = FakeAsyncSession()
-    uow = SQLAlchemyUnitOfWork(session)  # type: ignore[arg-type]
+    uow = SQLAlchemyUnitOfWork(session)
     return TouchUserUseCase(uow, users, settings.bot), session
 
 

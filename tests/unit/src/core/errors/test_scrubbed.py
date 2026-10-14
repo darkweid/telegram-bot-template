@@ -23,7 +23,7 @@ def test_validation_error_summary_names_fields_and_types_only() -> None:
         age: int
 
     try:
-        Model(age="secret-value")  # type: ignore[arg-type]
+        Model(age="secret-value")
     except ValidationError as error:
         summary = describe_validation_error(error)
     assert summary == "Model: age: int_parsing"

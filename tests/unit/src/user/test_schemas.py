@@ -31,7 +31,7 @@ def _stored(**overrides: object) -> UserProfile:
         "is_reachable": True,
         "last_seen_at": NOW,
     }
-    return UserProfile(**(fields | overrides))  # type: ignore[arg-type]
+    return UserProfile(**(fields | overrides))
 
 
 def test_profile_takes_the_fields_we_store() -> None:

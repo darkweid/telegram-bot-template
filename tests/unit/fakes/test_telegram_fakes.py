@@ -157,7 +157,7 @@ async def test_stream_content_is_not_supported() -> None:
 
 def test_queue_rejects_a_non_method_type() -> None:
     with pytest.raises(TypeError, match="Expected a TelegramMethod subclass"):
-        FakeTelegramSession().queue(Message, True)  # type: ignore[arg-type]
+        FakeTelegramSession().queue(Message, True)
 
 
 def test_callback_builder_fills_message_and_user() -> None:

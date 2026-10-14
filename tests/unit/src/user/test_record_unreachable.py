@@ -15,7 +15,7 @@ async def test_marks_the_user_unreachable_in_its_own_transaction() -> None:
     calls = AsyncMock()
     calls.attach_mock(users.set_reachable, "set_reachable")
     calls.attach_mock(sessions.session.commit, "commit")
-    await RecordUnreachableUseCase(sessions, users).record_unreachable(42)  # type: ignore[arg-type]
+    await RecordUnreachableUseCase(sessions, users).record_unreachable(42)
     users.set_reachable.assert_awaited_once()
     args = users.set_reachable.await_args.args
     assert args[1:3] == (42, False)
@@ -29,7 +29,7 @@ async def test_a_user_not_stored_yet_is_not_an_error() -> None:
     sessions = FakeSessionFactory()
     users = AsyncMock(spec=UserRepository)
     users.set_reachable.return_value = False
-    await RecordUnreachableUseCase(sessions, users).record_unreachable(42)  # type: ignore[arg-type]
+    await RecordUnreachableUseCase(sessions, users).record_unreachable(42)
     users.set_reachable.assert_awaited_once()
     sessions.session.commit.assert_awaited_once()
 
@@ -39,5 +39,5 @@ async def test_nothing_is_committed_when_the_update_fails() -> None:
     users = AsyncMock(spec=UserRepository)
     users.set_reachable.side_effect = ConnectionError("database down")
     with pytest.raises(ConnectionError):
-        await RecordUnreachableUseCase(sessions, users).record_unreachable(42)  # type: ignore[arg-type]
+        await RecordUnreachableUseCase(sessions, users).record_unreachable(42)
     sessions.session.commit.assert_not_awaited()

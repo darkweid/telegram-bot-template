@@ -41,7 +41,7 @@ def _profile(user_id: int, **overrides: object) -> TelegramProfile:
         "last_name": None,
         "language_code": "ru",
     }
-    return TelegramProfile(**(fields | overrides))  # type: ignore[arg-type]
+    return TelegramProfile(**(fields | overrides))
 
 
 async def test_first_upsert_creates_the_user(

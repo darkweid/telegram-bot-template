@@ -22,11 +22,11 @@ VALID_SECRET = "s" * 32
 
 
 def _bot(**overrides: object) -> BotConfig:
-    return BotConfig(_env_file=None, BOT_TOKEN=VALID_TOKEN, **overrides)  # type: ignore[arg-type]
+    return BotConfig(_env_file=None, BOT_TOKEN=VALID_TOKEN, **overrides)
 
 
 def _webhook(**overrides: object) -> WebhookConfig:
-    return WebhookConfig(_env_file=None, **overrides)  # type: ignore[arg-type]
+    return WebhookConfig(_env_file=None, **overrides)
 
 
 def _postgres(**overrides: object) -> PostgresConfig:
@@ -39,7 +39,7 @@ def _postgres(**overrides: object) -> PostgresConfig:
         "POSTGRES_DB": "app",
     }
     values.update(overrides)
-    return PostgresConfig(_env_file=None, **values)  # type: ignore[arg-type]
+    return PostgresConfig(_env_file=None, **values)
 
 
 @pytest.mark.parametrize(
@@ -54,12 +54,12 @@ def _postgres(**overrides: object) -> PostgresConfig:
 )
 def test_bot_token_must_look_like_a_telegram_token(token: str) -> None:
     with pytest.raises(ValidationError, match="BOT_TOKEN"):
-        BotConfig(_env_file=None, BOT_TOKEN=token)  # type: ignore[arg-type]
+        BotConfig(_env_file=None, BOT_TOKEN=token)
 
 
 def test_bot_token_error_does_not_echo_the_token() -> None:
     with pytest.raises(ValidationError) as excinfo:
-        BotConfig(_env_file=None, BOT_TOKEN="123:leaky")  # type: ignore[arg-type]
+        BotConfig(_env_file=None, BOT_TOKEN="123:leaky")
     assert "leaky" not in str(excinfo.value)
 
 
@@ -312,7 +312,7 @@ def test_numeric_bounds_and_bot_mode_are_enforced(
 ) -> None:
     with pytest.raises(ValidationError, match=field):
         kwargs = {**_REQUIRED.get(section, {}), **values}
-        section(_env_file=None, **kwargs)  # type: ignore[arg-type]
+        section(_env_file=None, **kwargs)
 
 
 @pytest.mark.parametrize("port", [1, 65535])
@@ -344,4 +344,4 @@ def test_env_example_token_is_a_placeholder_the_validator_rejects() -> None:
 
     assert values.get("BOT_TOKEN")
     with pytest.raises(ValidationError, match="does not look like a token"):
-        BotConfig(_env_file=None, BOT_TOKEN=values["BOT_TOKEN"])  # type: ignore[arg-type]
+        BotConfig(_env_file=None, BOT_TOKEN=values["BOT_TOKEN"])
