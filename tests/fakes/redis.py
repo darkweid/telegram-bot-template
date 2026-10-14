@@ -9,6 +9,12 @@ from typing import Any
 
 import redis.exceptions as redis_exc
 
+from src.core.cache.redis_scripts import (
+    CACHE_DELETE_SCRIPT,
+    CACHE_GET_SCRIPT,
+    CACHE_INVALIDATE_SCRIPT,
+    CACHE_SET_SCRIPT,
+)
 from src.core.limiter.script import RATE_LIMIT_SCRIPT
 
 
@@ -48,6 +54,10 @@ class InMemoryRedis:
         # Wall clock behind TIME/time(): tests pin it to a fixed value. Key
         # expiry stays on time.monotonic() and is unaffected by reassigning this.
         self.wall_clock: Callable[[], float] = time.time
+        # Last generation a cache write started. The wall clock is often pinned in
+        # tests, and two writes reading the same pinned TIME would reuse a
+        # generation real Redis - whose clock moves between scripts - never does.
+        self._last_cache_generation = 0
         self._store: dict[str, str] = {}
         self._expires: dict[str, float] = {}
         self._scripts: dict[str, str] = {}
@@ -56,6 +66,7 @@ class InMemoryRedis:
         # request actually consumed.
         self.evalsha_keys: list[str] = []
         self.closed = False
+        self.cache_eval_calls = 0
         self._failures = 0
         self._failure_error: Exception = redis_exc.ConnectionError("fake redis down")
         # A full instance under noeviction. Real Redis refuses only commands that
@@ -288,7 +299,88 @@ class InMemoryRedis:
         *keys_and_args: Any,
     ) -> Any:
         await self._check_failure()
+        normalized = script.strip()
+        # The cache scripts take a variable number of key arguments - one version
+        # counter for the namespace plus one per tag - so the split follows numkeys
+        # exactly as Redis does, not a fixed position.
+        counters = [_normalize_key(key) for key in keys_and_args[:numkeys]]
+        args = keys_and_args[numkeys:]
+        if normalized == CACHE_GET_SCRIPT.strip():
+            return self._eval_cache_get(counters, *args)
+        if normalized == CACHE_SET_SCRIPT.strip():
+            return self._eval_cache_set(counters, *args)
+        if normalized == CACHE_DELETE_SCRIPT.strip():
+            return self._eval_cache_delete(counters, *args)
+        if normalized == CACHE_INVALIDATE_SCRIPT.strip():
+            return self._eval_cache_invalidate(counters, *args)
         raise NotImplementedError("Script not supported in fake Redis.")
+        raise NotImplementedError("Script not supported in fake Redis.")
+
+    # Every script body below is synchronous, and a new one must be too: an
+    # await between the read that decides and the write that acts would let two
+    # callers interleave where real Redis - which runs a script as one unit -
+    # cannot. A race test would then pass against an implementation that does
+    # not hold, and a cache test would see a version counter Redis can never
+    # produce. They reach the store through _read/_write/_drop/_expire for the
+    # same reason: the public commands yield.
+    def _cache_versions(self, counters: list[str]) -> list[str] | None:
+        versions: list[str] = []
+        for counter in counters:
+            version = self._read(counter)
+            if version is None:
+                return None
+            versions.append(version)
+        return versions
+
+    @staticmethod
+    def _cache_value_key(versions: list[str], prefix_ns: str, suffix: str) -> str:
+        return f"{prefix_ns}:v{'.'.join(versions)}:{suffix}"
+
+    def _next_cache_generation(self) -> str:
+        microseconds = int(self.wall_clock() * 1_000_000)
+        self._last_cache_generation = max(microseconds, self._last_cache_generation + 1)
+        seconds, usec = divmod(self._last_cache_generation, 1_000_000)
+        return f"{seconds}{usec:06d}"
+
+    def _eval_cache_get(self, counters: list[str], *args: Any) -> str | None:
+        self.cache_eval_calls += 1
+        versions = self._cache_versions(counters)
+        if versions is None:
+            return None
+        key = self._cache_value_key(
+            versions, _normalize_value(args[0]), _normalize_value(args[1])
+        )
+        return self._read(key)
+
+    def _eval_cache_set(self, counters: list[str], *args: Any) -> int:
+        self.cache_eval_calls += 1
+        if self.out_of_memory:
+            raise redis_exc.OutOfMemoryError(
+                "command not allowed when used memory > 'maxmemory'."
+            )
+        generation = self._next_cache_generation()
+        versions: list[str] = []
+        for counter in counters:
+            version = self._read(counter) or generation
+            self._write(counter, version, ttl_seconds=int(args[4]))
+            versions.append(version)
+        key = self._cache_value_key(
+            versions, _normalize_value(args[0]), _normalize_value(args[1])
+        )
+        self._write(key, _normalize_value(args[2]), ttl_seconds=int(args[3]))
+        return 1
+
+    def _eval_cache_delete(self, counters: list[str], *args: Any) -> int:
+        versions = self._cache_versions(counters)
+        if versions is None:
+            return 0
+        key = self._cache_value_key(
+            versions, _normalize_value(args[0]), _normalize_value(args[1])
+        )
+        return self._drop(key)
+
+    def _eval_cache_invalidate(self, counters: list[str], *args: Any) -> int:
+        return sum(self._drop(counter) for counter in counters)
 
     async def info(self, section: str | None = None) -> dict[str, int]:
         """No memory cap, like a Redis started without `maxmemory`."""

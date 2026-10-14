@@ -13,6 +13,8 @@ import pytest
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
+from src.core.cache.interface import Cache
+from src.core.cache.redis_cache import RedisCache
 from src.core.database.uow import SQLAlchemyUnitOfWork
 from src.core.events.registry import event_subscribers, set_event_subscribers
 from src.core.events.schemas import DomainEvent
@@ -270,5 +272,18 @@ async def test_the_user_agent_falls_back_to_the_project(
     container = build_test_container(config, FakeTelegramSession(), i18n)
     try:
         assert await container.get(UserAgent) == expected
+    finally:
+        await container.close()
+
+
+async def test_the_cache_is_one_redis_cache_per_process(settings: Config) -> None:
+    # The production container: TestOverrides can replace the cache with an
+    # in-process one. The Redis client connects lazily, so no Redis is needed
+    # to build the cache.
+    container = build_container(settings)
+    try:
+        first = await container.get(Cache)
+        assert isinstance(first, RedisCache)
+        assert await container.get(Cache) is first
     finally:
         await container.close()

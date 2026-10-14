@@ -24,12 +24,16 @@ from dishka.integrations.aiogram import AiogramProvider
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
+from src.core.cache.interface import Cache
+from src.core.cache.redis_cache import RedisCache
+from src.core.cache.serializer import JsonSerializer
 from src.core.database.engine import create_engine
 from src.core.database.uow import SQLAlchemyUnitOfWork
 from src.core.events.registry import set_event_subscribers
 from src.core.http.user_agent import UserAgent, build_user_agent
 from src.core.i18n import LOCALES_DIR, build_i18n
 from src.core.redis.core import create_redis_client
+from src.core.redis.degradation import RedisDegradationReporter
 from src.core.telegram.fsm import create_event_isolation, create_fsm_storage
 from src.core.telegram.roles import Roles
 from src.core.telegram.session import (
@@ -40,6 +44,7 @@ from src.core.telegram.session import (
 from src.main.config import (
     AppConfig,
     BotConfig,
+    CacheConfig,
     Config,
     HttpConfig,
     PostgresConfig,
@@ -88,6 +93,10 @@ class ConfigProvider(Provider):
     @provide
     def redis(self, config: Config) -> RedisConfig:
         return config.redis
+
+    @provide
+    def cache(self, config: Config) -> CacheConfig:
+        return config.cache
 
 
 class DatabaseProvider(Provider):
@@ -152,6 +161,22 @@ class RedisProvider(Provider):
         return create_event_isolation(storage)
 
 
+class CacheProvider(Provider):
+    scope = Scope.APP
+
+    @provide
+    def cache(self, redis: Redis, config: CacheConfig) -> Cache:
+        return RedisCache(
+            redis,
+            JsonSerializer(),
+            prefix=config.CACHE_KEY_PREFIX,
+            default_ttl=config.CACHE_DEFAULT_TTL,
+            version_ttl=config.CACHE_VERSION_TTL,
+            enabled=config.CACHE_ENABLED,
+            reporter=RedisDegradationReporter("Cache"),
+        )
+
+
 class TelegramProvider(Provider):
     scope = Scope.APP
 
@@ -211,6 +236,7 @@ def build_container(config: Config, *providers: Provider) -> AsyncContainer:
         ConfigProvider(),
         DatabaseProvider(),
         RedisProvider(),
+        CacheProvider(),
         TelegramProvider(),
         I18nProvider(),
         HttpProvider(),

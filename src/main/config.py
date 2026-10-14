@@ -46,6 +46,19 @@ class RedisConfig(BaseSettings):
         return self._dsn(self.REDIS_FSM_DATABASE)
 
 
+class CacheConfig(BaseSettings):
+    # Off: every read misses and nothing is written; the bot keeps working,
+    # every update just reads the database.
+    CACHE_ENABLED: bool = True
+    CACHE_DEFAULT_TTL: int = Field(60, gt=0)
+    # How long a namespace's version counter lives. A cached value never
+    # outlives it: a TTL above it is rejected when the value is written.
+    CACHE_VERSION_TTL: int = Field(604_800, gt=0)
+    CACHE_KEY_PREFIX: str = "cache"
+
+    model_config = SettingsConfigDict(extra="ignore")
+
+
 class SentryConfig(BaseSettings):
     SENTRY_DSN: str | None = None
     SENTRY_ENV: str = "development"
@@ -265,6 +278,7 @@ class Config(BaseModel):
     webhook: WebhookConfig
     postgres: PostgresConfig
     redis: RedisConfig
+    cache: CacheConfig
     sentry: SentryConfig
     http: HttpConfig
 
@@ -311,6 +325,7 @@ def get_settings() -> Config:
         webhook=WebhookConfig(_env_file=env_file),
         postgres=PostgresConfig(_env_file=env_file),
         redis=RedisConfig(_env_file=env_file),
+        cache=CacheConfig(_env_file=env_file),
         sentry=SentryConfig(_env_file=env_file),
         http=HttpConfig(_env_file=env_file),
     )
