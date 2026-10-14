@@ -1,12 +1,14 @@
 from collections.abc import Awaitable, Callable
 
 from aiogram import Bot, Dispatcher
+from aiogram.exceptions import TelegramAPIError
 from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
 from aiohttp import web
 
 from src.main.health import create_web_app
 from src.main.runtime import (
     BotRuntime,
+    StartupError,
     finish_updates,
     serving,
     wait_for_stop_signal,
@@ -33,6 +35,11 @@ class GracefulRequestHandler(SimpleRequestHandler):
         # The base class closes the bot session here, under updates still
         # running. tests/unit/src/main/test_webhook.py pins the attribute.
         await finish_updates(self._background_feed_update_tasks, self.shutdown_timeout)
+
+
+class WebhookRegistrationError(StartupError):
+    """Telegram refused setWebhook: an unreachable URL, a bad certificate,
+    a port Telegram does not call."""
 
 
 def create_webhook_app(runtime: BotRuntime) -> web.Application:
@@ -65,13 +72,21 @@ async def register_webhook(runtime: BotRuntime) -> None:
     Telegram queues updates while the next container starts.
     """
     webhook = runtime.config.webhook
-    await runtime.bot.set_webhook(
-        url=webhook.url,
-        secret_token=webhook.WEBHOOK_SECRET.get_secret_value(),
-        allowed_updates=runtime.dp.resolve_used_update_types(),
-        max_connections=webhook.WEBHOOK_MAX_CONNECTIONS,
-        drop_pending_updates=False,
-    )
+    try:
+        await runtime.bot.set_webhook(
+            url=webhook.url,
+            secret_token=webhook.WEBHOOK_SECRET.get_secret_value(),
+            allowed_updates=runtime.dp.resolve_used_update_types(),
+            max_connections=webhook.WEBHOOK_MAX_CONNECTIONS,
+            drop_pending_updates=False,
+        )
+    except TelegramAPIError as exc:
+        # exc.message is Telegram's description alone ("Bad Request: ...").
+        # The secret token sits in exc.method; `from None` keeps the error
+        # from carrying it along as its cause.
+        raise WebhookRegistrationError(
+            f"Telegram refused the webhook: {exc.message}"
+        ) from None
 
 
 async def serve_webhook(

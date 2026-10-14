@@ -5,7 +5,7 @@ import asyncio
 from loggers import get_logger, setup_logging
 from src.main.config import Config, get_settings
 from src.main.polling import poll
-from src.main.runtime import DependencyUnavailableError, bot_runtime
+from src.main.runtime import StartupError, bot_runtime
 from src.main.sentry import init_sentry
 from src.main.webhook import serve_webhook
 
@@ -30,7 +30,7 @@ def main() -> None:
     config = get_settings()
     try:
         asyncio.run(run(config))
-    except DependencyUnavailableError as exc:
+    except StartupError as exc:
         # One line, no traceback: the cause is outside the code.
         logger.critical("Cannot start: %s", exc)
         raise SystemExit(1) from None

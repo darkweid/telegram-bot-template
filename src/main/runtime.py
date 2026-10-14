@@ -25,7 +25,11 @@ from src.system.services import HealthService
 logger = get_logger(__name__)
 
 
-class DependencyUnavailableError(RuntimeError):
+class StartupError(RuntimeError):
+    """The environment keeps the bot from starting; the message says why."""
+
+
+class DependencyUnavailableError(StartupError):
     """PostgreSQL or Redis did not answer at startup."""
 
 

@@ -1,6 +1,7 @@
 import asyncio
 from unittest.mock import AsyncMock
 
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.methods import SendMessage, SetWebhook
 from aiogram.types import Update
 from aiogram.utils.i18n import I18n
@@ -10,7 +11,12 @@ import pytest
 
 from src.main.config import Config
 from src.main.runtime import bot_runtime
-from src.main.webhook import create_webhook_app, register_webhook, serve_webhook
+from src.main.webhook import (
+    WebhookRegistrationError,
+    create_webhook_app,
+    register_webhook,
+    serve_webhook,
+)
 from tests.factories.updates import build_message_update
 from tests.fakes.telegram import FakeTelegramSession
 from tests.helpers.providers import TestOverrides
@@ -168,3 +174,29 @@ async def test_an_empty_secret_never_serves_the_webhook(
     ) as runtime:
         with pytest.raises(RuntimeError, match="WEBHOOK_SECRET"):
             create_webhook_app(runtime)
+
+
+async def test_a_refused_webhook_becomes_a_startup_error(
+    settings: Config, i18n: I18n
+) -> None:
+    """Telegram's refusal is an environment problem (DNS, certificate, port);
+    it must stop the process with Telegram's reason, not a traceback."""
+    session = FakeTelegramSession()
+    session.queue(
+        SetWebhook,
+        TelegramBadRequest(
+            method=SetWebhook(url="https://bot.example.com/webhook/telegram"),
+            message="Bad Request: bad webhook: Failed to resolve host",
+        ),
+    )
+    config = configured(settings, webhook=True)
+    async with bot_runtime(
+        config, TestOverrides(session, i18n), Stubs(session)
+    ) as runtime:
+        with pytest.raises(WebhookRegistrationError) as caught:
+            await register_webhook(runtime)
+    assert str(caught.value) == (
+        "Telegram refused the webhook: Bad Request: bad webhook: Failed to resolve host"
+    )
+    assert caught.value.__cause__ is None
+    assert WEBHOOK_SECRET not in str(caught.value)
