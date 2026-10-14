@@ -1,6 +1,7 @@
 from unittest.mock import AsyncMock
 
 from aiogram import Bot, Dispatcher, Router
+from aiogram.dispatcher.event.bases import SkipHandler
 from aiogram.filters import Command
 from aiogram.methods import AnswerCallbackQuery, SendMessage
 from aiogram.types import Message
@@ -24,6 +25,8 @@ from tests.fakes.redis import InMemoryRedis
 from tests.fakes.telegram import FakeTelegramSession
 from tests.helpers.dispatcher import running_bot
 from tests.helpers.runtime import Stubs
+
+ADMIN_ID = 7
 
 
 def _tight(settings: Config, *, admin: int | None = None) -> Config:
@@ -49,10 +52,12 @@ class SetLocaleStub(Provider):
         return AsyncMock(spec=SetLocaleUseCase)
 
 
-async def _help_replies(config: Config, i18n: I18n, count: int) -> list[str]:
+async def _help_replies(
+    config: Config, i18n: I18n, count: int, user_id: int = 42
+) -> list[str]:
     async with running_bot(config, i18n, Stubs(FakeTelegramSession())) as running:
         for _ in range(count):
-            await running.feed(build_message_update("/help"))
+            await running.feed(build_message_update("/help", user_id=user_id))
         return [reply.text or "" for reply in running.session.sent(SendMessage)]
 
 
@@ -67,7 +72,8 @@ async def test_a_flood_gets_one_warning_then_silence(
 
 
 async def test_admins_are_never_throttled(settings: Config, i18n: I18n) -> None:
-    replies = await _help_replies(_tight(settings, admin=42), i18n, 5)
+    """A moderator caught by the flood limit could not stop the flood."""
+    replies = await _help_replies(_tight(settings, admin=ADMIN_ID), i18n, 5, ADMIN_ID)
     assert len(replies) == 5
 
 
@@ -79,15 +85,16 @@ async def test_a_throttled_callback_is_answered_once_with_the_warning(
     async with running_bot(
         _tight(settings), i18n, Stubs(FakeTelegramSession()), SetLocaleStub()
     ) as running:
-        for _ in range(3):
+        for _ in range(4):
             await running.feed(
                 build_callback_update(LanguageCallback(code="en").pack())
             )
         answers = running.session.sent(AnswerCallbackQuery)
-    assert len(answers) == 3
-    assert answers[2].text is not None and answers[2].text.startswith(
-        "Too many requests"
-    )
+    assert len(answers) == 4
+    texts = [answer.text or "" for answer in answers]
+    assert not any(text.startswith("Too many requests") for text in texts[:2])
+    assert texts[2].startswith("Too many requests")
+    assert not texts[3].startswith("Too many requests")
 
 
 async def _llm_router_replies(limiter: RateLimiter, i18n: I18n, count: int) -> int:
@@ -121,6 +128,7 @@ async def _llm_router_replies(limiter: RateLimiter, i18n: I18n, count: int) -> i
 
 
 async def test_a_handler_flag_picks_the_stricter_profile(i18n: I18n) -> None:
+    """A paid-model handler must not share the generous default budget."""
     limiter = RateLimiter(
         InMemoryRedis(),
         prefix="throttle",
@@ -142,6 +150,7 @@ async def test_limits_hold_while_redis_is_down(i18n: I18n) -> None:
 
 
 async def test_an_unknown_profile_is_a_programming_error() -> None:
+    """A profile without a rule would otherwise fail on some user's first update."""
     limiter = RateLimiter(
         InMemoryRedis(),
         prefix="throttle",
@@ -149,3 +158,38 @@ async def test_an_unknown_profile_is_a_programming_error() -> None:
     )
     with pytest.raises(ValueError, match="rule"):
         ThrottlingMiddleware(limiter, {Throttle.DEFAULT: ThrottleRule(1, 60)})
+
+
+async def test_a_skipped_handler_counts_once_per_handler_reached(i18n: I18n) -> None:
+    """aiogram re-runs inner middlewares for the next matching handler after
+    SkipHandler; the limit counts invocations, and the docstring says so."""
+    router = Router()
+    reached: list[str] = []
+
+    @router.message(Command("ask"))
+    async def skipping(message: Message) -> None:
+        reached.append("skipping")
+        raise SkipHandler
+
+    @router.message(Command("ask"))
+    async def answering(message: Message) -> None:
+        reached.append("answering")
+
+    limiter = RateLimiter(
+        InMemoryRedis(),
+        prefix="throttle",
+        reporter=RedisDegradationReporter("Throttling"),
+    )
+    rule = ThrottleRule(limit=1, window_seconds=60)
+    dp = Dispatcher(roles=Roles(admins=frozenset(), developers=frozenset()))
+    dp.message.middleware(
+        ThrottlingMiddleware(limiter, {Throttle.DEFAULT: rule, Throttle.LLM: rule})
+    )
+    dp.include_router(router)
+    bot = Bot("42:" + "A" * 35, session=FakeTelegramSession())
+    try:
+        with i18n.context(), i18n.use_locale("en"):
+            await dp.feed_update(bot, build_message_update("/ask"))
+    finally:
+        await bot.session.close()
+    assert reached == ["skipping"]

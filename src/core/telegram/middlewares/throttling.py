@@ -40,6 +40,10 @@ class ThrottlingMiddleware(BaseMiddleware):
     chosen, and an update no handler takes costs nothing worth limiting.
     Admins and developers are never limited. Over the limit, the first
     refused update in the window is told to wait and the rest are dropped.
+
+    The limit counts handler invocations: aiogram runs the inner middlewares
+    again for the next matching handler after a handler raises `SkipHandler`,
+    so such an update is counted once per handler it reaches.
     """
 
     def __init__(
