@@ -9,7 +9,7 @@ SECURITY_REQUIREMENTS_PATH = Path("infra/requirements/security.txt")
 MYPY_REPO_MARKER = "- repo: https://github.com/pre-commit/mirrors-mypy"
 BANDIT_REPO_MARKER = "- repo: https://github.com/PyCQA/bandit"
 ADDITIONAL_DEPS_MARKER = "additional_dependencies:"
-# pip-compile keeps requested extras in the lockfile line (taskiq[reload]==...);
+# pip-compile keeps requested extras in the lockfile line (sqlalchemy[asyncio]==...);
 # the version pins the base package, so the extras group is matched and dropped.
 REQ_PIN_RE = re.compile(r"^([A-Za-z0-9_.-]+)(?:\[[^\]]*\])?==([^#\s]+)")
 SPEC_SPLIT_RE = re.compile(r"(==|>=|<=|~=|!=|>|<)")

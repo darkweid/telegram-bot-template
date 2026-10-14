@@ -8,7 +8,7 @@ def create_redis_client(
     socket_connect_timeout: float = 5.0,
     health_check_interval: int = 30,
 ) -> Redis:
-    """Create a Redis async client from URL. Connects lazily, on first command.
+    """Connects lazily, on first command.
 
     Decoding is not a parameter: every caller compares replies against str, and a
     bytes reply compares unequal without an error. No caller may ask for the other one.

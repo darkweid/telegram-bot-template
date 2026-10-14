@@ -35,7 +35,7 @@ def pytest_itemcollected(item: pytest.Item) -> None:
     Docker. Marking by location makes that impossible.
 
     `pytest_itemcollected` fires as each item is created, so the marker is in place
-    before anything reads it — no assumption about how this hook orders against the
+    before anything reads it - no assumption about how this hook orders against the
     `-m` deselection pass, which `pytest_collection_modifyitems` would need.
     """
     if item.path is not None and INTEGRATION_ROOT in item.path.resolve().parents:
@@ -66,7 +66,7 @@ def _alembic_environment(**overrides: str) -> dict[str, str]:
 
     `TESTING=true` selects `.env.test`, while POSTGRES_HOST/POSTGRES_PORT inherited
     from the caller (`make test-integration` or the CI job) override the file's values
-    — the throwaway container's host port is only known at run time. A variable in
+    - the throwaway container's host port is only known at run time. A variable in
     `overrides` wins the same way, which is how a scratch database is named.
     """
     return {**os.environ, "TESTING": "true", **overrides}
@@ -87,8 +87,8 @@ def alembic_env() -> dict[str, str]:
 def migrated_database() -> None:
     """Apply the whole Alembic chain to a clean database once per session.
 
-    The database is empty when a run starts — a throwaway container without a volume
-    locally, a fresh service container in CI — so this both prepares the schema and
+    The database is empty when a run starts - a throwaway container without a volume
+    locally, a fresh service container in CI - so this both prepares the schema and
     proves the chain still applies from scratch.
     """
     get_settings.cache_clear()
@@ -194,7 +194,7 @@ async def integration_engine(
     on itself: a migration test can drop and recreate tables under connections that
     already cached plans against the old ones, and the resulting
     `InvalidCachedStatementError` would surface in whichever later test happens to draw
-    that connection — far from the cause, and moving with collection order.
+    that connection - far from the cause, and moving with collection order.
     """
     engine = create_async_engine(
         get_settings().postgres.dsn_async,

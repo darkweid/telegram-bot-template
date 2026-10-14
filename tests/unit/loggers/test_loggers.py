@@ -15,16 +15,12 @@ def _reset_json_flag(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(loggers, "LOG_JSON", False)
 
 
-def _make_test_logger(name: str, *, plain_format: bool = False) -> logging.Logger:
+def _make_test_logger(name: str) -> logging.Logger:
     logger = logging.getLogger(name)
     logger.handlers = []
     logger.setLevel(logging.DEBUG)
     logger.propagate = False
-    logger.addHandler(
-        loggers._build_stream_handler(
-            loggers._PLAIN_FORMAT if plain_format else loggers._LOG_FORMAT
-        )
-    )
+    logger.addHandler(loggers._build_stream_handler(loggers._LOG_FORMAT))
     return logger
 
 
@@ -74,13 +70,6 @@ def test_get_logger_attaches_update_filter_to_its_handler() -> None:
     logger = loggers.get_logger("test.logger.get_logger_filter")
     handler = logger.handlers[0]
     assert any(isinstance(f, loggers.UpdateContextFilter) for f in handler.filters)
-
-
-def test_logger_outside_an_update_falls_back_to_dashes() -> None:
-    logger = _make_test_logger("test.logger.plain_style", plain_format=True)
-    record = _last_record_via_capture(logger)
-    assert record.update_id == "-"
-    assert record.user_id == "-"
 
 
 def test_json_formatter_round_trips_exact_field_set() -> None:

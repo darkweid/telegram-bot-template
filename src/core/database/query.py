@@ -143,14 +143,14 @@ class ListQuery:
         if column is None or not isinstance(
             getattr(column, "expression", None), ColumnClause
         ):
-            raise FilteringError("Date filtering is not supported for this resource")
+            raise FilteringError("Date filtering is not supported for this model")
 
         # Both bounds become aware UTC instants before anything else touches
         # them: comparing a naive bound with an aware one raises `TypeError`,
-        # which escapes the `FilteringError` handling as an unhandled error, and a naive
-        # value bound to a `DateTime(timezone=True)` column is read in the
-        # session timezone. A bare `date_to` names a whole day, so it becomes
-        # an exclusive bound at the next midnight.
+        # which escapes the `FilteringError` handling, and a naive value bound
+        # to a `DateTime(timezone=True)` column is read in the session timezone.
+        # A bare `date_to` names a whole day, so it becomes an exclusive bound at
+        # the next midnight.
         upper_is_exclusive = self.date_to is not None and not isinstance(
             self.date_to, datetime
         )
@@ -216,7 +216,7 @@ class ListQuery:
             *related_search_columns,
         ]
         if not columns:
-            raise FilteringError("Search is not supported for this resource")
+            raise FilteringError("Search is not supported for this model")
 
         return and_(
             *(
@@ -249,18 +249,9 @@ class ListQuery:
         if column is not None:
             clauses.append(self._directed(column))
 
-        # `getattr(model, name)` yields an `InstrumentedAttribute`; `.expression`
-        # normalizes it to a `Column`-like object comparable with the raw `Column`
-        # objects from `inspect(model).primary_key`. The two are never the same
-        # Python object (the ORM wraps the mapped column in an annotated proxy),
-        # so identity comparison always fails; `==` would build a SQL expression
-        # instead of a boolean. Comparing the plain `.name` attribute is a normal
-        # string comparison and avoids both traps. `chosen` can be an
-        # expression that has no `.name` at all (a hybrid property, a
-        # relationship comparator) despite passing `_assert_list_query_fields`
-        # for the *searchable* half of a different field, so the lookup is
-        # defensive: `getattr(..., "name", None)` instead of a bare attribute
-        # access, and the comparison only runs when a name was found.
+        # Compare column names: ORM-annotated columns are never identical to
+        # inspect().primary_key's, and == builds SQL. A hybrid has no name, so
+        # look it up defensively.
         chosen = column.expression if column is not None else None
         chosen_name = getattr(chosen, "name", None)
         for primary_key_column in inspect(model).primary_key:

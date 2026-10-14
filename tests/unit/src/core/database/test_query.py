@@ -203,8 +203,8 @@ TASHKENT = ZoneInfo("Asia/Tashkent")
 
 
 def test_bare_date_to_covers_the_whole_day() -> None:
-    """A bare `date_to=2026-09-24` used to become midnight at the start of that
-    day, so a list asked for "up to the 24th" silently dropped the 24th."""
+    """A bare `date_to=2026-09-24` bounds at the end of that day, not at its
+    midnight, so "up to the 24th" includes the 24th."""
     query = ListQuery(date_to=date(2026, 9, 24))
 
     compiled = compile_clauses(query.build_where_clauses(QueryModel, SEARCHABLE))
@@ -278,8 +278,8 @@ def test_period_ending_on_a_day_before_its_start_is_inverted() -> None:
 def test_date_bound_outside_the_calendar_is_a_filtering_error(
     query: ListQuery,
 ) -> None:
-    """Moving such a bound to UTC raises OverflowError, which no handler maps,
-    so the user got an unexpected failure for a malformed period."""
+    """Moving such a bound to UTC raises OverflowError, which no handler maps;
+    the query reports a malformed period as a FilteringError instead."""
     with pytest.raises(FilteringError):
         query.build_where_clauses(QueryModel, SEARCHABLE)
 

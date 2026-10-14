@@ -289,7 +289,7 @@ async def test_base_repository_get_list_applies_default_created_at_ordering() ->
 
 @pytest.mark.asyncio
 async def test_soft_delete_repository_can_read_rows_in_any_state() -> None:
-    """History readers must resolve actors even after an account is deleted."""
+    """A soft-deleted row stays readable to a caller that asks for any state."""
     repo = RepositorySoftDeleteRepository()
     session = RepositorySession()
     session.execute.return_value = FakeResult(items=[])

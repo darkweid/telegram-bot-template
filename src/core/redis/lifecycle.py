@@ -14,4 +14,4 @@ async def verify_redis_client(redis_client: Redis) -> None:
     """
     if not await redis_client.ping():
         raise RuntimeError("Redis ping failed during startup")
-    logger.info("Redis connection verified.")
+    logger.info("Redis connection verified")

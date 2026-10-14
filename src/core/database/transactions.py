@@ -11,9 +11,7 @@ _STATEMENT_TIMEOUT_MAX_MS = 2**31 - 1
 
 
 def _string_to_int64(key: str) -> int:
-    """
-    Convert a string key to a signed 64-bit integer using a stable hash.
-    """
+    """Stable across processes, unlike hash(); advisory locks take a signed bigint."""
     digest = hashlib.sha256(key.encode("utf-8")).digest()
     value = int.from_bytes(digest[:8], "big", signed=False)
     if value >= _INT64_MAX:
@@ -22,11 +20,7 @@ def _string_to_int64(key: str) -> int:
 
 
 async def advisory_xact_lock(session: AsyncSession, key: str) -> None:
-    """
-    Acquire a PostgreSQL advisory transaction lock for the given key.
-
-    The lock is held until the surrounding transaction ends.
-    """
+    """Blocks until acquired; held until the surrounding transaction ends."""
     if not session.in_transaction():
         raise RuntimeError("advisory_xact_lock requires an active transaction")
     lock_key = _string_to_int64(key)
@@ -34,11 +28,7 @@ async def advisory_xact_lock(session: AsyncSession, key: str) -> None:
 
 
 async def try_advisory_xact_lock(session: AsyncSession, key: str) -> bool:
-    """
-    Try to acquire a PostgreSQL advisory transaction lock for the given key.
-
-    Returns True if the lock was acquired, False otherwise.
-    """
+    """Non-blocking: False when another transaction holds the lock."""
     if not session.in_transaction():
         raise RuntimeError("try_advisory_xact_lock requires an active transaction")
     lock_key = _string_to_int64(key)

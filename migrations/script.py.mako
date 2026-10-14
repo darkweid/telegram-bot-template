@@ -12,7 +12,6 @@ from alembic import op
 import sqlalchemy as sa
 ${imports + "\n" if imports else ""}\
 
-# revision identifiers, used by Alembic.
 <%!
 def as_literal(value):
     """repr() with double quotes, so black leaves a fresh revision alone.

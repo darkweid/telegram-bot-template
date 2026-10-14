@@ -19,7 +19,7 @@ from src.core.i18n import SUPPORTED_LOCALES
 
 class RedisConfig(BaseSettings):
     REDIS_HOST: str
-    REDIS_PORT: int
+    REDIS_PORT: int = Field(ge=1, le=65535)
     REDIS_PASSWORD: str
     REDIS_DATABASE: str
     REDIS_FSM_DATABASE: str = "2"
@@ -60,7 +60,7 @@ class PostgresConfig(BaseSettings):
     POSTGRES_USER: str
     POSTGRES_PASSWORD: str
     POSTGRES_HOST: str
-    POSTGRES_PORT: int
+    POSTGRES_PORT: int = Field(ge=1, le=65535)
     POSTGRES_DB: str
 
     DB_POOL_SIZE: int = Field(5, gt=0)

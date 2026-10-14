@@ -183,8 +183,8 @@ async def test_sqlalchemy_uow_refuses_a_session_already_in_a_transaction() -> No
 
 @pytest.mark.asyncio
 async def test_sqlalchemy_uow_inside_a_uow_raises_and_keeps_the_outer_guard() -> None:
-    """The inner exit used to pop `uow_active`, silently lifting the outer
-    UoW's protection against `commit=True` repository calls."""
+    """Popping `uow_active` on the inner exit would lift the outer UoW's
+    protection against `commit=True` repository calls."""
     session = FakeAsyncSession()
 
     async with SQLAlchemyUnitOfWork(session) as outer:

@@ -70,6 +70,9 @@ async def test_commit_false_inside_uow_is_legal(
         await note_repository.create(uow.session, data=_valid_note_data(), commit=False)
         await uow.commit()
 
+    session.add.assert_called_once()
+    session.commit.assert_awaited_once()
+
 
 async def test_marker_cleared_after_uow_exit(session: FakeAsyncSession) -> None:
     async with SQLAlchemyUnitOfWork(session):

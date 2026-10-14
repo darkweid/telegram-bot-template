@@ -31,12 +31,12 @@ CONFIG = """repos:
 
 def test_lockfile_pins_with_extras_resolve_to_the_base_package() -> None:
     # pip-compile writes the requested extras into the lockfile line
-    # (taskiq[reload]==0.12.4), and the version applies to the base package.
+    # (sqlalchemy[asyncio]==2.1.4), and the version applies to the base package.
     versions = parse_requirements_versions(
-        "taskiq[reload]==0.12.4\nmypy==2.3.0\n# comment\n"
+        "sqlalchemy[asyncio]==2.1.4\nmypy==2.3.0\n# comment\n"
     )
 
-    assert versions == {"taskiq": "0.12.4", "mypy": "2.3.0"}
+    assert versions == {"sqlalchemy": "2.1.4", "mypy": "2.3.0"}
 
 
 MYPY_MARKER = "- repo: https://github.com/pre-commit/mirrors-mypy"

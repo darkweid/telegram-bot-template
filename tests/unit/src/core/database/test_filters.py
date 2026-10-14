@@ -39,7 +39,7 @@ def test_filter_condition_build_where_clauses_returns_sqlalchemy_clauses() -> No
 
 
 def test_filter_condition_builds_an_in_clause_for_a_collection() -> None:
-    """Callers need one query for a page's related objects, not one per row."""
+    """A collection filter is one `IN` clause, not one query per value."""
     [clause] = FilterCondition(in_={"id": [1, 3]}).build_where_clauses(FilterModel)
 
     compiled = str(
@@ -53,7 +53,7 @@ def test_filter_condition_builds_an_in_clause_for_a_collection() -> None:
 
 
 def test_filter_condition_turns_an_empty_collection_into_false() -> None:
-    """An empty actor group must return no rows without emitting `IN ()`."""
+    """An empty collection must match no rows without emitting `IN ()`."""
     [clause] = FilterCondition(in_={"id": []}).build_where_clauses(FilterModel)
 
     compiled = str(

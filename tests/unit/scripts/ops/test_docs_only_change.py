@@ -61,7 +61,7 @@ def test_the_documentation_directory_boundary_is_the_slash() -> None:
 
 def test_markdown_outside_the_named_paths_counts_as_code() -> None:
     """The rule list is an enumeration, not a suffix match: a markdown file
-    nobody named (a template, a prompt shipped inside the package) may feed the
+    nobody named (a template, a message file shipped inside the package) may feed the
     build, and a path the rules do not name costs a pipeline run, never a
     skipped one."""
     assert not is_documentation("src/prompts/system.md")

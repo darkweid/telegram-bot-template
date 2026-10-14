@@ -22,17 +22,9 @@ _FILTER_OPERATORS: dict[str, Callable[[Any, Any], Any]] = {
 
 @dataclass(frozen=True, slots=True)
 class FilterCondition:
-    """
-    Typed filter specification for database queries.
+    """Each field maps column name -> value under one comparison operator.
 
-    Each field maps column name -> value under one comparison operator:
-      eq:  field == value
-      ne:  field != value
-      lt:  field < value
-      gt:  field > value
-      lte: field <= value
-      gte: field >= value
-      in_: field belongs to a collection of values
+    `in_` takes a collection of values.
     """
 
     eq: dict[str, Any] = field(default_factory=dict)

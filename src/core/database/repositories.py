@@ -11,7 +11,7 @@ from sqlalchemy import (
     select,
     update,
 )
-from sqlalchemy.exc import IntegrityError, SQLAlchemyError
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql.elements import ColumnElement
 from sqlalchemy.sql.expression import ColumnClause
@@ -49,14 +49,8 @@ class BaseRepository(Generic[T]):
         self._assert_list_query_fields()
 
     def _assert_list_query_fields(self) -> None:
-        """
-        Fail when the repository is constructed - once, by the container -
-        if a declared searchable/sortable column is wrong.
-
-        A misdeclared column would otherwise surface as an error in the first
-        update that lists with it: `ilike` against a non-text column is a
-        PostgreSQL error.
-        """
+        """A misdeclared column would otherwise fail in the first update that lists
+        with it: `ilike` against a non-text column is a PostgreSQL error."""
         orderable_fields = (
             *self.sortable_fields,
             *((self.default_order_by,) if self.default_order_by else ()),
@@ -101,17 +95,13 @@ class BaseRepository(Generic[T]):
             )
 
     def _scope_filters(self, filters: dict[str, Any]) -> dict[str, Any]:
-        """
-        Default filters every read and every filtered write of this repository
-        carries. A plain repository scopes nothing; SoftDeleteRepository seeds
-        `is_deleted=False` here, in one place instead of in every method.
-        """
+        """SoftDeleteRepository seeds `is_deleted=False` here, in one place
+        instead of in every method."""
         return filters
 
     def _related_search(self) -> Sequence[RelatedSearch]:
-        """Tables the list search reads beyond `searchable_fields`, for a row
-        whose displayed name lives there. Server-chosen like
-        `searchable_fields`, never input."""
+        """Tables the list search reads beyond `searchable_fields`; server-chosen,
+        never input."""
         return ()
 
     def _apply_list_filters(
@@ -141,7 +131,6 @@ class BaseRepository(Generic[T]):
     async def create(
         self, session: AsyncSession, data: dict[str, Any], commit: bool = False
     ) -> T:
-        """Create a new record using the provided session."""
         if commit:
             self._ensure_commit_allowed(session)
         try:
@@ -150,37 +139,24 @@ class BaseRepository(Generic[T]):
             if commit:
                 await session.commit()
                 await session.refresh(instance)
-                logger.debug(
-                    "%s created successfully [Committed].", self.model.__name__
-                )
+                logger.debug("%s created successfully [Committed]", self.model.__name__)
             else:
-                logger.debug(
-                    "%s created [Staged, pending commit].", self.model.__name__
-                )
+                logger.debug("%s created [Staged, pending commit]", self.model.__name__)
             return instance
-        except (IntegrityError, SQLAlchemyError):
+        except SQLAlchemyError:
             if commit:
                 await session.rollback()
             raise
 
     async def xact_lock(self, session: AsyncSession, key: str) -> None:
-        """
-        Acquire an advisory transaction lock for the given string key.
-        """
         await advisory_xact_lock(session, self._namespaced_lock_key(key))
 
     async def try_xact_lock(self, session: AsyncSession, key: str) -> bool:
-        """
-        Try to acquire an advisory transaction lock for the given string key.
-
-        Returns True if the lock was acquired, False otherwise.
-        """
+        """True if the lock was acquired, False if another transaction holds it."""
         return await try_advisory_xact_lock(session, self._namespaced_lock_key(key))
 
     def _namespaced_lock_key(self, key: str) -> str:
-        """
-        Prefix the lock key with model identity to avoid cross-repo collisions.
-        """
+        """Prefixed with the model, so two models' locks on one key never contend."""
         table_name = getattr(self.model, "__tablename__", None)
         model_name = table_name or self.model.__name__
         return f"{model_name}:{key}"
@@ -188,10 +164,7 @@ class BaseRepository(Generic[T]):
     async def exists(
         self, session: AsyncSession, strict_single: bool = False, **filters: Any
     ) -> bool:
-        """
-        Determine if a record exists in the database matching the provided filters.
-        Optionally, it can enforce strict single-record existence checks.
-        """
+        """With `strict_single`, True only when exactly one row matches."""
         filters = self._scope_filters(filters)
         if strict_single:
             query = select(1).select_from(self.model).filter_by(**filters).limit(2)
@@ -210,9 +183,7 @@ class BaseRepository(Generic[T]):
         populate_existing: bool = False,
         **filters: Any,
     ) -> T | None:
-        """Retrieve a single record using the provided session.
-
-        `populate_existing=True` overwrites an instance the session already
+        """`populate_existing=True` overwrites an instance the session already
         holds, relationships included. Without it an eager option skips a
         relationship that is loaded already, so a re-read after changing a
         foreign key keeps answering the old related object.
@@ -238,7 +209,6 @@ class BaseRepository(Generic[T]):
         conditions: FilterCondition | None = None,
         **filters: Any,
     ) -> list[T]:
-        """Retrieve a list of records using the provided session without pagination."""
         filters = self._scope_filters(filters)
         where_clauses = (
             conditions.build_where_clauses(self.model)
@@ -264,7 +234,6 @@ class BaseRepository(Generic[T]):
         query: ListQuery | None = None,
         **filters: Any,
     ) -> tuple[list[T], int]:
-        """Retrieve a paginated list of records using limit/offset pagination."""
         if page < 1:
             raise ValueError("page must be greater than or equal to 1")
         if size < 1:
@@ -300,7 +269,6 @@ class BaseRepository(Generic[T]):
         session: AsyncSession,
         **filters: Any,
     ) -> int:
-        """Count records matching the provided filters using the given session."""
         filters = self._scope_filters(filters)
         query = select(func.count()).select_from(self.model).filter_by(**filters)
         result = await session.execute(query)
@@ -352,11 +320,11 @@ class BaseRepository(Generic[T]):
                     await session.commit()
                     await session.refresh(instance)
                     logger.debug(
-                        "%s updated successfully [Committed].", self.model.__name__
+                        "%s updated successfully [Committed]", self.model.__name__
                     )
                 else:
                     logger.debug(
-                        "%s updated [Staged, pending commit].", self.model.__name__
+                        "%s updated [Staged, pending commit]", self.model.__name__
                     )
                 return instance
 
@@ -364,7 +332,7 @@ class BaseRepository(Generic[T]):
                 "%s update skipped [NotFound]. filters=%s", self.model.__name__, filters
             )
             return None
-        except (IntegrityError, SQLAlchemyError):
+        except SQLAlchemyError:
             if commit:
                 await session.rollback()
             raise
@@ -387,15 +355,15 @@ class BaseRepository(Generic[T]):
                 if commit:
                     await session.commit()
                     logger.debug(
-                        "%s deleted successfully [Committed].", self.model.__name__
+                        "%s deleted successfully [Committed]", self.model.__name__
                     )
                 else:
                     logger.debug(
-                        "%s deleted [Staged, pending commit].", self.model.__name__
+                        "%s deleted [Staged, pending commit]", self.model.__name__
                     )
                 return instance
             return None
-        except (IntegrityError, SQLAlchemyError):
+        except SQLAlchemyError:
             if commit:
                 await session.rollback()
             raise
@@ -476,15 +444,15 @@ class SoftDeleteRepository(BaseRepository[T], Generic[T]):
                     await session.commit()
                     await session.refresh(instance)
                     logger.debug(
-                        "%s soft-deleted successfully [Committed].", self.model.__name__
+                        "%s soft-deleted successfully [Committed]", self.model.__name__
                     )
                 else:
                     logger.debug(
-                        "%s soft-deleted [Staged, pending commit].", self.model.__name__
+                        "%s soft-deleted [Staged, pending commit]", self.model.__name__
                     )
                 return instance
             return None
-        except (IntegrityError, SQLAlchemyError):
+        except SQLAlchemyError:
             if commit:
                 await session.rollback()
             raise
@@ -495,7 +463,6 @@ class SoftDeleteRepository(BaseRepository[T], Generic[T]):
         filters: FilterCondition,
         commit: bool = False,
     ) -> int:
-        """Soft delete multiple records matching the typed filter conditions."""
         if commit:
             self._ensure_commit_allowed(session)
         if not filters.has_conditions():
@@ -520,13 +487,13 @@ class SoftDeleteRepository(BaseRepository[T], Generic[T]):
             if commit:
                 await session.commit()
                 logger.debug(
-                    "%s batch soft-deleted %d record(s) [Committed].",
+                    "%s batch soft-deleted %d record(s) [Committed]",
                     self.model.__name__,
                     count,
                 )
             else:
                 logger.debug(
-                    "%s batch soft-deleted %d record(s) [Staged, pending commit].",
+                    "%s batch soft-deleted %d record(s) [Staged, pending commit]",
                     self.model.__name__,
                     count,
                 )
@@ -534,7 +501,6 @@ class SoftDeleteRepository(BaseRepository[T], Generic[T]):
         except SQLAlchemyError:
             if commit:
                 await session.rollback()
-            logger.exception("Batch soft-delete failed for %s", self.model.__name__)
             raise
 
     def _assert_softdelete_fields(self) -> None:
@@ -542,5 +508,6 @@ class SoftDeleteRepository(BaseRepository[T], Generic[T]):
             self.model, "deleted_at"
         ):
             raise TypeError(
-                f"{self.model.__name__} must define 'is_deleted' and 'deleted_at' for SoftDeleteRepository"
+                f"{self.model.__name__} must define 'is_deleted' and 'deleted_at' "
+                "for SoftDeleteRepository"
             )

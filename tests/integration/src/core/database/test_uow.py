@@ -25,8 +25,8 @@ async def committed_user_ids(
 ) -> AsyncGenerator[list[int]]:
     """Ids of rows a test committed on purpose, removed afterwards.
 
-    The `db_session` fixture's rollback cannot undo these — they are the point of the
-    test — so they have to be deleted, or they stay visible to every later test.
+    The `db_session` fixture's rollback cannot undo these - they are the point of the
+    test - so they have to be deleted, or they stay visible to every later test.
     """
     user_ids: list[int] = []
     yield user_ids

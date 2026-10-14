@@ -3,7 +3,7 @@ import json
 import logging
 import os
 import sys
-from typing import Any
+from typing import Any, TextIO
 
 from src.core.update_context import get_update_context
 
@@ -11,7 +11,6 @@ _LOG_FORMAT = (
     "%(asctime)s [%(levelname)s]|[%(process)d]|[%(update_id)s:%(user_id)s]| "
     "%(name)s: %(message)s"
 )
-_PLAIN_FORMAT = "%(asctime)s [%(process)d]|[%(update_id)s:%(user_id)s]| %(message)s"
 _DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
 
 log_level = getattr(logging, os.environ.get("LOG_LEVEL", "INFO").upper(), logging.INFO)
@@ -73,7 +72,7 @@ def _build_formatter(fmt: str) -> logging.Formatter:
     return logging.Formatter(fmt, _DATE_FORMAT)
 
 
-def _build_stream_handler(fmt: str) -> logging.StreamHandler:  # type: ignore[type-arg]
+def _build_stream_handler(fmt: str) -> logging.StreamHandler[TextIO]:
     handler = logging.StreamHandler(sys.stdout)
     handler.setLevel(log_level)
     handler.setFormatter(_build_formatter(fmt))
@@ -81,16 +80,14 @@ def _build_stream_handler(fmt: str) -> logging.StreamHandler:  # type: ignore[ty
     return handler
 
 
-def get_logger(name: str, *, plain_format: bool = False) -> logging.Logger:
+def get_logger(name: str) -> logging.Logger:
     """Stdout-only logger. Containers own log shipping; files and rotation
     are deliberately not this process's job."""
     logger = logging.getLogger(name)
     if logger.handlers:
         return logger
     logger.setLevel(log_level)
-    logger.addHandler(
-        _build_stream_handler(_PLAIN_FORMAT if plain_format else _LOG_FORMAT)
-    )
+    logger.addHandler(_build_stream_handler(_LOG_FORMAT))
     logger.propagate = False
     return logger
 

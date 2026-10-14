@@ -29,7 +29,7 @@ async def test_rollback_ends_the_transaction() -> None:
 async def test_savepoint_rollback_keeps_the_outer_transaction() -> None:
     """The savepoint forwards its rollback to `session.rollback` so tests can
     assert on it; that call must not end the transaction around it, or the
-    a rolled-back savepoint would look like it ended the unit of work."""
+    rolled-back savepoint would look like it ended the unit of work."""
     session = FakeAsyncSession()
     await session.begin()
     savepoint = await session.begin_nested()

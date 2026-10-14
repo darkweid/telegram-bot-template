@@ -29,7 +29,7 @@ async def test_clean_exit_without_commit_persists_nothing_on_fresh_session(
 
 async def test_entering_after_a_raw_read_raises(db_session: AsyncSession) -> None:
     """A plain SELECT on the shared session autobegins a transaction; the UoW
-    used to nest a SAVEPOINT in it and commit it on `commit()`."""
+    refuses to nest a SAVEPOINT in it rather than commit it on `commit()`."""
     await db_session.execute(select(1))
 
     with pytest.raises(RuntimeError, match="already in a transaction"):
@@ -61,7 +61,7 @@ async def test_entering_after_staged_work_raises_and_leaves_the_session_as_it_wa
 async def test_a_unit_of_work_inside_a_unit_of_work_raises(
     db_session: AsyncSession,
 ) -> None:
-    """The inner exit used to pop `uow_active` and lift the outer UoW's guard
+    """Popping `uow_active` on the inner exit would lift the outer UoW's guard
     against a repository `commit=True`."""
     user_id = new_user_id()
     repository = UserRepository()

@@ -1,13 +1,13 @@
-import alembic_postgresql_enum  # noqa
 import asyncio
 
 from alembic import context
 from alembic.config import Config
+import alembic_postgresql_enum  # noqa: F401 - registers the enum comparators with autogenerate
 from sqlalchemy import MetaData
 from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
-import models  # noqa
 
+import models  # noqa: F401 - populates Base.metadata for autogenerate
 from src.core.database.base import Base
 from src.main.config import get_settings
 
@@ -20,17 +20,7 @@ def _get_postgres_dsn() -> str:
 
 
 def run_migrations_offline() -> None:
-    """Run migrations in 'offline' mode.
-
-    This configures the context with just a URL
-    and not an Engine, though an Engine is acceptable
-    here as well.  By skipping the Engine creation
-    we don't even need a DBAPI to be available.
-
-    Calls to context.execute() here emit the given string to the
-    script output.
-
-    """
+    """`alembic upgrade --sql`: emits SQL to stdout without connecting."""
     context.configure(
         url=_get_postgres_dsn(),
         target_metadata=target_metadata,
@@ -54,10 +44,7 @@ def do_run_migrations(connection: Connection) -> None:
 
 
 async def run_async_migrations() -> None:
-    """
-    In this scenario we need to create an Engine
-    and associate a connection with the context.
-    """
+    """The application's async engine, with parameters hidden from error output."""
     connectable: AsyncEngine = create_async_engine(
         url=_get_postgres_dsn(), hide_parameters=True
     )
@@ -69,8 +56,6 @@ async def run_async_migrations() -> None:
 
 
 def run_migrations_online() -> None:
-    """Run migrations in 'online' mode."""
-
     asyncio.run(run_async_migrations())
 
 

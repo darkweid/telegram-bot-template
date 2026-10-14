@@ -243,11 +243,33 @@ def test_postgres_pool_sizes_default_and_validate() -> None:
         _postgres(DB_POOL_SIZE=0)
 
 
+_REQUIRED: dict[type, dict[str, object]] = {
+    RedisConfig: {
+        "REDIS_HOST": "redis-host",
+        "REDIS_PASSWORD": "secret",
+        "REDIS_DATABASE": "0",
+        "REDIS_PORT": 6379,
+    },
+    PostgresConfig: {
+        "DB_ECHO": False,
+        "POSTGRES_USER": "app",
+        "POSTGRES_PASSWORD": "secret",
+        "POSTGRES_HOST": "db-host",
+        "POSTGRES_PORT": 5432,
+        "POSTGRES_DB": "app",
+    },
+}
+
+
 @pytest.mark.parametrize(
     ("section", "values", "field"),
     [
         (WebServerConfig, {"WEB_SERVER_PORT": 0}, "WEB_SERVER_PORT"),
         (WebServerConfig, {"WEB_SERVER_PORT": 65536}, "WEB_SERVER_PORT"),
+        (RedisConfig, {"REDIS_PORT": 0}, "REDIS_PORT"),
+        (RedisConfig, {"REDIS_PORT": 65536}, "REDIS_PORT"),
+        (PostgresConfig, {"POSTGRES_PORT": 0}, "POSTGRES_PORT"),
+        (PostgresConfig, {"POSTGRES_PORT": 65536}, "POSTGRES_PORT"),
         (WebhookConfig, {"WEBHOOK_MAX_CONNECTIONS": 0}, "WEBHOOK_MAX_CONNECTIONS"),
         (WebhookConfig, {"WEBHOOK_MAX_CONNECTIONS": 101}, "WEBHOOK_MAX_CONNECTIONS"),
         (
@@ -278,12 +300,25 @@ def test_postgres_pool_sizes_default_and_validate() -> None:
     ],
 )
 def test_numeric_bounds_and_bot_mode_are_enforced(
-    section: type[BotConfig | WebServerConfig | WebhookConfig],
+    section: type[
+        BotConfig | WebServerConfig | WebhookConfig | RedisConfig | PostgresConfig
+    ],
     values: dict[str, object],
     field: str,
 ) -> None:
     with pytest.raises(ValidationError, match=field):
-        section(_env_file=None, **values)  # type: ignore[arg-type]
+        kwargs = {**_REQUIRED.get(section, {}), **values}
+        section(_env_file=None, **kwargs)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("port", [1, 65535])
+def test_port_bounds_accept_their_edges(port: int) -> None:
+    assert WebServerConfig(_env_file=None, WEB_SERVER_PORT=port).WEB_SERVER_PORT == port
+    redis = RedisConfig(
+        _env_file=None, **{**_REQUIRED[RedisConfig], "REDIS_PORT": port}
+    )
+    assert redis.REDIS_PORT == port
+    assert _postgres(POSTGRES_PORT=port).POSTGRES_PORT == port
 
 
 def test_get_settings_loads_the_test_env_file(monkeypatch: pytest.MonkeyPatch) -> None:
