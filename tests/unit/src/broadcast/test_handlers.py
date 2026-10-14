@@ -7,6 +7,7 @@ from aiogram.methods import (
     EditMessageText,
     SendMessage,
 )
+from aiogram.types import PhotoSize, Update
 from aiogram.utils.i18n import I18n
 from dishka import Provider, Scope, provide
 
@@ -51,6 +52,18 @@ class BroadcastStub(Provider):
     @provide(scope=Scope.REQUEST, override=True)
     def stop_broadcast(self) -> StopBroadcastUseCase:
         return self.stop
+
+
+def _photo(media_group_id: str | None = None) -> Update:
+    """A captionless photo from the admin; with `media_group_id`, one part of
+    an album."""
+    update = build_message_update(user_id=ADMIN)
+    assert update.message is not None
+    photo = PhotoSize(file_id="photo", file_unique_id="photo", width=1, height=1)
+    message = update.message.model_copy(
+        update={"text": None, "photo": [photo], "media_group_id": media_group_id}
+    )
+    return update.model_copy(update={"message": message})
 
 
 def _admin(settings: Config) -> Config:
@@ -177,3 +190,62 @@ async def test_broadcast_is_hidden_from_everyone_else(
         await running.feed(build_message_update("Hello", user_id=77))
     stub.prepare.execute.assert_not_awaited()
     assert running.session.sent(CopyMessage) == []
+
+
+async def test_a_photo_is_a_valid_draft(settings: Config, i18n: I18n) -> None:
+    """A broadcast is a copy of any single message, not only of text."""
+    stub = BroadcastStub()
+    photo = _photo()
+    async with running_bot(_admin(settings), i18n, UseCases(), stub) as running:
+        await running.feed(build_message_update("/broadcast", user_id=ADMIN))
+        await running.feed(photo)
+    [preview] = running.session.sent(CopyMessage)
+    assert preview.message_id == photo.message.message_id
+    assert running.session.sent(SendMessage)[-1].text == (
+        "This message will go to 5 users. Send it?"
+    )
+
+
+async def test_an_album_is_refused_and_the_draft_waits_for_a_single_message(
+    settings: Config, i18n: I18n
+) -> None:
+    """Each part of an album arrives as its own message: copied one by one,
+    the broadcast would send only the part that came first."""
+    stub = BroadcastStub()
+    async with running_bot(_admin(settings), i18n, UseCases(), stub) as running:
+        await running.feed(build_message_update("/broadcast", user_id=ADMIN))
+        await running.feed(_photo(media_group_id="album"))
+        assert running.session.sent(CopyMessage) == []
+        assert running.session.sent(SendMessage)[-1].text == (
+            "Albums are not supported: send a single message."
+        )
+        await running.feed(build_message_update("Hello", user_id=ADMIN))
+    assert len(running.session.sent(CopyMessage)) == 1
+
+
+async def test_stop_on_a_finished_broadcast_says_so(
+    settings: Config, i18n: I18n
+) -> None:
+    """The button stays on the message when the run could not edit it away;
+    a tap then must not claim a stop is coming."""
+    stub = BroadcastStub()
+    stub.stop.execute.return_value = False
+    stop = BroadcastStopCallback(broadcast_id=BROADCAST_ID).pack()
+    async with running_bot(_admin(settings), i18n, UseCases(), stub) as running:
+        await running.feed(build_callback_update(stop, user_id=ADMIN))
+    [answer] = running.session.sent(AnswerCallbackQuery)
+    assert answer.text == "This broadcast has already finished."
+
+
+async def test_stop_from_anyone_but_an_admin_is_ignored(
+    settings: Config, i18n: I18n
+) -> None:
+    """An admin who lost the role keeps the old progress message; its button
+    must not stop a broadcast any more."""
+    stub = BroadcastStub()
+    stop = BroadcastStopCallback(broadcast_id=BROADCAST_ID).pack()
+    async with running_bot(_admin(settings), i18n, UseCases(), stub) as running:
+        await running.feed(build_callback_update(stop, user_id=77))
+    stub.stop.execute.assert_not_awaited()
+    [answer] = running.session.sent(AnswerCallbackQuery)
+    assert answer.text is None

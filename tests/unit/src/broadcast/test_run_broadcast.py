@@ -9,7 +9,9 @@ from aiogram.exceptions import (
     TelegramBadRequest,
     TelegramForbiddenError,
     TelegramNetworkError,
+    TelegramNotFound,
     TelegramRetryAfter,
+    TelegramServerError,
 )
 from aiogram.methods import CopyMessage, EditMessageText, SendMessage
 from aiogram.types import InlineKeyboardMarkup
@@ -425,6 +427,34 @@ async def test_progress_is_shown_with_a_stop_button_then_replaced_by_the_report(
     assert (last.text, last.reply_markup) == (FINISHED, None)
 
 
+async def test_a_long_flood_wait_renews_the_lease_before_each_pause(
+    settings: Config, i18n: I18n, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Telegram can ask for minutes of silence, longer than STALE_AFTER; slept
+    in one go, the lease would lapse and the resume task would start a second
+    run beside this one."""
+    telegram = FakeTelegramSession()
+    telegram.queue(
+        CopyMessage,
+        TelegramRetryAfter(
+            method=COPY, message="Flood control exceeded", retry_after=150
+        ),
+    )
+    broadcasts = _broadcasts()
+    clock = _install_clock(monkeypatch, telegram, broadcasts, lease=False)
+    status = await _run(settings, i18n, telegram, broadcasts).execute(BROADCAST_ID)
+    assert status == BroadcastStatus.COMPLETED
+    assert clock.events[:6] == [
+        ("checkpoint", 1),
+        ("sleep", 60),
+        ("checkpoint", 1),
+        ("sleep", 60),
+        ("checkpoint", 1),
+        ("sleep", 30),
+    ]
+    assert _copied_to(telegram) == [10, 10, 20, 30]
+
+
 async def test_a_long_streak_of_failed_copies_renews_the_lease(
     settings: Config, i18n: I18n, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -524,3 +554,39 @@ async def test_every_call_of_a_run_is_capped_by_the_short_timeout(
     assert {telegram.timeout_of(call) for call in calls} == {
         run_module.TELEGRAM_REQUEST_TIMEOUT_SECONDS
     }
+
+
+async def test_a_server_error_is_retried_and_the_copy_then_counts_as_sent(
+    settings: Config, i18n: I18n, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A 5xx is Telegram's trouble, not the recipient's: the same copy is
+    tried again rather than counted as failed."""
+    monkeypatch.setattr(run_module, "TRANSIENT_RETRY_DELAYS_SECONDS", (0, 0, 0, 0))
+    telegram = FakeTelegramSession()
+    telegram.queue(
+        CopyMessage,
+        TelegramServerError(method=COPY, message="Internal Server Error"),
+    )
+    broadcasts = _broadcasts()
+    status = await _run(settings, i18n, telegram, broadcasts).execute(BROADCAST_ID)
+    assert status == BroadcastStatus.COMPLETED
+    assert _copied_to(telegram) == [10, 10, 20, 30]
+    assert _finished_with(broadcasts)[0] == Checkpoint(
+        cursor_user_id=30, sent=3, failed=0, unreachable=0
+    )
+
+
+async def test_a_not_found_recipient_is_counted_as_failed(
+    settings: Config, i18n: I18n
+) -> None:
+    """One recipient Telegram cannot find must not end the broadcast for the
+    rest."""
+    telegram = FakeTelegramSession()
+    telegram.queue(CopyMessage, TelegramNotFound(method=COPY, message="Not Found"))
+    broadcasts = _broadcasts()
+    status = await _run(settings, i18n, telegram, broadcasts).execute(BROADCAST_ID)
+    assert status == BroadcastStatus.COMPLETED
+    assert _copied_to(telegram) == [10, 20, 30]
+    assert _finished_with(broadcasts)[0] == Checkpoint(
+        cursor_user_id=30, sent=2, failed=1, unreachable=0
+    )
