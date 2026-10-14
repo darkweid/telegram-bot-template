@@ -1,0 +1,129 @@
+# See https://pre-commit.com for more information
+# See https://pre-commit.com/hooks.html for more hooks
+# Use `pre-commit autoupdate` to update dependencies.
+default_language_version:
+  python: python3.13
+repos:
+  - repo: https://github.com/asottile/pyupgrade
+    rev: v3.21.2
+    hooks:
+      - id: pyupgrade
+        args: [ "--py313-plus" ]
+
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: check-added-large-files
+      - id: check-toml
+      - id: check-yaml
+        args:
+          - --unsafe
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+      - id: check-ast
+      - id: debug-statements
+      - id: check-merge-conflict
+      - id: requirements-txt-fixer
+        exclude: ^infra/requirements/.*\.txt$ # Exclude compiled reqs files
+      - id: check-json
+      - id: detect-private-key
+      - id: check-case-conflict
+      - id: mixed-line-ending
+        args: [ --fix=lf ]
+
+  - repo: local
+    hooks:
+      - id: migration-heads
+        name: single alembic head
+        # Alembic answers this too, but only with the project installed and an
+        # .env in place. A second head is born when two branches that each
+        # added a migration meet, which is long before CI sees the result.
+        entry: python scripts/ops/check_migration_heads.py
+        language: python
+        pass_filenames: false
+        files: ^migrations/versions/
+
+      - id: sort-requirements-in
+        name: sort requirements .in
+        entry: python scripts/ops/sort_requirements_in.py
+        language: python
+        files: ^infra/requirements/.*\.in$
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.16.10
+    hooks:
+      - id: ruff
+        args:
+          - --fix
+
+  - repo: https://github.com/psf/black
+    rev: 26.10.1
+    hooks:
+      - id: black
+
+  - repo: https://github.com/myint/autoflake
+    rev: v2.4.0
+    hooks:
+      - id: autoflake
+        # Import removal stays with ruff (F401), which honors noqa and __all__;
+        # autoflake's --remove-all-unused-imports would silently strip re-exports
+        # like the models/__init__.py imports Alembic autogenerate discovers.
+        args: [ --remove-unused-variables ]
+
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v2.4.0
+    hooks:
+      - id: mypy
+        args: [
+          "--install-types",
+          "--non-interactive",
+          "--config-file=mypy.ini"
+        ]
+        exclude: ^(tests/|migrations/)
+        additional_dependencies:
+          - aiogram==3.31.0
+          - alembic==1.20.0
+          - babel==2.18.0
+          - dishka==1.10.1
+          - pydantic==2.13.5
+          - pydantic-settings==2.15.0
+          - pytest==9.1.1
+          - redis==8.1.0
+          - sentry-sdk==2.72.0
+          - sqlalchemy==2.1.4
+          - types-PyYAML==6.0.12.20260906
+
+  # Layering rules (.importlinter): core stays independent of domain packages,
+  # handlers stay away from repositories. Cheap, and the only check that sees
+  # an import cycle forming across packages before it becomes a refactor.
+  - repo: local
+    hooks:
+      - id: import-linter
+        name: import-linter
+        entry: lint-imports
+        language: system
+        pass_filenames: false
+        types: [python]
+
+  # Mirrors CI's `bandit -r src scripts migrations -q`: without it a B-finding
+  # first appears minutes after a push, on a run that is otherwise green.
+  - repo: https://github.com/PyCQA/bandit
+    rev: 1.9.4
+    hooks:
+      - id: bandit
+        args: [ -q ]
+        files: ^(src|scripts|migrations)/
+
+  # Guards any shell script added under infra/ or scripts/: those run on
+  # servers and in containers, where nothing else in this pipeline reads them.
+  - repo: https://github.com/shellcheck-py/shellcheck-py
+    rev: v0.11.0.1-1
+    hooks:
+      - id: shellcheck
+
+  # A typo in an expression or a `needs` entry does not fail the workflow, it
+  # silently stops doing what it was meant to.
+  - repo: https://github.com/rhysd/actionlint
+    rev: v1.7.12
+    hooks:
+      - id: actionlint

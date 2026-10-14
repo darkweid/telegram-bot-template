@@ -1,0 +1,18 @@
+[tool.ruff]
+line-length = 88
+target-version = "py313"
+
+[tool.ruff.lint]
+select = [
+    "E",  # pycodestyle errors
+    "F",  # pyflakes
+    "I",  # isort (import sorting)
+    "B",  # flake8-bugbear
+    "ASYNC",  # flake8-async
+]
+extend-ignore = ["E501"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["loggers", "models", "src", "taskiq_worker"]
+combine-as-imports = true
+force-sort-within-sections = true

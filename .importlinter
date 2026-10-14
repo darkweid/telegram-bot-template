@@ -1,0 +1,20 @@
+# Every new domain package goes into core-is-independent's forbidden_modules and,
+# for its handlers module, into handlers-skip-repositories' source_modules.
+[importlinter]
+root_packages =
+    src
+    loggers
+    models
+# Lets a contract name a third-party package (sqlalchemy below).
+include_external_packages = True
+
+[importlinter:contract:core-is-independent]
+name = src.core does not import domain packages or the composition root
+type = forbidden
+source_modules =
+    src.core
+forbidden_modules =
+    src.main
+    src.user
+    src.system
+    models

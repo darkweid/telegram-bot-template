@@ -1,0 +1,15 @@
+[run]
+source = src
+branch = true
+# __init__.py files are measured too: src/core/i18n/__init__.py holds real code.
+omit =
+    src/main/__main__.py
+
+[report]
+fail_under = 90
+show_missing = true
+skip_covered = true
+exclude_lines =
+    pragma: no cover
+    if __name__ == .__main__.:
+    if TYPE_CHECKING:

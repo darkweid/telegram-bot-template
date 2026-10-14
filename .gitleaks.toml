@@ -1,0 +1,9 @@
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Allow committed example and test-only placeholder secrets."
+paths = [
+  '''^\.env\.example$''',
+  '''^\.env\.test$''',
+]
