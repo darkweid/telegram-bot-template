@@ -51,3 +51,10 @@ msgstr "Запустить бота"
 
 msgid "This language is not available."
 msgstr "Этот язык недоступен."
+
+#, python-brace-format
+msgid "Too many requests. Try again in {seconds} second."
+msgid_plural "Too many requests. Try again in {seconds} seconds."
+msgstr[0] "Слишком много запросов. Попробуйте через {seconds} секунду."
+msgstr[1] "Слишком много запросов. Попробуйте через {seconds} секунды."
+msgstr[2] "Слишком много запросов. Попробуйте через {seconds} секунд."

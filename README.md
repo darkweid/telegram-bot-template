@@ -121,6 +121,16 @@ In the dev stack the worker restarts on a change to a `.py` file under `src/`,
 `loggers/` or `models/`, like the bot. The scheduler does not run under
 watchfiles: after changing a schedule, run `make restart s=scheduler`.
 
+## Throttling
+
+Each user gets `THROTTLE_DEFAULT_LIMIT` handler calls per
+`THROTTLE_DEFAULT_WINDOW_SECONDS` (20 per 60 seconds). Over the limit the bot
+warns once per window and drops the rest. A handler that calls a paid model
+takes the stricter profile with `flags={"throttle": Throttle.LLM}`, limited by
+`THROTTLE_LLM_LIMIT` and `THROTTLE_LLM_WINDOW_SECONDS` (5 per 60 seconds).
+Admins and developers are never limited. Counters live in Redis; while it is
+down each instance counts in memory, so the limit stays.
+
 ## Roles
 
 Two optional roles, set in `.env` as comma-separated Telegram user ids:

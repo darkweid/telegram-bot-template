@@ -210,6 +210,18 @@ class BotConfig(BaseSettings):
         return locale
 
 
+class ThrottlingConfig(BaseSettings):
+    # Handler calls per user per window (src/core/telegram/middlewares/throttling.py).
+    # Admins and developers are never limited.
+    THROTTLE_DEFAULT_LIMIT: int = Field(20, ge=1)
+    THROTTLE_DEFAULT_WINDOW_SECONDS: int = Field(60, ge=1)
+    # Handlers flagged throttle="llm" call a paid model.
+    THROTTLE_LLM_LIMIT: int = Field(5, ge=1)
+    THROTTLE_LLM_WINDOW_SECONDS: int = Field(60, ge=1)
+
+    model_config = SettingsConfigDict(extra="ignore")
+
+
 class WebServerConfig(BaseSettings):
     # The aiohttp server runs in both modes: health endpoints always, the
     # Telegram webhook only when BOT_MODE=webhook. Inside the container it
@@ -288,6 +300,7 @@ class HttpConfig(BaseSettings):
 class Config(BaseModel):
     app: AppConfig
     bot: BotConfig
+    throttling: ThrottlingConfig
     web_server: WebServerConfig
     webhook: WebhookConfig
     postgres: PostgresConfig
@@ -335,6 +348,7 @@ def get_settings() -> Config:
     return Config(
         app=AppConfig(_env_file=env_file),
         bot=BotConfig(_env_file=env_file),
+        throttling=ThrottlingConfig(_env_file=env_file),
         web_server=WebServerConfig(_env_file=env_file),
         webhook=WebhookConfig(_env_file=env_file),
         postgres=PostgresConfig(_env_file=env_file),

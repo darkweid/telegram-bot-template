@@ -416,3 +416,15 @@ def test_cache_default_ttl_may_not_outlive_the_version_counter() -> None:
         ).CACHE_DEFAULT_TTL
         == 100
     )
+
+
+def test_throttling_defaults_match_the_spec(settings: Config) -> None:
+    throttling = settings.throttling
+    assert (
+        throttling.THROTTLE_DEFAULT_LIMIT,
+        throttling.THROTTLE_DEFAULT_WINDOW_SECONDS,
+    ) == (20, 60)
+    assert (throttling.THROTTLE_LLM_LIMIT, throttling.THROTTLE_LLM_WINDOW_SECONDS) == (
+        5,
+        60,
+    )

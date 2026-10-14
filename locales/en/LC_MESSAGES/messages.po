@@ -47,3 +47,9 @@ msgstr ""
 
 msgid "This language is not available."
 msgstr ""
+
+#, python-brace-format
+msgid "Too many requests. Try again in {seconds} second."
+msgid_plural "Too many requests. Try again in {seconds} seconds."
+msgstr[0] ""
+msgstr[1] ""

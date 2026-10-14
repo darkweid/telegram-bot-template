@@ -32,10 +32,17 @@ from src.core.database.uow import SQLAlchemyUnitOfWork
 from src.core.events.registry import set_event_subscribers
 from src.core.http.user_agent import UserAgent, build_user_agent
 from src.core.i18n import LOCALES_DIR, build_i18n
+from src.core.limiter.limiter import RateLimiter
 from src.core.redis.core import create_redis_client
 from src.core.redis.degradation import RedisDegradationReporter
 from src.core.tasks.broker import TasksRedis
 from src.core.telegram.fsm import create_event_isolation, create_fsm_storage
+from src.core.telegram.middlewares.throttling import (
+    Throttle,
+    ThrottleLimiter,
+    ThrottleRule,
+    ThrottlingMiddleware,
+)
 from src.core.telegram.roles import Roles
 from src.core.telegram.session import (
     ForbiddenMiddleware,
@@ -50,6 +57,7 @@ from src.main.config import (
     HttpConfig,
     PostgresConfig,
     RedisConfig,
+    ThrottlingConfig,
     WebhookConfig,
     WebServerConfig,
 )
@@ -70,6 +78,10 @@ class ConfigProvider(Provider):
     @provide
     def bot(self, config: Config) -> BotConfig:
         return config.bot
+
+    @provide
+    def throttling(self, config: Config) -> ThrottlingConfig:
+        return config.throttling
 
     @provide
     def roles(self, bot: BotConfig) -> Roles:
@@ -185,6 +197,38 @@ class CacheProvider(Provider):
         )
 
 
+class ThrottlingProvider(Provider):
+    scope = Scope.APP
+
+    @provide
+    def limiter(self, redis: Redis) -> ThrottleLimiter:
+        return ThrottleLimiter(
+            RateLimiter(
+                redis,
+                prefix="throttle",
+                reporter=RedisDegradationReporter("Throttling"),
+            )
+        )
+
+    @provide
+    def middleware(
+        self, limiter: ThrottleLimiter, throttling: ThrottlingConfig
+    ) -> ThrottlingMiddleware:
+        return ThrottlingMiddleware(
+            limiter,
+            {
+                Throttle.DEFAULT: ThrottleRule(
+                    throttling.THROTTLE_DEFAULT_LIMIT,
+                    throttling.THROTTLE_DEFAULT_WINDOW_SECONDS,
+                ),
+                Throttle.LLM: ThrottleRule(
+                    throttling.THROTTLE_LLM_LIMIT,
+                    throttling.THROTTLE_LLM_WINDOW_SECONDS,
+                ),
+            },
+        )
+
+
 class TelegramProvider(Provider):
     scope = Scope.APP
 
@@ -251,6 +295,7 @@ def build_container(
         DatabaseProvider(),
         RedisProvider(),
         CacheProvider(),
+        ThrottlingProvider(),
         TelegramProvider(),
         I18nProvider(),
         HttpProvider(),

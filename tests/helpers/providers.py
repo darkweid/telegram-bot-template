@@ -6,9 +6,13 @@ from aiogram.fsm.storage.memory import MemoryStorage, SimpleEventIsolation
 from aiogram.utils.i18n import I18n
 from dishka import AsyncContainer, Provider, Scope, provide
 
+from src.core.limiter.limiter import RateLimiter
+from src.core.redis.degradation import RedisDegradationReporter
+from src.core.telegram.middlewares.throttling import ThrottleLimiter
 from src.core.telegram.session import UnreachableUserRecorder
 from src.main.config import Config
 from src.main.di import build_container
+from tests.fakes.redis import InMemoryRedis
 from tests.fakes.telegram import FakeTelegramSession
 
 
@@ -55,6 +59,17 @@ class TestOverrides(Provider):
     @provide(override=True)
     def unreachable_recorder(self) -> UnreachableUserRecorder:
         return self.recorder
+
+    @provide(override=True)
+    def throttle_limiter(self) -> ThrottleLimiter:
+        # A fake per container: tests never share counters or reach Redis.
+        return ThrottleLimiter(
+            RateLimiter(
+                InMemoryRedis(),
+                prefix="throttle",
+                reporter=RedisDegradationReporter("Throttling"),
+            )
+        )
 
 
 def build_test_container(

@@ -13,6 +13,7 @@ from src.core.telegram.errors import build_errors_router
 from src.core.telegram.middlewares.callback_answer import (
     SkipAwareCallbackAnswerMiddleware,
 )
+from src.core.telegram.middlewares.throttling import ThrottlingMiddleware
 from src.core.telegram.middlewares.update_context import UpdateContextMiddleware
 from src.core.telegram.roles import Roles
 from src.developer.handlers import build_developer_router
@@ -31,6 +32,9 @@ async def create_dispatcher(container: AsyncContainer) -> Dispatcher:
        handler shares;
     3. UserMiddleware - stores the sender, needs the request scope;
     4. UserLocaleMiddleware - needs the stored user's chosen language.
+
+    Inner middlewares on message and callback_query: the callback answer
+    middleware, then ThrottlingMiddleware.
 
     Role routers come before the user router: an admin's command must reach the
     admin handler even when a user handler would match it too.
@@ -56,6 +60,11 @@ async def create_dispatcher(container: AsyncContainer) -> Dispatcher:
     # matches whatever no other router took: a stale button, a group chat or
     # an inline message.
     dp.callback_query.middleware(SkipAwareCallbackAnswerMiddleware())
+    # Inner, after the callback answer middleware: a throttled callback still
+    # gets its one answer, carrying the warning.
+    throttling = await container.get(ThrottlingMiddleware)
+    dp.message.middleware(throttling)
+    dp.callback_query.middleware(throttling)
     dp.include_routers(
         build_errors_router(),
         build_admin_router(),

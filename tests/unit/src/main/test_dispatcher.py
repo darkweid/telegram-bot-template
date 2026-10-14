@@ -17,6 +17,7 @@ from src.core.i18n.middleware import UserLocaleMiddleware
 from src.core.telegram.middlewares.callback_answer import (
     SkipAwareCallbackAnswerMiddleware,
 )
+from src.core.telegram.middlewares.throttling import ThrottlingMiddleware
 from src.core.telegram.middlewares.update_context import UpdateContextMiddleware
 from src.core.telegram.roles import Roles
 from src.main.config import Config
@@ -44,7 +45,11 @@ async def test_middlewares_run_in_the_documented_order(
             UserLocaleMiddleware,
         ]
         assert [type(m) for m in running.dp.callback_query.middleware] == [
-            SkipAwareCallbackAnswerMiddleware
+            SkipAwareCallbackAnswerMiddleware,
+            ThrottlingMiddleware,
+        ]
+        assert [type(m) for m in running.dp.message.middleware] == [
+            ThrottlingMiddleware
         ]
         assert isinstance(running.dp.fsm.storage, MemoryStorage)
 
