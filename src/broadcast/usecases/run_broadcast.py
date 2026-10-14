@@ -318,6 +318,9 @@ class RunBroadcastUseCase:
             await uow.commit()
         if not finished:
             logger.warning("Broadcast %s was taken over before it finished", run.id)
+        elif status == BroadcastStatus.COMPLETED:
+            # The report shows what the repository stored.
+            run.total = run.checkpoint().processed
         return finished
 
     async def _fail(self, run: _Run) -> None:

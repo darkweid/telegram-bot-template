@@ -119,6 +119,35 @@ async def test_a_stop_reaches_the_run_and_ends_with_the_broadcast(
     )
 
 
+@pytest.mark.parametrize(
+    ("status", "total"),
+    [(BroadcastStatus.COMPLETED, 4), (BroadcastStatus.CANCELLED, 10)],
+)
+async def test_a_completed_broadcast_totals_the_users_it_walked(
+    db_session: AsyncSession, status: BroadcastStatus, total: int
+) -> None:
+    """Recipients are counted at start and the walk is the truth: users who
+    turned reachable or unreachable mid-run change who is walked. A stopped
+    broadcast keeps the count it was started with, to show how far it got."""
+    broadcasts = BroadcastRepository()
+    row = await _broadcast(db_session)
+    run_id = uuid4()
+    await broadcasts.claim_run(
+        db_session, row.id, run_id, now=NOW, stale_before=NOW - STALE_AFTER
+    )
+    finished = await broadcasts.finish(
+        db_session,
+        row.id,
+        run_id,
+        checkpoint=Checkpoint(cursor_user_id=9, sent=2, failed=1, unreachable=1),
+        status=status,
+        now=NOW,
+    )
+    assert finished is True
+    await db_session.refresh(row)
+    assert (row.status, row.total) == (status, total)
+
+
 async def test_stalled_broadcasts_are_found_and_live_ones_are_not(
     db_session: AsyncSession,
 ) -> None:

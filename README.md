@@ -270,6 +270,12 @@ the original message until the broadcast has finished: every copy is made from
 it, and if it is gone, the broadcast stops as failed and developers are
 alerted.
 
+The total in the progress message is the number of recipients when Send was
+pressed. Users are walked in order of their id, so one who unblocks the bot
+mid-run is reached too and one who blocks it or is banned is skipped; the
+progress never reads past its total, and the final report of a completed
+broadcast counts the users who were actually walked.
+
 The worker sends `BROADCAST_RATE_PER_SECOND` messages a second (25 by default;
 Telegram allows about 30 to different users) and saves its position every
 `BROADCAST_CHECKPOINT_EVERY` recipients (50) and at least once a minute. If the

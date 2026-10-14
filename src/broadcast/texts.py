@@ -15,8 +15,10 @@ TITLES: dict[BroadcastStatus, str] = {
 
 def progress_text(progress: BroadcastProgress) -> str:
     """The progress message while the broadcast runs, and its final report."""
+    # The total is counted at start; a user who turns reachable mid-run is
+    # walked too, and "1001 of 1000" would read as a bug.
     title = _(TITLES[progress.status]).format(
-        processed=progress.processed, total=progress.total
+        processed=progress.processed, total=max(progress.total, progress.processed)
     )
     counters = _("Sent: {sent}\nUnreachable: {unreachable}\nFailed: {failed}").format(
         sent=progress.sent, unreachable=progress.unreachable, failed=progress.failed

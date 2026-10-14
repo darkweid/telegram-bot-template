@@ -13,6 +13,10 @@ class Checkpoint:
     failed: int
     unreachable: int
 
+    @property
+    def processed(self) -> int:
+        return self.sent + self.failed + self.unreachable
+
 
 @dataclass(frozen=True, slots=True)
 class BroadcastProgress:

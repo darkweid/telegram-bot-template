@@ -94,7 +94,19 @@ class BroadcastRepository(BaseRepository[Broadcast]):
         status: BroadcastStatus,
         now: datetime,
     ) -> bool:
-        """Close the broadcast with its final counts; False when the lease was lost."""
+        """Close the broadcast with its final counts; False when the lease was lost.
+
+        A completed broadcast's total becomes the number of users the walk
+        handled: the recipients are counted at start, and a user who turns
+        reachable or unreachable mid-run is walked or skipped all the same.
+        """
+        values = asdict(checkpoint) | {
+            "status": status,
+            "checkpoint_at": now,
+            "finished_at": now,
+        }
+        if status == BroadcastStatus.COMPLETED:
+            values["total"] = checkpoint.processed
         query = (
             update(Broadcast)
             .where(
@@ -102,9 +114,7 @@ class BroadcastRepository(BaseRepository[Broadcast]):
                 Broadcast.run_id == run_id,
                 Broadcast.status == BroadcastStatus.RUNNING,
             )
-            .values(
-                **asdict(checkpoint), status=status, checkpoint_at=now, finished_at=now
-            )
+            .values(**values)
             .returning(Broadcast.id)
         )
         return await session.scalar(query) is not None

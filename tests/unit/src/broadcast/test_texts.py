@@ -28,6 +28,15 @@ def test_the_report_counts_every_outcome(i18n: I18n) -> None:
     assert text == "Рассылка завершена: 4 из 4\nДоставлено: 2\nНедоступны: 1\nОшибки: 1"
 
 
+def test_the_progress_never_reads_past_its_total(i18n: I18n) -> None:
+    """The total is counted at start; a user who turns reachable mid-run is
+    walked too."""
+    progress = BroadcastProgress(BROADCAST_ID, BroadcastStatus.RUNNING, total=2, sent=3)
+    with i18n.context(), i18n.use_locale("en"):
+        text = progress_text(progress)
+    assert text.startswith("Broadcast in progress: 3 of 3\n")
+
+
 def test_the_preview_count_is_pluralised(i18n: I18n) -> None:
     with i18n.context(), i18n.use_locale("ru"):
         texts = [preview_text(count) for count in (1, 3, 5)]

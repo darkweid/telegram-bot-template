@@ -176,6 +176,42 @@ async def test_a_broadcast_reaches_every_recipient_and_reports(
     assert (report.chat_id, report.text) == (ADMIN, FINISHED)
 
 
+async def test_a_user_who_turned_reachable_mid_run_never_reads_as_over_the_total(
+    settings: Config, i18n: I18n, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The total is counted at start and the walk picks up a user unblocked
+    since: "3 of 2" in the progress or the report would read as a bug."""
+    monkeypatch.setattr(run_module, "PROGRESS_EDIT_INTERVAL_SECONDS", 0)
+    telegram = FakeTelegramSession()
+    broadcasts = _broadcasts()
+    broadcasts.claim_run.return_value = _broadcast(total=2)
+    await _run(settings, i18n, telegram, broadcasts).execute(BROADCAST_ID)
+    titles = [edit.text.split("\n")[0] for edit in telegram.sent(EditMessageText)]
+    assert titles == [
+        "Broadcast in progress: 0 of 2",
+        "Broadcast in progress: 1 of 2",
+        "Broadcast in progress: 2 of 2",
+        "Broadcast in progress: 3 of 3",
+        "Broadcast finished: 3 of 3",
+    ]
+    [report] = telegram.sent(SendMessage)
+    assert report.text == FINISHED
+
+
+async def test_a_user_who_left_mid_run_is_dropped_from_the_final_total(
+    settings: Config, i18n: I18n
+) -> None:
+    """A user blocked or banned since the start is skipped by the walk; a
+    completed broadcast reading "3 of 5" would look cut short."""
+    telegram = FakeTelegramSession()
+    broadcasts = _broadcasts()
+    broadcasts.claim_run.return_value = _broadcast(total=5)
+    status = await _run(settings, i18n, telegram, broadcasts).execute(BROADCAST_ID)
+    assert status == BroadcastStatus.COMPLETED
+    [report] = telegram.sent(SendMessage)
+    assert report.text == FINISHED
+
+
 async def test_progress_is_checkpointed_after_every_batch(
     settings: Config, i18n: I18n
 ) -> None:
