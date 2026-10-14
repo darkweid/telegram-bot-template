@@ -51,10 +51,10 @@ async def test_a_new_window_opens_after_the_key_expires(
     """A limiter that never reopens its window would lock a user out for good;
     both the script and its emulation must start over once the key is gone."""
     limiter = await _limiter(backend)
-    assert await limiter.hit("key", limit=1, window_ms=30) == 0
-    assert await limiter.hit("key", limit=1, window_ms=30) > 0
-    await asyncio.sleep(0.1)
-    assert await limiter.hit("key", limit=1, window_ms=30) == 0
+    assert await limiter.hit("key", limit=1, window_ms=300) == 0
+    assert await limiter.hit("key", limit=1, window_ms=300) > 0
+    await asyncio.sleep(0.5)
+    assert await limiter.hit("key", limit=1, window_ms=300) == 0
 
 
 @pytest.mark.parametrize("backend", BACKENDS, indirect=True)
@@ -64,9 +64,9 @@ async def test_the_window_key_expires(backend: Redis | InMemoryRedis) -> None:
     limiter = RateLimiter(
         backend, prefix=prefix, reporter=RedisDegradationReporter("RateLimiter")
     )
-    await limiter.hit("key", limit=1, window_ms=30)
-    assert 0 < await backend.pttl(f"{prefix}:key") <= 30
-    await asyncio.sleep(0.1)
+    await limiter.hit("key", limit=1, window_ms=300)
+    assert 0 < await backend.pttl(f"{prefix}:key") <= 300
+    await asyncio.sleep(0.5)
     assert await backend.pttl(f"{prefix}:key") == -2
 
 

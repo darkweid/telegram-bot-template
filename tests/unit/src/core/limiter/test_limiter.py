@@ -148,3 +148,16 @@ async def test_a_meaningless_limit_is_rejected(
 ) -> None:
     with pytest.raises(ValueError):
         await _limiter(redis).hit("a", limit=limit, window_ms=window_ms)
+
+
+async def test_a_full_fallback_evicts_the_oldest_inserted_window(
+    redis: InMemoryRedis, sentry_capture: MagicMock
+) -> None:
+    """Eviction is O(1) by insertion order, not by earliest expiry: a flood of
+    new keys must not cost a scan per key. This pins that accepted trade-off."""
+    limiter = _limiter(redis, fallback_max_entries=2)
+    redis.fail_next_commands(3)
+    await limiter.hit("long", limit=1, window_ms=60_000)
+    await limiter.hit("short", limit=1, window_ms=1_000)
+    await limiter.hit("new", limit=1, window_ms=1_000)
+    assert list(limiter._fallback_windows) == ["short", "new"]
