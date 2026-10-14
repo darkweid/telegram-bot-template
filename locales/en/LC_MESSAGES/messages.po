@@ -16,7 +16,33 @@ msgstr ""
 "Content-Transfer-Encoding: 8bit\n"
 "Generated-By: Babel 2.18.0\n"
 
+msgid "Change language"
+msgstr ""
+
+msgid "Choose your language:"
+msgstr ""
+
+msgid "Commands:"
+msgstr ""
+
+#, python-brace-format
+msgid ""
+"Hello, {name}!\n"
+"\n"
+"Send /help to see what I can do."
+msgstr ""
+
+#, python-brace-format
+msgid "Language: {language}"
+msgstr ""
+
+msgid "Show help"
+msgstr ""
+
 msgid "Something went wrong. Please try again later."
+msgstr ""
+
+msgid "Start the bot"
 msgstr ""
 
 msgid "This language is not available."

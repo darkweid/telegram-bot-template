@@ -18,3 +18,15 @@ forbidden_modules =
     src.user
     src.system
     models
+
+[importlinter:contract:handlers-skip-repositories]
+name = Handlers reach data through use cases, never through repositories
+type = forbidden
+source_modules =
+    src.user.handlers
+forbidden_modules =
+    src.user.repositories
+    sqlalchemy
+# Only direct imports count: a handler calls a use case, and the use case
+# reaching repositories and SQLAlchemy is the point of having one.
+allow_indirect_imports = True
