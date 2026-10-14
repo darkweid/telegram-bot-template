@@ -26,6 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from src.core.database.engine import create_engine
 from src.core.database.uow import SQLAlchemyUnitOfWork
+from src.core.events.registry import set_event_subscribers
 from src.core.http.user_agent import UserAgent, build_user_agent
 from src.core.i18n import LOCALES_DIR, build_i18n
 from src.core.redis.core import create_redis_client
@@ -46,6 +47,7 @@ from src.main.config import (
     WebhookConfig,
     WebServerConfig,
 )
+from src.main.event_subscribers import EVENT_SUBSCRIBERS
 from src.system.di import SystemProvider
 from src.user.di import UserProvider
 
@@ -116,7 +118,11 @@ class DatabaseProvider(Provider):
 
     # Not cached: a unit of work is single-use, and one update can run several
     # use cases (UserMiddleware's, then the handler's) over its one session.
-    uow = provide(SQLAlchemyUnitOfWork, scope=Scope.REQUEST, cache=False)
+    @provide(scope=Scope.REQUEST, cache=False)
+    def uow(self, session: AsyncSession) -> SQLAlchemyUnitOfWork:
+        # An explicit factory: given the class, dishka would look for a factory
+        # of the constructor's optional `publisher` and refuse to build.
+        return SQLAlchemyUnitOfWork(session)
 
 
 class RedisProvider(Provider):
@@ -198,6 +204,9 @@ class HttpProvider(Provider):
 
 def build_container(config: Config, *providers: Provider) -> AsyncContainer:
     """The bot's container. `providers` override production ones in tests."""
+    # Every process that builds a container (bot, worker, tests) runs the
+    # same subscribers; the registry is replaced, never merged.
+    set_event_subscribers(EVENT_SUBSCRIBERS)
     return make_async_container(
         ConfigProvider(),
         DatabaseProvider(),

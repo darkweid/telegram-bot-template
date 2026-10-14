@@ -87,6 +87,7 @@ repos:
           - redis==8.1.0
           - sentry-sdk==2.72.0
           - sqlalchemy==2.1.4
+          - uuid6==2025.0.1
 
   # Layering rules (.importlinter): core stays independent of domain packages,
   # handlers stay away from repositories. Cheap, and the only check that sees

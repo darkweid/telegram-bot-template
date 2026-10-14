@@ -14,8 +14,11 @@ from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
 from src.core.database.uow import SQLAlchemyUnitOfWork
+from src.core.events.registry import event_subscribers, set_event_subscribers
+from src.core.events.schemas import DomainEvent
 from src.core.http.user_agent import UserAgent
 from src.core.telegram.session import ForbiddenMiddleware, RetryAfterMiddleware
+from src.main import di as di_module
 from src.main.config import BotConfig, Config
 from src.main.di import build_container
 from src.system.repositories import SystemRepository
@@ -92,6 +95,22 @@ async def test_each_unit_of_work_of_a_request_runs_on_its_one_session(
             assert await second.get(SQLAlchemyUnitOfWork) is not uow
     finally:
         await container.close()
+
+
+async def test_building_a_container_installs_the_event_subscribers(
+    settings: Config, i18n: I18n, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def subscriber(*_: object) -> None:
+        return None
+
+    marker = {DomainEvent: [subscriber]}
+    monkeypatch.setattr(di_module, "EVENT_SUBSCRIBERS", marker)
+    container = build_test_container(settings, FakeTelegramSession(), i18n)
+    try:
+        assert event_subscribers() == {DomainEvent: (subscriber,)}
+    finally:
+        await container.close()
+        set_event_subscribers({})
 
 
 async def test_closing_the_container_releases_the_bot_session(

@@ -1,9 +1,18 @@
 from collections.abc import Awaitable, Callable, Sequence
+from functools import partial
 from typing import Any, Self
+from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
+import uuid6
 
 from loggers import get_logger
+from src.core.events.registry import event_subscribers
+from src.core.events.schemas import Actor, DomainEvent, PublishedEvent
+from src.core.outbox.interface import TaskPublisher
+from src.core.outbox.payload import ensure_json_payload
+from src.core.outbox.repositories import OutboxRepository
+from src.core.utils.datetime_utils import get_utc_now
 
 logger = get_logger(__name__)
 
@@ -21,10 +30,15 @@ class SQLAlchemyUnitOfWork:
     explicit: leaving the context without calling commit() rolls the
     transaction back, whether the block raised or returned normally. Any later
     `uow.*` call raises RuntimeError.
+
+    `publish` runs domain event subscribers in the transaction; `enqueue_task`
+    stores a background task as an outbox row and sends it after commit.
     """
 
-    def __init__(self, session: AsyncSession):
+    def __init__(self, session: AsyncSession, publisher: TaskPublisher | None = None):
         self._session = session
+        self._publisher = publisher
+        self._outbox = OutboxRepository()
         self._is_completed = False
         self._after_commit_hooks: list[AfterCommitHook] = []
 
@@ -114,6 +128,49 @@ class SQLAlchemyUnitOfWork:
             attribute_names=attribute_names,
             with_for_update=with_for_update,
         )
+
+    async def publish(self, actor: Actor, event: DomainEvent) -> None:
+        """Run the event's subscribers now, in this transaction: whatever they
+        write commits or rolls back with the action that caused the event."""
+        self._ensure_active()
+        published = PublishedEvent(event=event, actor=actor, occurred_at=get_utc_now())
+        for subscriber in event_subscribers().get(type(event), ()):
+            await subscriber(self, published)
+
+    async def enqueue_task(self, task_name: str, *args: Any, **kwargs: Any) -> UUID:
+        """Store a background task in the outbox, in this transaction.
+
+        After commit the publisher sends it; when there is no publisher, or the
+        send fails, the outbox sweeper sends it within a couple of minutes.
+        Arguments must survive a JSON round-trip unchanged: ids and plain
+        values. The row id is the task id the worker deduplicates on.
+        """
+        self._ensure_active()
+        ensure_json_payload(task_name, args, kwargs)
+        # Generated here, not by the column default: the after-commit hook
+        # needs it before any flush.
+        message_id = uuid6.uuid7()
+        await self._outbox.create(
+            self._session,
+            {
+                "id": message_id,
+                "task_name": task_name,
+                "args": list(args),
+                "kwargs": kwargs,
+            },
+        )
+        if self._publisher is not None:
+            self.add_after_commit_hook(
+                partial(
+                    self._publisher.publish, message_id, task_name, list(args), kwargs
+                )
+            )
+        return message_id
+
+    def _ensure_active(self) -> None:
+        self._ensure_not_completed()
+        if not self._session.info.get("uow_active"):
+            raise RuntimeError("Call this inside `async with uow:`")
 
     async def _run_after_commit_hooks(self) -> None:
         hooks, self._after_commit_hooks = self._after_commit_hooks, []
