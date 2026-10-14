@@ -28,6 +28,22 @@ pull requests.
 - Flood-control retries: a Bot API call that hits `RetryAfter` waits as long
   as Telegram asks and tries again, up to `TELEGRAM_RETRY_ATTEMPTS` times. All
   calls of one update share 30 seconds of waiting.
+- Roles from configuration: admins (`ADMIN_IDS`) ban and unban users, see
+  user statistics and send broadcasts; developers (`DEVELOPER_IDS`) get alerts
+  and `/status`. Each role sees its own command menu.
+- Per-user throttling with named profiles (`THROTTLE_*`); admins and
+  developers are not limited.
+- Background tasks on taskiq over a Redis stream: a `worker` and a single
+  `scheduler`. A use case queues a task through a transactional outbox, so a
+  task runs only for work that was committed.
+- Admins are told when a new user starts the bot
+  (`NOTIFY_ADMINS_ON_NEW_USER`).
+- Developer alerts in Telegram for unexpected errors, tasks that failed for
+  good and Redis degradation, once per `ALERT_COOLDOWN_SECONDS` for the same
+  error.
+- Broadcasts to every reachable user, paced under Telegram's limit, with live
+  progress and a Stop button, resumed from the last checkpoint after a worker
+  restart.
 - A global error handler that logs the failure, answers the user in their
   Telegram language, and reports unexpected errors to Sentry.
 - `/live`, `/ready` and `/health` probes in both modes; `/health` also reports
@@ -46,7 +62,7 @@ pull requests.
 ```mermaid
 flowchart LR
     TG[Telegram] -->|getUpdates or webhook| DP[Dispatcher]
-    DP --> MW["Middlewares<br/>context · dishka · user · locale"]
+    DP --> MW["Middlewares<br/>context · dishka · user · locale · ban · throttling"]
     MW --> H[Handlers]
     H --> UC[Use cases]
     UC --> R[Repositories]
@@ -54,10 +70,19 @@ flowchart LR
     DP --> FSM[("Redis<br/>FSM state")]
     H -->|replies| S["Bot API session<br/>flood retries · reachability"]
     S --> TG
+    UC -->|outbox row| R
+    PG -->|after commit or sweep| Q[("Redis<br/>task stream")]
+    SC[Scheduler] --> Q
+    Q --> W[Worker]
+    W --> UC
+    W --> S
 ```
 
 Handlers are thin and get their use cases from the dishka container. A use
 case owns the transaction through a unit of work. Repositories hold all SQL.
+
+Background work follows the same path: the worker runs a task through a use
+case from the same container, and the scheduler only queues tasks.
 
 ## Quick start (polling)
 
@@ -102,86 +127,46 @@ Put a reverse proxy with a valid certificate in front of the bot and forward
 `tg-bot-template-network` Docker network. The compose file publishes no port
 of the bot.
 
-## Health
+## Roles
 
-The bot serves three probes on `WEB_SERVER_PORT` in both modes, on the compose
-network only:
+Two optional roles, set in `.env` as comma-separated Telegram user ids:
 
-- `/live` answers 200 while the process runs; the Docker healthcheck reads it.
-- `/ready` answers 200 when PostgreSQL and every Redis database (cache, FSM
-  state, task queue) answer, and 503 otherwise.
-- `/health` always answers 200 with a JSON report: `status` (`ok` or
-  `degraded`), `version`, `commit`, `mode`, `postgres`, `redis`,
-  `redis_memory_used_ratio`, `outbox_pending`, `outbox_oldest_pending_seconds`,
-  `task_queue_length` and `scheduler_heartbeat_age_seconds`. A reading that
-  failed or timed out is `null`, and so is every Redis reading while any
-  Redis database is down.
+- `ADMIN_IDS`: admins get the admin commands;
+- `DEVELOPER_IDS`: developers get the developer commands: `/status` shows the
+  `/health` report, `/test_alert` sends a test alert the way real alerts go,
+  past the cooldown.
 
-`task_queue_length` is the workers' backlog: tasks their consumer group has
-not delivered yet plus those delivered and not acknowledged. It is not the
-stream's length, which keeps acknowledged tasks until the stream is trimmed.
-It is `null` when Redis cannot count the undelivered ones, which happens after
-some trims and deletions.
+Both skip throttling and bans. Each listed id gets a command menu of its own in
+its private chat: the user commands plus those of its roles. An id that never
+opened the bot cannot get a menu yet; the bot logs one warning and starts
+anyway, and the menu is set on the next start after that user opens the bot.
 
-`/health` reports `degraded` when PostgreSQL or Redis is down, when Redis is at
-90% of `maxmemory`, when the scheduler has not beaten for more than 90 seconds
-(no cron task, delayed retry or outbox sweep runs without it), or when an
-outbox row has waited for publishing longer than 5 minutes. The task queue
-never changes the status: there is no backlog that is wrong for every bot.
-Developers see the same report with `/status`.
+Admins ban and unban users with `/ban` and `/unban`, followed by a Telegram
+user id or `@username` (matched ignoring case; a username that several stored
+users have had is refused, use the id). Only users who have started the bot
+can be named. Admins and developers cannot be banned, and nobody bans
+themselves. A banned user's updates are dropped without an answer. A role
+beats a ban: someone banned before their id was added to `ADMIN_IDS` or
+`DEVELOPER_IDS` is served as usual.
 
-## Alerts
+Admins also get `/stats`: users in total, reachable, banned, and active and
+new in the last 1, 7 and 30 days.
 
-The bot and the worker tell developers in Telegram when:
+The role menus are set for each listed id on every start. Removing an id from
+`ADMIN_IDS` or `DEVELOPER_IDS` takes the role away at once, but Telegram keeps
+showing that user the old menu: the bot never deletes a menu it set. Clear it
+once by hand with `deleteMyCommands` for the scope
+`{"type": "chat", "chat_id": <id>}` and every language code the bot set.
 
-- a handler raises an unexpected error (a `CoreException` is an expected
-  refusal and alerts nobody);
-- a task fails for good, after its last retry;
-- Redis goes down under the cache or the throttle limiter, and again when it
-  recovers.
+## Throttling
 
-Alerts go to `DEV_ALERT_CHAT_ID`, a group or channel id, when it is set, and
-otherwise to each of `DEVELOPER_IDS` in private. The bot must be a member of
-the alert chat, and a developer must have opened the bot: an alert Telegram
-refuses is logged and nothing more.
-
-An error alert carries the error type, its message after scrubbing (cut to
-500 characters), where it was raised, what was being handled (`update message`,
-`task <name>`), the user id or task id, and the Sentry event id when Sentry is
-on. It never carries what the user sent or their name. The same failure (type,
-place and origin) is alerted once per `ALERT_COOLDOWN_SECONDS` (300), and a
-task once however often it is redelivered.
-
-## Broadcast
-
-`/broadcast` (admins) sends one message to every user who can receive it:
-reachable and not banned.
-
-1. Send `/broadcast`, then the message: text, a photo or video with a caption,
-   a document. Albums are refused. The bot shows an exact copy and the number of
-   recipients.
-2. Press Send. The bot copies the message to every recipient and keeps a
-   progress message with a Stop button, updated at most every 5 seconds. When
-   the broadcast ends, the progress message turns into the report and the bot
-   sends the report again, so the admin gets a notification.
-
-Only one broadcast runs at a time. It goes to the users the bot had when Send
-was pressed; someone who starts the bot later does not get it. Do not delete
-the original message until the broadcast has finished: every copy is made from
-it, and if it is gone, the broadcast stops as failed and developers are
-alerted.
-
-The worker sends `BROADCAST_RATE_PER_SECOND` messages a second (25 by default;
-Telegram allows about 30 to different users) and saves its position every
-`BROADCAST_CHECKPOINT_EVERY` recipients (50) and at least once a minute. If the
-worker stops mid-broadcast, a scheduled task resumes it within about five
-minutes from the last saved position, so up to `BROADCAST_CHECKPOINT_EVERY`
-users may get the message twice. Stop takes effect at the next save, within
-about a minute, flood waits included.
-
-A user who blocked the bot is counted as unreachable and marked so; a chat
-Telegram cannot find counts as failed. Network errors are retried. Anything
-else marks the broadcast failed, sends the report and alerts developers.
+Each user gets `THROTTLE_DEFAULT_LIMIT` handler calls per
+`THROTTLE_DEFAULT_WINDOW_SECONDS` (20 per 60 seconds). Over the limit the bot
+warns once per window and drops the rest. A handler that calls a paid model
+takes the stricter profile with `flags={"throttle": Throttle.LLM}`, limited by
+`THROTTLE_LLM_LIMIT` and `THROTTLE_LLM_WINDOW_SECONDS` (5 per 60 seconds).
+Admins and developers are never limited. Counters live in Redis; while it is
+down each instance counts in memory, so the limit stays.
 
 ## Background tasks
 
@@ -239,46 +224,86 @@ language. The task is not retried: a retry would repeat the message to the
 admins who already got it. `NOTIFY_ADMINS_ON_NEW_USER=false` keeps the event
 and the task and sends nothing.
 
-## Throttling
+## Alerts
 
-Each user gets `THROTTLE_DEFAULT_LIMIT` handler calls per
-`THROTTLE_DEFAULT_WINDOW_SECONDS` (20 per 60 seconds). Over the limit the bot
-warns once per window and drops the rest. A handler that calls a paid model
-takes the stricter profile with `flags={"throttle": Throttle.LLM}`, limited by
-`THROTTLE_LLM_LIMIT` and `THROTTLE_LLM_WINDOW_SECONDS` (5 per 60 seconds).
-Admins and developers are never limited. Counters live in Redis; while it is
-down each instance counts in memory, so the limit stays.
+The bot and the worker tell developers in Telegram when:
 
-## Roles
+- a handler raises an unexpected error (a `CoreException` is an expected
+  refusal and alerts nobody);
+- a task fails for good, after its last retry;
+- Redis goes down under the cache or the throttle limiter, and again when it
+  recovers.
 
-Two optional roles, set in `.env` as comma-separated Telegram user ids:
+Alerts go to `DEV_ALERT_CHAT_ID`, a group or channel id, when it is set, and
+otherwise to each of `DEVELOPER_IDS` in private. The bot must be a member of
+the alert chat, and a developer must have opened the bot: an alert Telegram
+refuses is logged and nothing more.
 
-- `ADMIN_IDS`: admins get the admin commands;
-- `DEVELOPER_IDS`: developers get the developer commands: `/status` shows the
-  `/health` report, `/test_alert` sends a test alert the way real alerts go,
-  past the cooldown.
+An error alert carries the error type, its message after scrubbing (cut to
+500 characters), where it was raised, what was being handled (`update message`,
+`task <name>`), the user id or task id, and the Sentry event id when Sentry is
+on. It never carries what the user sent or their name. The same failure (type,
+place and origin) is alerted once per `ALERT_COOLDOWN_SECONDS` (300), and a
+task once however often it is redelivered.
 
-Both skip throttling and bans. Each listed id gets a command menu of its own in
-its private chat: the user commands plus those of its roles. An id that never
-opened the bot cannot get a menu yet; the bot logs one warning and starts
-anyway, and the menu is set on the next start after that user opens the bot.
+## Broadcast
 
-Admins ban and unban users with `/ban` and `/unban`, followed by a Telegram
-user id or `@username` (matched ignoring case; a username that several stored
-users have had is refused, use the id). Only users who have started the bot
-can be named. Admins and developers cannot be banned, and nobody bans
-themselves. A banned user's updates are dropped without an answer. A role
-beats a ban: someone banned before their id was added to `ADMIN_IDS` or
-`DEVELOPER_IDS` is served as usual.
+`/broadcast` (admins) sends one message to every user who can receive it:
+reachable and not banned.
 
-Admins also get `/stats`: users in total, reachable, banned, and active and
-new in the last 1, 7 and 30 days.
+1. Send `/broadcast`, then the message: text, a photo or video with a caption,
+   a document. Albums are refused. The bot shows an exact copy and the number of
+   recipients.
+2. Press Send. The bot copies the message to every recipient and keeps a
+   progress message with a Stop button, updated at most every 5 seconds. When
+   the broadcast ends, the progress message turns into the report and the bot
+   sends the report again, so the admin gets a notification.
 
-The role menus are set for each listed id on every start. Removing an id from
-`ADMIN_IDS` or `DEVELOPER_IDS` takes the role away at once, but Telegram keeps
-showing that user the old menu: the bot never deletes a menu it set. Clear it
-once by hand with `deleteMyCommands` for the scope
-`{"type": "chat", "chat_id": <id>}` and every language code the bot set.
+Only one broadcast runs at a time. It goes to the users the bot had when Send
+was pressed; someone who starts the bot later does not get it. Do not delete
+the original message until the broadcast has finished: every copy is made from
+it, and if it is gone, the broadcast stops as failed and developers are
+alerted.
+
+The worker sends `BROADCAST_RATE_PER_SECOND` messages a second (25 by default;
+Telegram allows about 30 to different users) and saves its position every
+`BROADCAST_CHECKPOINT_EVERY` recipients (50) and at least once a minute. If the
+worker stops mid-broadcast, a scheduled task resumes it within about five
+minutes from the last saved position, so up to `BROADCAST_CHECKPOINT_EVERY`
+users may get the message twice. Stop takes effect at the next save, within
+about a minute, flood waits included.
+
+A user who blocked the bot is counted as unreachable and marked so; a chat
+Telegram cannot find counts as failed. Network errors are retried. Anything
+else marks the broadcast failed, sends the report and alerts developers.
+
+## Health
+
+The bot serves three probes on `WEB_SERVER_PORT` in both modes, on the compose
+network only:
+
+- `/live` answers 200 while the process runs; the Docker healthcheck reads it.
+- `/ready` answers 200 when PostgreSQL and every Redis database (cache, FSM
+  state, task queue) answer, and 503 otherwise.
+- `/health` always answers 200 with a JSON report: `status` (`ok` or
+  `degraded`), `version`, `commit`, `mode`, `postgres`, `redis`,
+  `redis_memory_used_ratio`, `outbox_pending`, `outbox_oldest_pending_seconds`,
+  `task_queue_length` and `scheduler_heartbeat_age_seconds`. A reading that
+  failed or timed out is `null`, and so is every Redis reading while any
+  Redis database is down.
+
+`task_queue_length` is the workers' backlog: tasks their consumer group has
+not delivered yet plus those delivered and not acknowledged. It is not the
+stream's length, which keeps acknowledged tasks until the stream is trimmed.
+It is `null` when Redis cannot count the undelivered ones, which happens after
+some trims and deletions.
+
+`/health` reports `degraded` when PostgreSQL or Redis is down, when Redis is at
+90% of `maxmemory`, when the scheduler has not beaten for more than 90 seconds
+(no cron task, delayed retry or outbox sweep runs without it), or when an
+outbox row has waited for publishing longer than 5 minutes. The task queue
+never changes the status: there is no backlog that is wrong for every bot.
+Developers see the same report with `/status`.
 
 ## Project layout
 
@@ -290,16 +315,20 @@ loggers/            logging setup: plain-text or JSON lines on stdout
 migrations/         Alembic environment and revisions
 models/             every SQLAlchemy model, imported for Alembic autogenerate
 scripts/ops/        helpers behind make targets and pre-commit hooks
-src/core/           shared infrastructure: database, Redis, task queue, errors, i18n, Telegram helpers
-src/admin/          admin role: commands and handlers
-src/broadcast/      broadcasts: model, repository, use cases, tasks, handlers
-src/developer/      developer role: commands and handlers
-src/main/           entry points (bot, worker, scheduler), config, dependency container, dispatcher
-src/system/         health checks behind the probes
+src/admin/          admin commands: ban, unban, statistics
+src/broadcast/      broadcasts: model, use cases, tasks, the draft dialog
+src/core/           shared infrastructure: database, outbox, tasks, Redis, cache,
+                    rate limits, HTTP client, errors, i18n, Telegram helpers
+src/developer/      developer commands: status, test alert
+src/main/           entry points (bot, worker, scheduler), config, dependency
+                    container, dispatcher, polling and webhook
+src/system/         health checks behind the probes and /status
 src/user/           users: handlers, keyboards, middleware, use cases, repository
 tests/unit/         tests that need no Docker
 tests/integration/  tests against a throwaway PostgreSQL and Redis
-tests/fakes/        the fake Bot API session and database fakes
+tests/fakes/        the fake Bot API session, database and Redis fakes
+tests/factories/    Telegram updates and stored users for tests
+tests/helpers/      a running bot on the fake API, provider overrides, log capture
 ```
 
 ## Development
