@@ -152,3 +152,36 @@ async def test_a_database_read_fills_the_cache(settings: Config) -> None:
     await use_case.execute(PROFILE)
     assert await cache.get(user_cache_key(PROFILE.id), model=UserProfile) is not None
     users.upsert_from_telegram.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    "cached",
+    [
+        build_user_snapshot(last_seen_at=NOW - timedelta(hours=1)),
+        build_user_snapshot(
+            is_reachable=False, last_seen_at=NOW - timedelta(seconds=10)
+        ),
+    ],
+    ids=["stale-last-seen", "unreachable-user-returns"],
+)
+async def test_a_cached_snapshot_that_needs_a_write_is_upserted(
+    settings: Config, cached: UserProfile
+) -> None:
+    """A user who blocked the bot and came back must be marked reachable even
+    though the cache still holds the old snapshot."""
+    cache = build_cache()
+    await cache.set(user_cache_key(PROFILE.id), cached)
+    users = AsyncMock(spec=UserRepository)
+    users.get_single.return_value = _model(
+        is_reachable=cached.is_reachable, last_seen_at=cached.last_seen_at
+    )
+    refreshed = _model(locale="ru")
+    users.upsert_from_telegram.return_value = UpsertedUser(
+        user=refreshed, created=False
+    )
+    use_case, session = _use_case(settings, users, cache)
+    await use_case.execute(PROFILE)
+    users.upsert_from_telegram.assert_awaited_once_with(session, PROFILE, NOW)
+    assert await cache.get(
+        user_cache_key(PROFILE.id), model=UserProfile
+    ) == UserProfile.from_model(refreshed)

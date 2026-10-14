@@ -62,9 +62,7 @@ class TestOverrides(Provider):
     @provide(override=True)
     def cache(self) -> Cache:
         # In process and per container: tests never share cached users.
-        return InMemoryCache(
-            JsonSerializer(), prefix="cache", default_ttl=60, version_ttl=600
-        )
+        return InMemoryCache(JsonSerializer(), default_ttl=60, version_ttl=600)
 
     @provide(override=True)
     def unreachable_recorder(self) -> UnreachableUserRecorder:

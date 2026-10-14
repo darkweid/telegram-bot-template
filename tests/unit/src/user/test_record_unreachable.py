@@ -73,3 +73,17 @@ async def test_a_failed_unreachable_mark_keeps_the_snapshot() -> None:
     with pytest.raises(ConnectionError):
         await RecordUnreachableUseCase(sessions, users, cache).record_unreachable(42)
     assert await cache.get(user_cache_key(42), model=UserProfile) is not None
+
+
+async def test_a_failed_commit_keeps_the_snapshot() -> None:
+    """An eager drop would let a concurrent update cache the old row again
+    before the change is visible; the drop waits for a successful commit."""
+    cache = build_cache()
+    await cache.set(user_cache_key(42), build_user_snapshot(id=42))
+    sessions = FakeSessionFactory()
+    sessions.session.commit.side_effect = ConnectionError("database down")
+    users = AsyncMock(spec=UserRepository)
+    users.set_reachable.return_value = True
+    with pytest.raises(ConnectionError):
+        await RecordUnreachableUseCase(sessions, users, cache).record_unreachable(42)
+    assert await cache.get(user_cache_key(42), model=UserProfile) is not None

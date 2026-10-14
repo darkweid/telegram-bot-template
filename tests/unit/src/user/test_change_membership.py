@@ -67,3 +67,16 @@ async def test_a_failed_membership_change_keeps_the_snapshot(
     with pytest.raises(ConnectionError):
         await _use_case(session, users, cache).execute(PROFILE, is_member=is_member)
     assert await cache.get(user_cache_key(1), model=UserProfile) is not None
+
+
+@pytest.mark.parametrize("is_member", [True, False])
+async def test_a_failed_commit_keeps_the_snapshot(is_member: bool) -> None:
+    """An eager drop would let a concurrent update cache the old row again
+    before the change is visible; the drop waits for a successful commit."""
+    cache = build_cache()
+    await cache.set(user_cache_key(1), build_user_snapshot())
+    session, users = FakeAsyncSession(), AsyncMock(spec=UserRepository)
+    session.commit.side_effect = ConnectionError("database down")
+    with pytest.raises(ConnectionError):
+        await _use_case(session, users, cache).execute(PROFILE, is_member=is_member)
+    assert await cache.get(user_cache_key(1), model=UserProfile) is not None

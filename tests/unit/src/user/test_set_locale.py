@@ -59,3 +59,15 @@ async def test_a_failed_locale_change_keeps_the_snapshot() -> None:
     with pytest.raises(ConnectionError):
         await _use_case(session, users, cache).execute(1, "ru")
     assert await cache.get(user_cache_key(1), model=UserProfile) is not None
+
+
+async def test_a_failed_commit_keeps_the_snapshot() -> None:
+    """An eager drop would let a concurrent update cache the old row again
+    before the change is visible; the drop waits for a successful commit."""
+    cache = build_cache()
+    await cache.set(user_cache_key(1), build_user_snapshot())
+    session, users = FakeAsyncSession(), AsyncMock(spec=UserRepository)
+    session.commit.side_effect = ConnectionError("database down")
+    with pytest.raises(ConnectionError):
+        await _use_case(session, users, cache).execute(1, "ru")
+    assert await cache.get(user_cache_key(1), model=UserProfile) is not None
