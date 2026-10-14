@@ -54,8 +54,9 @@ class BanMiddleware(BaseMiddleware):
 
     Reads the snapshot UserMiddleware stored; an update without one (a group,
     `my_chat_member`) passes, so a banned user's reachability is still
-    tracked. A role beats a ban: someone banned before joining ADMIN_IDS or
-    DEVELOPER_IDS is not locked out.
+    tracked. A role beats a ban here, for updates only: someone banned before
+    joining ADMIN_IDS or DEVELOPER_IDS is not locked out, but broadcasts skip
+    them and /stats counts them as banned until an admin unbans them.
 
     Only updates that carry a stored user (private chats) are checked; a router
     for inline queries or groups must check `is_banned` itself.
