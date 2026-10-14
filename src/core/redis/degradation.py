@@ -3,7 +3,12 @@ from threading import Lock
 import time
 from typing import Protocol
 
+from redis.exceptions import RedisError
 import sentry_sdk
+
+from loggers import get_logger
+
+logger = get_logger(__name__)
 
 DEFAULT_COOLDOWN_MS = 5 * 60_000
 DEFAULT_RECOVERY_QUIET_MS = 60_000
@@ -11,8 +16,9 @@ DEFAULT_RECOVERY_QUIET_MS = 60_000
 
 class DegradationNotifier(Protocol):
     """Hears what the reporter sends to Sentry. Synchronous: the reporter is
-    called from synchronous code under a threading lock; an implementation
-    that needs to await schedules its own task."""
+    called from synchronous code, after it has released its lock; an
+    implementation that needs to await schedules its own task. An exception
+    from `notify` is logged by the reporter and never reaches the caller."""
 
     def notify(self, message: str) -> None: ...
 
@@ -58,7 +64,7 @@ class RedisDegradationReporter:
         self._failure_count = 0
         self._last_report_ms: int | None = None
 
-    def report_degraded(self, error: Exception) -> None:
+    def report_degraded(self, error: RedisError) -> None:
         with self._lock:
             # Read under the lock, or a stale timestamp could overwrite a newer one.
             now_ms = self._clock()
@@ -75,14 +81,14 @@ class RedisDegradationReporter:
 
         # str(error) is safe here: callers pass only FAIL_OPEN_ERRORS, redis-py
         # transport and capacity errors whose text names the server, never a
-        # key or a value. The message goes to Sentry and to developers' chats.
+        # key or a value. The message goes to Sentry and to developers' chats,
+        # which is why the parameter is a RedisError and not any Exception.
         message = (
             f"[{self._component}] Redis is degraded. "
             f"Error: {type(error).__name__}: {error}"
         )
         sentry_sdk.capture_message(message, level="error")
-        if self._notifier is not None:
-            self._notifier.notify(message)
+        self._notify(message)
 
     def report_recovered(self) -> None:
         with self._lock:
@@ -107,5 +113,19 @@ class RedisDegradationReporter:
             f"the last {now_ms - last_failure_ms}ms ago."
         )
         sentry_sdk.capture_message(message, level="info")
-        if self._notifier is not None:
+        self._notify(message)
+
+    def _notify(self, message: str) -> None:
+        if self._notifier is None:
+            return
+        # The callers are fail-open paths: an alert sink that is down during a
+        # Redis outage must not turn the outage into failed updates, and the
+        # incident state is already committed, so a retry would stay muted.
+        try:
             self._notifier.notify(message)
+        except Exception as error:
+            logger.error(
+                "[%s] Degradation notifier failed: %s",
+                self._component,
+                type(error).__name__,
+            )
