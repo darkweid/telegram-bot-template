@@ -1,4 +1,3 @@
-from datetime import UTC, datetime
 from unittest.mock import AsyncMock
 
 from aiogram.methods import SendMessage
@@ -8,11 +7,10 @@ from dishka import Provider, Scope, provide
 from src.main.config import Config
 from src.system.schemas import HealthReport
 from src.system.services import HealthService
-from src.user.schemas import TelegramProfile, UserProfile
-from src.user.usecases.touch_user import TouchUserUseCase
 from tests.factories.updates import build_message_update
 from tests.fakes.telegram import FakeTelegramSession
 from tests.helpers.dispatcher import running_bot
+from tests.helpers.user import UseCases
 
 DEVELOPER = 42
 REPORT = HealthReport(
@@ -28,33 +26,6 @@ REPORT = HealthReport(
     task_queue_length=0,
     scheduler_heartbeat_age_seconds=3.0,
 )
-
-
-def _stored(profile: TelegramProfile) -> UserProfile:
-    return UserProfile(
-        id=profile.id,
-        first_name=profile.first_name,
-        username=profile.username,
-        last_name=profile.last_name,
-        language_code=profile.language_code,
-        locale=None,
-        is_reachable=True,
-        last_seen_at=datetime(2026, 1, 1, tzinfo=UTC),
-    )
-
-
-class StoredUser(Provider):
-    """UserMiddleware's use case as a mock: these updates never reach the
-    database."""
-
-    def __init__(self) -> None:
-        super().__init__()
-        self.touch = AsyncMock(spec=TouchUserUseCase)
-        self.touch.execute.side_effect = _stored
-
-    @provide(scope=Scope.REQUEST, override=True)
-    def touch_user(self) -> TouchUserUseCase:
-        return self.touch
 
 
 class HealthStub(Provider):
@@ -83,7 +54,7 @@ def _developer(settings: Config) -> Config:
 
 async def test_status_answers_a_developer(settings: Config, i18n: I18n) -> None:
     stub = HealthStub()
-    async with running_bot(_developer(settings), i18n, StoredUser(), stub) as running:
+    async with running_bot(_developer(settings), i18n, UseCases(), stub) as running:
         await running.feed(build_message_update("/status", user_id=DEVELOPER))
         [reply] = running.session.sent(SendMessage)
     assert "abc1234" in reply.text
@@ -96,7 +67,7 @@ async def test_status_is_not_there_for_anyone_else(
     """The report names versions and the state of every dependency; a user
     must not even learn the command exists."""
     stub = HealthStub()
-    async with running_bot(_developer(settings), i18n, StoredUser(), stub) as running:
+    async with running_bot(_developer(settings), i18n, UseCases(), stub) as running:
         await running.feed(build_message_update("/status", user_id=77))
     stub.service.get_report.assert_not_awaited()
 
@@ -109,7 +80,7 @@ async def test_a_test_alert_goes_where_real_alerts_go(
     confirmation."""
     alerts = FakeTelegramSession()
     async with running_bot(
-        _developer(settings), i18n, StoredUser(), alert_session=alerts
+        _developer(settings), i18n, UseCases(), alert_session=alerts
     ) as running:
         await running.feed(build_message_update("/test_alert", user_id=DEVELOPER))
         [confirmation] = running.session.sent(SendMessage)
@@ -127,7 +98,7 @@ async def test_a_repeated_test_alert_is_sent_again(
     twice must see two alerts."""
     alerts = FakeTelegramSession()
     async with running_bot(
-        _developer(settings), i18n, StoredUser(), alert_session=alerts
+        _developer(settings), i18n, UseCases(), alert_session=alerts
     ) as running:
         for _ in range(2):
             await running.feed(build_message_update("/test_alert", user_id=DEVELOPER))
