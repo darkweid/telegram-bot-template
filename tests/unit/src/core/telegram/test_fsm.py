@@ -18,7 +18,7 @@ async def test_fsm_storage_uses_its_own_database_and_bot_scoped_keys(
     try:
         assert isinstance(storage, RedisStorage)
         kwargs = storage.redis.connection_pool.connection_kwargs
-        assert str(kwargs["db"]) == settings.redis.REDIS_FSM_DATABASE
+        assert int(kwargs["db"]) == settings.redis.REDIS_FSM_DATABASE
         assert isinstance(storage.key_builder, DefaultKeyBuilder)
         assert storage.key_builder.with_bot_id is True
     finally:

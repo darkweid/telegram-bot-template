@@ -22,13 +22,17 @@ pytestmark = pytest.mark.asyncio(loop_scope="session")
 async def _readiness(
     config: Config,
     session: AsyncSession,
-    fsm_database: str,
-    tasks_database: str | None = None,
+    fsm_database: int,
+    tasks_database: int | None = None,
 ) -> bool:
     redis_config = config.redis.model_copy(
         update={
             "REDIS_FSM_DATABASE": fsm_database,
-            "REDIS_TASKS_DATABASE": tasks_database or config.redis.REDIS_TASKS_DATABASE,
+            "REDIS_TASKS_DATABASE": (
+                config.redis.REDIS_TASKS_DATABASE
+                if tasks_database is None
+                else tasks_database
+            ),
         }
     )
     redis = create_redis_client(config.redis.dsn)
@@ -58,14 +62,14 @@ async def test_an_fsm_database_the_server_refuses_fails_readiness(
     """Redis connects lazily and selects the database on connect: only a
     command on the FSM client itself finds out the index is out of range."""
     assert await _readiness(settings, db_session, settings.redis.REDIS_FSM_DATABASE)
-    assert not await _readiness(settings, db_session, "100000")
+    assert not await _readiness(settings, db_session, 100_000)
 
 
 async def test_a_task_database_the_server_refuses_fails_readiness(
     settings: Config, db_session: AsyncSession
 ) -> None:
     assert not await _readiness(
-        settings, db_session, settings.redis.REDIS_FSM_DATABASE, tasks_database="100000"
+        settings, db_session, settings.redis.REDIS_FSM_DATABASE, tasks_database=100_000
     )
 
 

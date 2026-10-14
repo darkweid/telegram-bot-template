@@ -195,7 +195,7 @@ def test_webhook_mode_accepts_a_complete_webhook() -> None:
 
 
 def test_redis_fsm_dsn_uses_its_own_database() -> None:
-    redis = get_settings().redis.model_copy(update={"REDIS_FSM_DATABASE": "7"})
+    redis = get_settings().redis.model_copy(update={"REDIS_FSM_DATABASE": 7})
     assert redis.fsm_dsn.endswith("/7")
     assert redis.dsn != redis.fsm_dsn
 
@@ -226,6 +226,10 @@ def test_each_redis_role_has_its_own_database(settings: Config) -> None:
             {"REDIS_DATABASE": "0", "REDIS_TASKS_DATABASE": "2"},
             "REDIS_FSM_DATABASE and REDIS_TASKS_DATABASE must differ, both are 2",
         ),
+        (
+            {"REDIS_DATABASE": "01"},
+            "REDIS_DATABASE and REDIS_TASKS_DATABASE must differ, both are 1",
+        ),
     ],
 )
 def test_redis_roles_on_one_database_are_refused(
@@ -238,13 +242,22 @@ def test_redis_roles_on_one_database_are_refused(
         RedisConfig(**values, **databases)
 
 
+@pytest.mark.parametrize("database", ["-1", "cache"])
+def test_a_redis_database_is_a_non_negative_index(database: str) -> None:
+    """Redis numbers its databases from 0; anything else would only fail on
+    the first command."""
+    values = {"REDIS_HOST": "redis-host", "REDIS_PORT": 6379, "REDIS_PASSWORD": "x"}
+    with pytest.raises(ValidationError, match="REDIS_DATABASE"):
+        RedisConfig(**values, REDIS_DATABASE=database)
+
+
 def test_redis_dsn_escapes_special_characters_in_password() -> None:
     raw_password = "p@ss/word%:x"
     redis_config = RedisConfig(
         REDIS_HOST="redis-host",
         REDIS_PORT=6379,
         REDIS_PASSWORD=raw_password,
-        REDIS_DATABASE="0",
+        REDIS_DATABASE=0,
     )
 
     for dsn, database in ((redis_config.dsn, 0), (redis_config.fsm_dsn, 2)):
@@ -297,7 +310,7 @@ _REQUIRED: dict[type, dict[str, object]] = {
     RedisConfig: {
         "REDIS_HOST": "redis-host",
         "REDIS_PASSWORD": "secret",
-        "REDIS_DATABASE": "0",
+        "REDIS_DATABASE": 0,
         "REDIS_PORT": 6379,
     },
     PostgresConfig: {

@@ -21,16 +21,17 @@ class RedisConfig(BaseSettings):
     REDIS_HOST: str
     REDIS_PORT: int = Field(ge=1, le=65535)
     REDIS_PASSWORD: str
-    REDIS_DATABASE: str
-    REDIS_FSM_DATABASE: str = "2"
-    REDIS_TASKS_DATABASE: str = "1"
+    REDIS_DATABASE: int = Field(ge=0)
+    REDIS_FSM_DATABASE: int = Field(2, ge=0)
+    REDIS_TASKS_DATABASE: int = Field(1, ge=0)
 
     model_config = SettingsConfigDict(extra="ignore")
 
     @model_validator(mode="after")
     def each_role_has_its_own_database(self) -> Self:
         # Two roles on one database mix their keys: a cache flush takes the
-        # task queue or the FSM state with it.
+        # task queue or the FSM state with it. Compared as numbers, so "01"
+        # and "1" are caught as the one database they are.
         databases = {
             "REDIS_DATABASE": self.REDIS_DATABASE,
             "REDIS_FSM_DATABASE": self.REDIS_FSM_DATABASE,
@@ -45,7 +46,7 @@ class RedisConfig(BaseSettings):
                     )
         return self
 
-    def _dsn(self, database: str) -> str:
+    def _dsn(self, database: int) -> str:
         # quote(safe="") because generated passwords routinely contain @ / % :
         # and every URL parser downstream would silently misread the DSN.
         return (
