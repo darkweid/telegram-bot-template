@@ -1,3 +1,4 @@
+import asyncio
 from collections import defaultdict, deque
 from collections.abc import AsyncGenerator
 from datetime import UTC, datetime
@@ -50,6 +51,7 @@ class FakeTelegramSession(BaseSession):
             defaultdict(deque)
         )
         self._message_ids = iter(range(1, 1_000_000))
+        self._recorded = asyncio.Condition()
 
     def queue(self, method_type: type[TelegramMethod[Any]], result: object) -> None:
         if not (
@@ -57,6 +59,17 @@ class FakeTelegramSession(BaseSession):
         ):
             raise TypeError(f"Expected a TelegramMethod subclass, got {method_type!r}")
         self._queued[method_type].append(result)
+
+    async def _record(self, method: TelegramMethod[Any]) -> None:
+        self.requests.append(method)
+        async with self._recorded:
+            self._recorded.notify_all()
+
+    async def wait_for(self, method_type: type[M], count: int = 1) -> None:
+        """Return once `count` calls of `method_type` have been made; fails after
+        2 seconds, so a call that never comes cannot hang the suite."""
+        async with asyncio.timeout(2), self._recorded:
+            await self._recorded.wait_for(lambda: len(self.sent(method_type)) >= count)
 
     def sent(self, method_type: type[M]) -> list[M]:
         return [
@@ -69,7 +82,7 @@ class FakeTelegramSession(BaseSession):
         method: TelegramMethod[Any],
         timeout: int | None = None,  # noqa: ASYNC109 - signature fixed by BaseSession
     ) -> Any:
-        self.requests.append(method)
+        await self._record(method)
         queued = self._queued[type(method)]
         if queued:
             result = queued.popleft()

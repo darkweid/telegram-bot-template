@@ -1,6 +1,6 @@
-# ruff: noqa: E402 -- TESTING must be set before any src.* import triggers config load
 import os
 
+# Before any src.* import: importing it loads the config, which reads TESTING.
 os.environ.setdefault("TESTING", "true")
 
 from collections.abc import AsyncGenerator

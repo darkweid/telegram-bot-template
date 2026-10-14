@@ -9,6 +9,7 @@ select = [
     "I",  # isort (import sorting)
     "B",  # flake8-bugbear
     "ASYNC",  # flake8-async
+    "RUF100",  # unused noqa: a stale suppression fails lint
     "W505",  # doc-line-too-long: comments and docstrings, which black never rewraps
 ]
 extend-ignore = ["E501"]

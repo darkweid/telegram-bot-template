@@ -42,7 +42,7 @@ class QueryModel(SQLAlchemyBase):
         return self.created_at
 
     @computed_created_at.expression
-    def computed_created_at(cls) -> object:  # noqa: N805
+    def computed_created_at(cls) -> object:
         return cls.created_at + timedelta()
 
 

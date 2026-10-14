@@ -1,6 +1,6 @@
 from collections.abc import Sequence
 
-from sqlalchemy.orm.strategy_options import _AbstractLoad as AbstractLoad  # noqa SLF001
+from sqlalchemy.orm.strategy_options import _AbstractLoad as AbstractLoad
 
 # Shared aliases for eager-loading options, so callers never name the private
 # SQLAlchemy type.

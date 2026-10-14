@@ -916,7 +916,7 @@ class HybridModel(SQLAlchemyBase):
         return f"{self.first} {self.last}"
 
     @full_name.expression
-    def full_name(cls) -> Any:  # noqa: N805
+    def full_name(cls) -> Any:
         return cls.first + " " + cls.last
 
 
