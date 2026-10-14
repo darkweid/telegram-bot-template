@@ -37,17 +37,19 @@ logger = get_logger(__name__)
 # The admin's progress message is edited at most this often.
 PROGRESS_EDIT_INTERVAL_SECONDS = 5
 # A run renews its lease at least this often: between recipients, inside a
-# flood wait and between retries of a failing copy. Past it come at most one
-# copy and one progress edit, each one hanging request of up to
-# TELEGRAM_REQUEST_TIMEOUT_SECONDS plus the session's flood retries (up to
-# MAX_RETRY_SLEEP_SECONDS, answered at once), and one retry pause: about two
-# and a half minutes in all, under STALE_AFTER, after which the resume task
+# flood wait and between retries of a failing copy. One call can take
+# (TELEGRAM_RETRY_ATTEMPTS + 1) requests hanging to
+# TELEGRAM_REQUEST_TIMEOUT_SECONDS each, plus MAX_RETRY_SLEEP_SECONDS of the
+# session's flood waits: 85 s at the largest TELEGRAM_RETRY_ATTEMPTS config
+# allows. Past a due renewal a run makes at most one copy and one progress
+# edit (or one copy and one retry pause) before the next, so the longest gap
+# is 60 + 2 x 85 = 230 s, under STALE_AFTER, after which the resume task
 # hands the broadcast over to a second run.
 CHECKPOINT_INTERVAL_SECONDS = 60
 # Every Bot API call of a run is capped at this, against the session's 60 s
-# default: a hanging request is the one gap no checkpoint can split, and the
-# five attempts of a failing copy at 60 s each would outlast STALE_AFTER alone.
-TELEGRAM_REQUEST_TIMEOUT_SECONDS = 10
+# default: a hanging request is the one gap no checkpoint can split. A copy
+# is done on Telegram's side, so 5 s is ample.
+TELEGRAM_REQUEST_TIMEOUT_SECONDS = 5
 # Pauses before retrying a copy that met a network or server error; one more
 # failure after the last of them fails the broadcast.
 TRANSIENT_RETRY_DELAYS_SECONDS: tuple[float, ...] = (1, 2, 4, 8)

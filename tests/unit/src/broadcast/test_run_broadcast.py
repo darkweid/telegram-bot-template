@@ -16,6 +16,7 @@ from aiogram.exceptions import (
 from aiogram.methods import CopyMessage, EditMessageText, SendMessage
 from aiogram.types import InlineKeyboardMarkup
 from aiogram.utils.i18n import I18n
+from annotated_types import Le
 import pytest
 
 from src.broadcast.callbacks import BroadcastStopCallback
@@ -28,7 +29,7 @@ from src.broadcast.usecases import run_broadcast as run_module
 from src.broadcast.usecases.run_broadcast import RunBroadcastUseCase
 from src.core.limiter.pacer import Pacer
 from src.core.telegram.session import MAX_RETRY_SLEEP_SECONDS
-from src.main.config import Config
+from src.main.config import BotConfig, Config
 from src.user.repositories import UserRepository
 from tests.factories.users import build_user_model
 from tests.fakes.db import FakeSessionFactory
@@ -524,18 +525,22 @@ async def test_a_stop_between_retries_leaves_the_recipient_undone(
 
 
 def test_the_longest_gap_between_checkpoints_stays_under_the_lease() -> None:
-    """Past a due checkpoint a run can still make one copy and one progress
-    edit, each a request that hangs to its timeout after the session's flood
-    retries, and sleep one retry pause. The sum stays under half of
-    STALE_AFTER, so a slow database or event loop still leaves room before a
-    live run gets a twin."""
-    one_call = run_module.TELEGRAM_REQUEST_TIMEOUT_SECONDS + MAX_RETRY_SLEEP_SECONDS
-    longest_gap = (
-        run_module.CHECKPOINT_INTERVAL_SECONDS
-        + 2 * one_call
-        + max(run_module.TRANSIENT_RETRY_DELAYS_SECONDS)
-    )
-    assert longest_gap < STALE_AFTER.total_seconds() / 2
+    """Past a due renewal a run can still make a copy, then a progress edit or
+    a retry pause, before it renews again. A call is every flood retry the
+    config allows, each request hanging to its timeout, plus the session's
+    flood sleep. Raising any of these must keep the gap under STALE_AFTER, or
+    a live run gets a twin."""
+    [max_attempts] = [
+        constraint.le
+        for constraint in BotConfig.model_fields["TELEGRAM_RETRY_ATTEMPTS"].metadata
+        if isinstance(constraint, Le)
+    ]
+    one_call = (
+        max_attempts + 1
+    ) * run_module.TELEGRAM_REQUEST_TIMEOUT_SECONDS + MAX_RETRY_SLEEP_SECONDS
+    after_copy = max(one_call, max(run_module.TRANSIENT_RETRY_DELAYS_SECONDS))
+    longest_gap = run_module.CHECKPOINT_INTERVAL_SECONDS + one_call + after_copy
+    assert longest_gap < STALE_AFTER.total_seconds()
 
 
 async def test_every_call_of_a_run_is_capped_by_the_short_timeout(
@@ -551,9 +556,7 @@ async def test_every_call_of_a_run_is_capped_by_the_short_timeout(
         *telegram.sent(SendMessage),
     ]
     assert len(calls) == 6
-    assert {telegram.timeout_of(call) for call in calls} == {
-        run_module.TELEGRAM_REQUEST_TIMEOUT_SECONDS
-    }
+    assert {telegram.timeout_of(call) for call in calls} == {5}
 
 
 async def test_a_server_error_is_retried_and_the_copy_then_counts_as_sent(
