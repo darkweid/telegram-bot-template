@@ -29,6 +29,11 @@ from src.core.database.uow import SQLAlchemyUnitOfWork
 from src.core.i18n import LOCALES_DIR, build_i18n
 from src.core.redis.core import create_redis_client
 from src.core.telegram.fsm import create_event_isolation, create_fsm_storage
+from src.core.telegram.session import (
+    BlockedUserRecorder,
+    ForbiddenMiddleware,
+    RetryAfterMiddleware,
+)
 from src.main.config import (
     AppConfig,
     BotConfig,
@@ -38,6 +43,7 @@ from src.main.config import (
     WebhookConfig,
     WebServerConfig,
 )
+from src.user.di import UserProvider
 
 
 class ConfigProvider(Provider):
@@ -136,7 +142,16 @@ class TelegramProvider(Provider):
         await session.close()
 
     @provide
-    def bot(self, bot_config: BotConfig, session: BaseSession) -> Bot:
+    def bot(
+        self,
+        bot_config: BotConfig,
+        session: BaseSession,
+        recorder: BlockedUserRecorder,
+    ) -> Bot:
+        # Retry outermost, so a retried call that ends in Forbidden is
+        # recorded once.
+        session.middleware(RetryAfterMiddleware(bot_config.TELEGRAM_RETRY_ATTEMPTS))
+        session.middleware(ForbiddenMiddleware(recorder))
         return Bot(
             token=bot_config.BOT_TOKEN.get_secret_value(),
             session=session,
@@ -165,6 +180,7 @@ def build_container(config: Config, *providers: Provider) -> AsyncContainer:
         RedisProvider(),
         TelegramProvider(),
         I18nProvider(),
+        UserProvider(),
         AiogramProvider(),
         *providers,
         context={Config: config},

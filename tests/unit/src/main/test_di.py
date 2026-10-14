@@ -14,6 +14,7 @@ from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
 from src.core.database.uow import SQLAlchemyUnitOfWork
+from src.core.telegram.session import ForbiddenMiddleware, RetryAfterMiddleware
 from src.main.config import BotConfig, Config
 from src.main.di import build_container
 from tests.fakes.telegram import FakeTelegramSession
@@ -53,6 +54,21 @@ async def test_bot_sends_html_without_link_previews(
         assert bot.default.link_preview.is_disabled is True
         assert isinstance(await container.get(BaseStorage), MemoryStorage)
         assert await container.get(I18n) is i18n
+    finally:
+        await container.close()
+
+
+async def test_session_middlewares_are_registered_retry_first(
+    settings: Config, i18n: I18n
+) -> None:
+    session = FakeTelegramSession()
+    container = build_test_container(settings, session, i18n)
+    try:
+        await container.get(Bot)
+        assert [type(m) for m in session.middleware] == [
+            RetryAfterMiddleware,
+            ForbiddenMiddleware,
+        ]
     finally:
         await container.close()
 
