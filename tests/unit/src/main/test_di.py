@@ -240,6 +240,8 @@ async def test_health_service_resolves_per_request_on_the_app_clients(
 async def test_the_user_agent_falls_back_to_the_project(
     settings: Config, i18n: I18n, configured: str, expected: str
 ) -> None:
+    """A blank HTTP_USER_AGENT must still send an identifiable agent: some APIs
+    refuse the library's default outright."""
     config = settings.model_copy(
         update={
             "http": settings.http.model_copy(update={"HTTP_USER_AGENT": configured})
