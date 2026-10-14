@@ -6,7 +6,9 @@ import-linter
 mypy
 pip-tools
 pre-commit
+pyyaml
 ruff==0.16.10
+watchfiles
 
 # Testing dependencies
 pytest

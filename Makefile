@@ -10,6 +10,9 @@ DOCKER_COMPOSE_EXEC = $(DOCKER_COMPOSE) exec
 # built inside the test-integration recipe, which is why there is no shared variable here.
 COMPOSE_TEST = infra/docker-compose.test.yml
 
+# The invoking user, for containers that write into the bind-mounted tree
+HOST_USER := $(shell id -u):$(shell id -g)
+
 # Container names
 APP_CONTAINER = bot
 
@@ -20,7 +23,6 @@ REQ_DEV_TXT = $(REQ_DIR)/dev.txt
 REQ_PROD_TXT = $(REQ_DIR)/prod.txt
 REQ_COMPILE_IMAGE ?= python:3.13-slim-bookworm
 REQ_COMPILE_PLATFORM ?= linux/amd64
-REQ_COMPILE_USER = $(shell id -u):$(shell id -g)
 REQ_COMPILE_FLAGS ?=
 
 .DEFAULT_GOAL := help
@@ -40,7 +42,7 @@ run: ## Build and start the prod-like stack
 	$(DOCKER_COMPOSE) up --build -d
 
 .PHONY: run-dev
-run-dev: ## Build and start the dev stack with autoreload
+run-dev: i18n-compile ## Build and start the dev stack with autoreload
 	$(DOCKER_COMPOSE_DEV) up --build -d
 
 .PHONY: down
@@ -71,16 +73,27 @@ clean-resources-hard: ## Remove all unused images and build cache, forcing full 
 
 ##@ Database
 
+# Applies the migrations baked into the bot image the stack runs (BOT_IMAGE);
+# `make build` or a pull refreshes it. The dev stack does not need it: its bot
+# runs `alembic upgrade head` on start.
 .PHONY: migrate
-migrate: ## Apply Alembic migrations
-	$(DOCKER_COMPOSE_EXEC) $(APP_CONTAINER) alembic upgrade head
+migrate: ## Apply the bot image's migrations (Postgres must be running)
+	$(DOCKER_COMPOSE) run --rm --no-deps $(APP_CONTAINER) alembic upgrade head
 
+# Runs in the dev image, which carries ruff and black for the post-write hooks in
+# alembic.ini. Compose starts Postgres and waits for it, and the database is migrated
+# to head first, because autogenerate diffs the models against it. On Linux the
+# bind-mounted tree belongs to the host user, and the image's appuser could not write
+# the revision there; running as the host user also leaves the file owned by you.
+# HOME=/tmp gives black a writable cache directory. The message is quoted
+# unexpanded, so quotes, backticks and $ reach alembic as typed.
 .PHONY: migration
 migration: ## Create an Alembic revision: make migration m="add users table"
-	@MSG="$(m)"; \
+	@MSG='$(subst ','\'',$(value m))'; \
 	if [ -z "$$MSG" ]; then printf 'Enter migration message: '; read -r MSG; fi; \
 	if [ -z "$$MSG" ]; then echo "Migration message cannot be empty"; exit 1; fi; \
-	$(DOCKER_COMPOSE_EXEC) $(APP_CONTAINER) alembic revision --autogenerate --message "$$MSG"
+	$(DOCKER_COMPOSE_DEV) run --rm --user "$(HOST_USER)" -e HOME=/tmp -e MSG="$$MSG" $(APP_CONTAINER) \
+		sh -c 'alembic upgrade head && alembic revision --autogenerate --message "$$MSG"'
 
 .PHONY: psql
 psql: ## Open psql inside the postgres container
@@ -95,6 +108,10 @@ redis-cli: ## Open redis-cli inside the redis container
 .PHONY: logs
 logs: ## Follow logs for every service, or one: make logs s=bot
 	$(DOCKER_COMPOSE) logs -f $(s)
+
+.PHONY: restart
+restart: ## Restart every service, or one: make restart s=bot
+	$(DOCKER_COMPOSE) restart $(s)
 
 ##@ Quality
 
@@ -195,7 +212,7 @@ i18n-init: ## Start a catalog for a new language: make i18n-init LOCALE=de
 req-compile: ## Recompile the lockfiles inside a Linux container
 	docker run --rm --platform=$(REQ_COMPILE_PLATFORM) \
 		-e HOME=/tmp \
-		-u $(REQ_COMPILE_USER) \
+		-u $(HOST_USER) \
 		-v $(CURDIR):/app \
 		-w /app \
 		$(REQ_COMPILE_IMAGE) \

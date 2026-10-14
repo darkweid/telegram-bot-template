@@ -1,0 +1,35 @@
+# Local development only; never deployed.
+#
+# Every service drops the base file's restart policy: on a server the stack
+# must come back by itself, on a laptop it must not.
+
+services:
+  bot-builder:
+    build:
+      context: ..
+      dockerfile: infra/docker/dev.Dockerfile
+    image: tg-bot-template-bot-dev:latest
+
+  bot:
+    restart: "no"
+    image: tg-bot-template-bot-dev:latest
+    # Local runs always poll: a webhook needs a public HTTPS URL. watchfiles
+    # restarts the bot on every change under the watched packages; it stops it
+    # with SIGINT, which the bot handles like SIGTERM. Migrations run first so
+    # a fresh volume works without a manual step. The mounted tree replaces
+    # the image's /app, so the catalogs come from the host: `make run-dev`
+    # compiles them there.
+    environment:
+      BOT_MODE: polling
+    command: >-
+      sh -c "alembic upgrade head
+      && exec watchfiles --filter python 'python -m src.main' src loggers models"
+    volumes:
+      - ..:/app
+      - /app/.venv
+
+  postgres:
+    restart: "no"
+
+  redis:
+    restart: "no"
