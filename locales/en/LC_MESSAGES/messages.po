@@ -147,6 +147,9 @@ msgstr ""
 msgid "Stopping the broadcast."
 msgstr ""
 
+msgid "The broadcast was not started."
+msgstr ""
+
 msgid "This broadcast has already finished."
 msgstr ""
 

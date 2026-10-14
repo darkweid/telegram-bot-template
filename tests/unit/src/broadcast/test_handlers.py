@@ -1,6 +1,7 @@
 from unittest.mock import AsyncMock
 from uuid import UUID
 
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.methods import (
     AnswerCallbackQuery,
     CopyMessage,
@@ -23,6 +24,7 @@ from src.broadcast.usecases.stop_broadcast import StopBroadcastUseCase
 from src.main.config import Config
 from tests.factories.updates import build_callback_update, build_message_update
 from tests.helpers.dispatcher import running_bot
+from tests.helpers.logs import captured_logs
 from tests.helpers.user import UseCases
 
 ADMIN = 1
@@ -108,7 +110,8 @@ async def test_a_start_refused_at_the_last_moment_drops_the_draft(
     settings: Config, i18n: I18n
 ) -> None:
     """Another admin's broadcast got in between the preview and Send; the
-    admin is told why, and the stale draft does not linger in the state."""
+    admin is told why, the message no longer claims a start is under way,
+    and the stale draft does not linger in the state."""
     stub = BroadcastStub()
     stub.start.execute.side_effect = BroadcastInProgressError
     async with running_bot(_admin(settings), i18n, UseCases(), stub) as running:
@@ -117,6 +120,57 @@ async def test_a_start_refused_at_the_last_moment_drops_the_draft(
         await running.feed(build_callback_update(SEND, user_id=ADMIN))
         await running.feed(build_callback_update(SEND, user_id=ADMIN))
     stub.start.execute.assert_awaited_once()
+    assert [edit.text for edit in running.session.sent(EditMessageText)] == [
+        "Starting the broadcast…",
+        "The broadcast was not started.",
+    ]
+    assert running.session.sent(SendMessage)[-1].text == (
+        "A broadcast is already running. Wait for it to finish or stop it."
+    )
+
+
+async def test_a_failed_start_closes_the_message_and_still_reports_the_error(
+    settings: Config, i18n: I18n
+) -> None:
+    """No worker will edit a message whose broadcast was never stored, and
+    the failure must still reach the error handler and its alert."""
+    stub = BroadcastStub()
+    stub.start.execute.side_effect = RuntimeError("database is down")
+    async with running_bot(_admin(settings), i18n, UseCases(), stub) as running:
+        await running.feed(build_message_update("/broadcast", user_id=ADMIN))
+        await running.feed(build_message_update("Hello", user_id=ADMIN))
+        await running.feed(build_callback_update(SEND, user_id=ADMIN))
+    assert running.session.sent(EditMessageText)[-1].text == (
+        "The broadcast was not started."
+    )
+    assert running.session.sent(SendMessage)[-1].text == (
+        "Something went wrong. Please try again later."
+    )
+
+
+async def test_a_failed_start_is_reported_even_when_the_message_is_gone(
+    settings: Config, i18n: I18n
+) -> None:
+    """The admin may delete the message meanwhile; the edit failing then must
+    not hide the reason the start failed."""
+    stub = BroadcastStub()
+    stub.start.execute.side_effect = BroadcastInProgressError
+    async with running_bot(_admin(settings), i18n, UseCases(), stub) as running:
+        await running.feed(build_message_update("/broadcast", user_id=ADMIN))
+        await running.feed(build_message_update("Hello", user_id=ADMIN))
+        running.session.queue(EditMessageText, True)
+        running.session.queue(
+            EditMessageText,
+            TelegramBadRequest(
+                method=EditMessageText(text="x"),
+                message="Bad Request: message to edit not found",
+            ),
+        )
+        with captured_logs("src.broadcast.handlers") as records:
+            await running.feed(build_callback_update(SEND, user_id=ADMIN))
+    assert [record.getMessage() for record in records] == [
+        "Broadcast progress message was not closed: TelegramBadRequest"
+    ]
     assert running.session.sent(SendMessage)[-1].text == (
         "A broadcast is already running. Wait for it to finish or stop it."
     )

@@ -1,5 +1,6 @@
 from aiogram import F, Router
 from aiogram.enums import ChatType
+from aiogram.exceptions import TelegramAPIError
 from aiogram.filters import Command, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
@@ -7,6 +8,7 @@ from aiogram.utils.callback_answer import CallbackAnswer
 from aiogram.utils.i18n import gettext as _
 from dishka import FromDishka
 
+from loggers import get_logger
 from src.broadcast.callbacks import (
     BroadcastDraftCallback,
     BroadcastStopCallback,
@@ -20,6 +22,8 @@ from src.broadcast.usecases.start_broadcast import StartBroadcastUseCase
 from src.broadcast.usecases.stop_broadcast import StopBroadcastUseCase
 from src.core.telegram.messages import safe_edit_text
 from src.core.telegram.roles import IsAdmin
+
+logger = get_logger(__name__)
 
 
 async def broadcast(
@@ -81,12 +85,27 @@ async def send(
     # Edited before the task is queued: from then on the progress message
     # belongs to the worker, and a later edit here could overwrite its report.
     await safe_edit_text(callback.message, _("Starting the broadcast…"))
-    await start_broadcast.execute(
-        admin_id=callback.from_user.id,
-        source_chat_id=int(data["source_chat_id"]),
-        source_message_id=int(data["source_message_id"]),
-        progress_message_id=callback.message.message_id,
-    )
+    try:
+        await start_broadcast.execute(
+            admin_id=callback.from_user.id,
+            source_chat_id=int(data["source_chat_id"]),
+            source_message_id=int(data["source_message_id"]),
+            progress_message_id=callback.message.message_id,
+        )
+    except Exception:
+        # Nothing was stored, so no worker will ever edit the message: left
+        # alone it would say "Starting" forever. The error goes on to the
+        # error handler, which tells the admin why, a refusal included.
+        try:
+            await safe_edit_text(callback.message, _("The broadcast was not started."))
+        except TelegramAPIError as error:
+            # The admin may have deleted the message; the original error is
+            # the one to report.
+            logger.warning(
+                "Broadcast progress message was not closed: %s",
+                type(error).__name__,
+            )
+        raise
 
 
 async def cancel(callback: CallbackQuery, state: FSMContext) -> None:

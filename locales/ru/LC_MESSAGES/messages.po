@@ -158,6 +158,9 @@ msgstr "Остановить"
 msgid "Stopping the broadcast."
 msgstr "Останавливаю рассылку."
 
+msgid "The broadcast was not started."
+msgstr "Рассылка не запущена."
+
 msgid "This broadcast has already finished."
 msgstr "Эта рассылка уже завершена."
 
