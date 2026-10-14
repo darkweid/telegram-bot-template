@@ -41,7 +41,7 @@ def test_lockfile_pins_with_extras_resolve_to_the_base_package() -> None:
 
 MYPY_MARKER = "- repo: https://github.com/pre-commit/mirrors-mypy"
 BANDIT_MARKER = "- repo: https://github.com/PyCQA/bandit"
-LOCKFILE = Path("infra/requirements/dev.txt")
+LOCKFILE = Path(__file__).resolve().parents[4] / "infra" / "requirements" / "dev.txt"
 
 BANDIT_BLOCK = """
   - repo: https://github.com/PyCQA/bandit

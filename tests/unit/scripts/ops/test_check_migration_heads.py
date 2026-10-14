@@ -2,6 +2,8 @@ from pathlib import Path
 
 from scripts.ops.check_migration_heads import find_heads, parse_revision
 
+MIGRATIONS = Path(__file__).resolve().parents[4] / "migrations" / "versions"
+
 MIGRATION = '''"""{summary}"""
 
 revision: str = "{revision}"
@@ -59,3 +61,9 @@ def test_a_tuple_down_revision_is_read_in_full() -> None:
 
     assert revision == "ddd"
     assert parents == ("bbb", "ccc")
+
+
+def test_the_projects_own_migrations_have_one_head() -> None:
+    """Pins the repository itself, so a merge that forks the graph fails here
+    even when nobody runs the hook."""
+    assert len(find_heads(MIGRATIONS)) == 1
