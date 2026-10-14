@@ -155,11 +155,15 @@ class BotConfig(BaseSettings):
     def split_user_ids(cls, value: object) -> object:
         if not isinstance(value, str):
             return value
-        ids = frozenset(int(part) for part in value.split(",") if part.strip())
+        return frozenset(int(part) for part in value.split(",") if part.strip())
+
+    @field_validator("ADMIN_IDS", "DEVELOPER_IDS")
+    @classmethod
+    def require_user_ids(cls, value: frozenset[int]) -> frozenset[int]:
         # User ids are positive; a negative one is a group or a channel.
-        if any(user_id <= 0 for user_id in ids):
+        if any(user_id <= 0 for user_id in value):
             raise ValueError("role ids must be Telegram user ids (positive integers)")
-        return ids
+        return value
 
     @field_validator("BOT_TOKEN")
     @classmethod

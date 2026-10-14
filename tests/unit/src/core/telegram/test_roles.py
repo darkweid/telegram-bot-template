@@ -10,6 +10,8 @@ def _user(user_id: int) -> User:
 
 
 def test_roles_answer_per_role() -> None:
+    """Admin and developer are independent: holding one says nothing about the
+    other, and a user holding both is privileged once."""
     assert ROLES.is_admin(1) and not ROLES.is_developer(1)
     assert ROLES.is_developer(2) and not ROLES.is_admin(2)
     assert ROLES.is_privileged(3)
@@ -22,6 +24,8 @@ def test_members_lists_each_privileged_id_once_in_order() -> None:
 
 
 async def test_filters_match_their_role_only() -> None:
+    """An admin must not pass the developer filter or the other way round,
+    or one role would open the other role's commands."""
     assert await IsAdmin()(_user(1), event_from_user=_user(1), roles=ROLES)
     assert not await IsAdmin()(_user(2), event_from_user=_user(2), roles=ROLES)
     assert await IsDeveloper()(_user(2), event_from_user=_user(2), roles=ROLES)

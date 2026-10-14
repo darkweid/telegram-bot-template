@@ -7,7 +7,8 @@ from aiogram.types import TelegramObject, User
 @dataclass(frozen=True, slots=True)
 class Roles:
     """Who holds which role. Built by the composition root from the config,
-    so that core code checks roles without reading settings."""
+    so that core code checks roles without reading settings. One id may hold
+    both roles; `members` lists it once."""
 
     admins: frozenset[int]
     developers: frozenset[int]
@@ -36,6 +37,9 @@ class IsAdmin(Filter):
 
 
 class IsDeveloper(Filter):
+    """Same contract as IsAdmin: the sender must hold the developer role, and
+    an update without a sender never passes."""
+
     async def __call__(
         self, event: TelegramObject, event_from_user: User | None, roles: Roles
     ) -> bool:

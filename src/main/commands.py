@@ -34,10 +34,22 @@ async def set_bot_commands(bot: Bot, i18n: I18n, roles: Roles) -> None:
             specs += DEVELOPER_COMMANDS
         try:
             await _set_menu(bot, i18n, specs, BotCommandScopeChat(chat_id=chat_id))
-        except (TelegramBadRequest, TelegramForbiddenError):
-            # "chat not found" until the member opens the bot, Forbidden once
-            # they block it; either way the rest of the menus still go out.
-            logger.warning("Cannot set the role menu for chat %s", chat_id)
+        except TelegramForbiddenError as error:
+            # The member blocked the bot.
+            _warn_menu_skipped(chat_id, error)
+        except TelegramBadRequest as error:
+            # Only "chat not found" (the member never opened the bot) is
+            # tolerated; any other rejection is a bug in a command spec and
+            # must fail startup instead of silently dropping every role menu.
+            if "chat not found" not in error.message.lower():
+                raise
+            _warn_menu_skipped(chat_id, error)
+
+
+def _warn_menu_skipped(chat_id: int, error: Exception) -> None:
+    logger.warning(
+        "Cannot set the role menu for chat %s (%s)", chat_id, type(error).__name__
+    )
 
 
 async def _set_menu(

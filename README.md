@@ -128,6 +128,8 @@ migrations/         Alembic environment and revisions
 models/             every SQLAlchemy model, imported for Alembic autogenerate
 scripts/ops/        helpers behind make targets and pre-commit hooks
 src/core/           shared infrastructure: database, Redis, errors, i18n, Telegram helpers
+src/admin/          admin role: commands and handlers
+src/developer/      developer role: commands and handlers
 src/main/           entry point, config, dependency container, dispatcher, polling and webhook
 src/system/         health checks behind the probes
 src/user/           users: handlers, keyboards, middleware, use cases, repository

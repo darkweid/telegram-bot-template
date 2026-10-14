@@ -365,11 +365,19 @@ def test_role_ids_default_to_nobody() -> None:
     assert config.DEVELOPER_IDS == frozenset()
 
 
+@pytest.mark.parametrize("key", ["ADMIN_IDS", "DEVELOPER_IDS"])
 @pytest.mark.parametrize("value", ["abc", "0", "-100123", "1;2"])
 def test_role_ids_reject_anything_but_user_ids(
-    monkeypatch: pytest.MonkeyPatch, value: str
+    monkeypatch: pytest.MonkeyPatch, key: str, value: str
 ) -> None:
     """A group id or a typo would silently grant nobody the role."""
-    monkeypatch.setenv("ADMIN_IDS", value)
+    monkeypatch.setenv(key, value)
     with pytest.raises(ValidationError):
         _bot()
+
+
+def test_role_ids_reject_a_group_id_passed_as_a_collection() -> None:
+    """Positivity must not depend on how the value arrives, or a group id slips
+    in through a code path other than the environment."""
+    with pytest.raises(ValidationError):
+        _bot(ADMIN_IDS=frozenset({-100123}))
