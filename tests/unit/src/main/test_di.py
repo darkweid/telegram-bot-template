@@ -103,6 +103,7 @@ async def test_building_a_container_installs_the_event_subscribers(
     async def subscriber(*_: object) -> None:
         return None
 
+    saved = event_subscribers()
     marker = {DomainEvent: [subscriber]}
     monkeypatch.setattr(di_module, "EVENT_SUBSCRIBERS", marker)
     container = build_test_container(settings, FakeTelegramSession(), i18n)
@@ -110,7 +111,7 @@ async def test_building_a_container_installs_the_event_subscribers(
         assert event_subscribers() == {DomainEvent: (subscriber,)}
     finally:
         await container.close()
-        set_event_subscribers({})
+        set_event_subscribers(saved)
 
 
 async def test_closing_the_container_releases_the_bot_session(

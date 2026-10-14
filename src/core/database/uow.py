@@ -40,6 +40,9 @@ class SQLAlchemyUnitOfWork:
         self._publisher = publisher
         self._outbox = OutboxRepository()
         self._is_completed = False
+        # This unit's own entry. The session flag below is shared by every
+        # unit on the session and only tells that some unit is open.
+        self._entered = False
         self._after_commit_hooks: list[AfterCommitHook] = []
 
     async def __aenter__(self) -> Self:
@@ -65,6 +68,7 @@ class SQLAlchemyUnitOfWork:
             )
         await self._session.begin()
         self._session.info["uow_active"] = True
+        self._entered = True
         return self
 
     async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
@@ -84,6 +88,7 @@ class SQLAlchemyUnitOfWork:
                     )
                 await self.rollback()
         finally:
+            self._entered = False
             self._session.info.pop("uow_active", None)
 
     def _has_pending_changes(self) -> bool:
@@ -168,8 +173,11 @@ class SQLAlchemyUnitOfWork:
         return message_id
 
     def _ensure_active(self) -> None:
+        # Checked on this unit, not on the session: another unit open on the
+        # same session would take the writes into its transaction, while this
+        # unit's after-commit hooks never run.
         self._ensure_not_completed()
-        if not self._session.info.get("uow_active"):
+        if not self._entered:
             raise RuntimeError("Call this inside `async with uow:`")
 
     async def _run_after_commit_hooks(self) -> None:

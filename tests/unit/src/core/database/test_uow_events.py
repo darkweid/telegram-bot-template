@@ -55,18 +55,50 @@ async def test_subscribers_run_inside_the_transaction_of_the_action() -> None:
     assert published.occurred_at.tzinfo is not None
 
 
+@dataclass(frozen=True, slots=True)
+class Ponged(DomainEvent):
+    code: ClassVar[str] = "test.ponged"
+
+
 async def test_an_event_without_subscribers_is_a_no_op() -> None:
-    set_event_subscribers({})
-    uow = SQLAlchemyUnitOfWork(FakeAsyncSession())
+    """Subscribers are looked up by the event's exact type: one registered for
+    another event must not run, and nothing may be written on its behalf."""
+    seen: list[PublishedEvent] = []
+
+    async def subscriber(_: SQLAlchemyUnitOfWork, published: PublishedEvent) -> None:
+        seen.append(published)
+
+    set_event_subscribers({Ponged: [subscriber]})
+    session = FakeAsyncSession()
+    uow = SQLAlchemyUnitOfWork(session)
     async with uow:
         await uow.publish(Actor.system(), Pinged(target_id=1))
         await uow.commit()
+    assert seen == []
+    session.add.assert_not_called()
+    session.execute.assert_not_called()
 
 
 async def test_publish_outside_the_transaction_is_refused() -> None:
     uow = SQLAlchemyUnitOfWork(FakeAsyncSession())
     with pytest.raises(RuntimeError, match="inside"):
         await uow.publish(Actor.system(), Pinged(target_id=1))
+
+
+async def test_a_unit_never_entered_is_refused_while_another_is_open() -> None:
+    """Units of one update share a session. A unit that was never entered would
+    write into the open unit's transaction while its own after-commit hook
+    never runs, losing the publish without a trace."""
+    session = FakeAsyncSession()
+    entered = SQLAlchemyUnitOfWork(session)
+    stray = SQLAlchemyUnitOfWork(session, publisher=RecordingPublisher())
+    async with entered:
+        with pytest.raises(RuntimeError, match="inside"):
+            await stray.enqueue_task("notify", user_id=2)
+        with pytest.raises(RuntimeError, match="inside"):
+            await stray.publish(Actor.system(), Pinged(target_id=1))
+        await entered.commit()
+    session.add.assert_not_called()
 
 
 async def test_an_enqueued_task_is_published_after_commit_only() -> None:

@@ -15,6 +15,7 @@ class Color(StrEnum):
     [
         ((1, "a", None, True, 1.5), {}),
         ((), {"ids": [1, 2], "nested": {"a": [{"b": None}]}}),
+        ((9999999999999998.0, -9999999999999998.0, 1e-07, 0.1 + 0.2), {}),
     ],
 )
 def test_plain_json_values_are_accepted(
@@ -33,6 +34,10 @@ def test_plain_json_values_are_accepted(
         ((), {"by_color": {Color.RED: "a"}}),
         (((1, 2),), {}),
         ((), {"pair": [(1, 2)]}),
+        ((1e16,), {}),
+        ((), {"amounts": [-2.5e20]}),
+        (("a\x00b",), {}),
+        ((), {"names": {"a\x00": "b"}}),
     ],
 )
 def test_values_json_would_change_are_refused(
