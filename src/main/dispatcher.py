@@ -7,12 +7,15 @@ from aiogram.utils.i18n import I18n
 from dishka import AsyncContainer
 from dishka.integrations.aiogram import ContainerMiddleware, inject_router
 
+from src.admin.handlers import build_admin_router
 from src.core.i18n.middleware import UserLocaleMiddleware
 from src.core.telegram.errors import build_errors_router
 from src.core.telegram.middlewares.callback_answer import (
     SkipAwareCallbackAnswerMiddleware,
 )
 from src.core.telegram.middlewares.update_context import UpdateContextMiddleware
+from src.core.telegram.roles import Roles
+from src.developer.handlers import build_developer_router
 from src.user.handlers import build_user_router
 from src.user.middlewares import UserMiddleware
 
@@ -28,10 +31,14 @@ async def create_dispatcher(container: AsyncContainer) -> Dispatcher:
        handler shares;
     3. UserMiddleware - stores the sender, needs the request scope;
     4. UserLocaleMiddleware - needs the stored user's chosen language.
+
+    Role routers come before the user router: an admin's command must reach the
+    admin handler even when a user handler would match it too.
     """
     dp = Dispatcher(
         storage=await container.get(BaseStorage),
         events_isolation=await container.get(BaseEventIsolation),
+        roles=await container.get(Roles),
     )
     container_middleware = ContainerMiddleware(container)
     dp.update.outer_middleware(UpdateContextMiddleware())
@@ -50,7 +57,11 @@ async def create_dispatcher(container: AsyncContainer) -> Dispatcher:
     # an inline message.
     dp.callback_query.middleware(SkipAwareCallbackAnswerMiddleware())
     dp.include_routers(
-        build_errors_router(), build_user_router(), _build_unmatched_router()
+        build_errors_router(),
+        build_admin_router(),
+        build_developer_router(),
+        build_user_router(),
+        _build_unmatched_router(),
     )
     return dp
 

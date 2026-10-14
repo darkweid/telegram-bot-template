@@ -14,6 +14,7 @@ from aiohttp import web
 from dishka import AsyncContainer, Provider
 
 from loggers import get_logger
+from src.core.telegram.roles import Roles
 from src.main.commands import set_bot_commands
 from src.main.config import Config, WebServerConfig
 from src.main.di import build_container
@@ -50,7 +51,9 @@ async def bot_runtime(
         await _require_dependencies(container)
         dp = await create_dispatcher(container)
         bot = await container.get(Bot)
-        await set_bot_commands(bot, await container.get(I18n))
+        await set_bot_commands(
+            bot, await container.get(I18n), await container.get(Roles)
+        )
         yield BotRuntime(config=config, container=container, dp=dp, bot=bot)
     finally:
         # The bot session, FSM storage, Redis and the engine all close here.

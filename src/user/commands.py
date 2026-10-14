@@ -1,13 +1,5 @@
-from dataclasses import dataclass
-
 from src.core.i18n import N_
-
-
-@dataclass(frozen=True, slots=True)
-class BotCommandSpec:
-    command: str
-    description: str  # an N_ msgid, translated per menu language
-
+from src.core.telegram.commands import BotCommandSpec
 
 USER_COMMANDS: tuple[BotCommandSpec, ...] = (
     BotCommandSpec("start", N_("Start the bot")),

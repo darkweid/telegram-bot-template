@@ -1,7 +1,7 @@
 from functools import lru_cache
 import os
 import re
-from typing import Literal, Self
+from typing import Annotated, Literal, Self
 from urllib.parse import quote, urlsplit
 
 from pydantic import (
@@ -12,7 +12,7 @@ from pydantic import (
     field_validator,
     model_validator,
 )
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 from src.core.i18n import SUPPORTED_LOCALES
 
@@ -142,8 +142,24 @@ class BotConfig(BaseSettings):
     # How long a stopping bot waits for updates already being handled. Keep it
     # below the container's stop_grace_period, or Docker kills the process first.
     SHUTDOWN_TIMEOUT_SECONDS: float = Field(20, gt=0)
+    # Telegram user ids, comma-separated. Admins get the admin commands and
+    # menu, developers the developer ones; both skip throttling and bans.
+    # NoDecode: without it pydantic-settings expects a JSON list here.
+    ADMIN_IDS: Annotated[frozenset[int], NoDecode] = frozenset()
+    DEVELOPER_IDS: Annotated[frozenset[int], NoDecode] = frozenset()
 
     model_config = SettingsConfigDict(extra="ignore", hide_input_in_errors=True)
+
+    @field_validator("ADMIN_IDS", "DEVELOPER_IDS", mode="before")
+    @classmethod
+    def split_user_ids(cls, value: object) -> object:
+        if not isinstance(value, str):
+            return value
+        ids = frozenset(int(part) for part in value.split(",") if part.strip())
+        # User ids are positive; a negative one is a group or a channel.
+        if any(user_id <= 0 for user_id in ids):
+            raise ValueError("role ids must be Telegram user ids (positive integers)")
+        return ids
 
     @field_validator("BOT_TOKEN")
     @classmethod

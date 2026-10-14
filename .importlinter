@@ -16,6 +16,8 @@ source_modules =
 forbidden_modules =
     src.main
     src.user
+    src.admin
+    src.developer
     src.system
     models
 
@@ -24,6 +26,8 @@ name = Handlers reach data through use cases, never through repositories
 type = forbidden
 source_modules =
     src.user.handlers
+    src.admin.handlers
+    src.developer.handlers
 forbidden_modules =
     src.user.repositories
     sqlalchemy

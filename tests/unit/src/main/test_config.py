@@ -345,3 +345,31 @@ def test_env_example_token_is_a_placeholder_the_validator_rejects() -> None:
     assert values.get("BOT_TOKEN")
     with pytest.raises(ValidationError, match="does not look like a token"):
         BotConfig(_env_file=None, BOT_TOKEN=values["BOT_TOKEN"])
+
+
+def test_role_ids_are_parsed_from_a_comma_separated_list(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Compose and .env pass lists as plain strings; a JSON list is easy to
+    get wrong in an env file and fails with an unreadable error."""
+    monkeypatch.setenv("ADMIN_IDS", " 11, 22 ,")
+    monkeypatch.setenv("DEVELOPER_IDS", "33")
+    config = _bot()
+    assert config.ADMIN_IDS == frozenset({11, 22})
+    assert config.DEVELOPER_IDS == frozenset({33})
+
+
+def test_role_ids_default_to_nobody() -> None:
+    config = _bot()
+    assert config.ADMIN_IDS == frozenset()
+    assert config.DEVELOPER_IDS == frozenset()
+
+
+@pytest.mark.parametrize("value", ["abc", "0", "-100123", "1;2"])
+def test_role_ids_reject_anything_but_user_ids(
+    monkeypatch: pytest.MonkeyPatch, value: str
+) -> None:
+    """A group id or a typo would silently grant nobody the role."""
+    monkeypatch.setenv("ADMIN_IDS", value)
+    with pytest.raises(ValidationError):
+        _bot()

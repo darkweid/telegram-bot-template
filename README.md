@@ -99,6 +99,24 @@ Put a reverse proxy with a valid certificate in front of the bot and forward
 `tg-bot-template-network` Docker network. The compose file publishes no port
 of the bot.
 
+## Roles
+
+Two optional roles, set in `.env` as comma-separated Telegram user ids:
+
+- `ADMIN_IDS`: admins get the admin commands;
+- `DEVELOPER_IDS`: developers get the developer commands.
+
+Both skip throttling and bans. Each listed id gets a command menu of its own in
+its private chat: the user commands plus those of its roles. An id that never
+opened the bot cannot get a menu yet; the bot logs one warning and starts
+anyway, and the menu is set on the next start after that user opens the bot.
+
+The role menus are set for each listed id on every start. Removing an id from
+`ADMIN_IDS` or `DEVELOPER_IDS` takes the role away at once, but Telegram keeps
+showing that user the old menu: the bot never deletes a menu it set. Clear it
+once by hand with `deleteMyCommands` for the scope
+`{"type": "chat", "chat_id": <id>}` and every language code the bot set.
+
 ## Project layout
 
 ```text

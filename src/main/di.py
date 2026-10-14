@@ -29,6 +29,7 @@ from src.core.database.uow import SQLAlchemyUnitOfWork
 from src.core.i18n import LOCALES_DIR, build_i18n
 from src.core.redis.core import create_redis_client
 from src.core.telegram.fsm import create_event_isolation, create_fsm_storage
+from src.core.telegram.roles import Roles
 from src.core.telegram.session import (
     ForbiddenMiddleware,
     RetryAfterMiddleware,
@@ -59,6 +60,10 @@ class ConfigProvider(Provider):
     @provide
     def bot(self, config: Config) -> BotConfig:
         return config.bot
+
+    @provide
+    def roles(self, bot: BotConfig) -> Roles:
+        return Roles(admins=bot.ADMIN_IDS, developers=bot.DEVELOPER_IDS)
 
     @provide
     def web_server(self, config: Config) -> WebServerConfig:

@@ -18,6 +18,7 @@ from src.core.telegram.middlewares.callback_answer import (
     SkipAwareCallbackAnswerMiddleware,
 )
 from src.core.telegram.middlewares.update_context import UpdateContextMiddleware
+from src.core.telegram.roles import Roles
 from src.main.config import Config
 from src.main.dispatcher import create_dispatcher
 from src.user.middlewares import UserMiddleware
@@ -175,3 +176,21 @@ async def test_a_callback_from_a_group_is_still_answered(
     async with running_bot(settings, i18n, CountingTouch()) as running:
         await running.feed(Update(update_id=999_004, callback_query=callback))
         assert len(running.session.sent(AnswerCallbackQuery)) == 1
+
+
+async def test_roles_reach_every_update(settings: Config, i18n: I18n) -> None:
+    """Role filters read `roles` from the update's data; without it every
+    admin command would fail with a TypeError instead of running."""
+    async with running_bot(settings, i18n) as running:
+        assert isinstance(running.dp["roles"], Roles)
+
+
+async def test_role_routers_come_before_the_user_router(
+    settings: Config, i18n: I18n
+) -> None:
+    """An admin's command that a user handler also matches (/help) must reach
+    the admin handler first."""
+    async with running_bot(settings, i18n) as running:
+        names = [router.name for router in running.dp.sub_routers]
+    assert names.index("admin") < names.index("user")
+    assert names.index("developer") < names.index("user")
