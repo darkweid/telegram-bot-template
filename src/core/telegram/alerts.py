@@ -59,6 +59,10 @@ class TaskFailureReporter(Protocol):
 
 
 def _is_project_file(filename: str) -> bool:
+    # `<frozen importlib._bootstrap>`, `<string>`: no file, and resolved they
+    # would land under the working directory, which in the image is the project.
+    if filename.startswith("<"):
+        return False
     path = Path(filename).resolve()
     return path.is_relative_to(PROJECT_ROOT) and not _INSTALLED_PACKAGE_DIRS & set(
         path.parts

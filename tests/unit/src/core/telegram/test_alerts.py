@@ -8,6 +8,7 @@ import redis.exceptions as redis_exc
 
 from src.core.limiter.limiter import RateLimiter
 from src.core.redis.degradation import RedisDegradationReporter
+from src.core.telegram import alerts as alerts_module
 from src.core.telegram.alerts import Alert, DeveloperAlerter
 from tests.fakes import redis as fake_redis_module
 from tests.fakes.redis import InMemoryRedis
@@ -64,6 +65,28 @@ def _library_failure(read: object) -> json.JSONDecodeError:
     except json.JSONDecodeError as error:
         return error
     raise AssertionError("expected a decode error")
+
+
+def _compiled_failure() -> BaseException:
+    # Raised from code with no file behind it, as exec, eval and frozen
+    # modules have.
+    namespace: dict[str, object] = {}
+    exec(
+        compile("def broken():\n    raise RuntimeError('x')\n", "<string>", "exec"),
+        namespace,
+    )  # nosec B102
+    try:
+        namespace["broken"]()  # type: ignore[operator]
+    except RuntimeError as error:
+        return error
+    raise AssertionError("expected an error")
+
+
+class ClosingLoop:
+    """A loop that is shutting down and refuses new tasks."""
+
+    def create_task(self, coroutine: object) -> None:
+        raise RuntimeError("loop is closed")
 
 
 class Clock:
@@ -267,3 +290,33 @@ async def test_a_library_error_from_two_handlers_is_alerted_twice() -> None:
     # The innermost frame of ours, not the library's.
     assert "test_alerts.py:_read_settings" in texts[0]
     assert "test_alerts.py:_read_profile" in texts[1]
+
+
+async def test_a_frame_without_a_file_is_not_placed_in_the_project(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """In the image the working directory is the project: a pseudo-filename
+    resolved against it would pass for project code and hide the real place."""
+    monkeypatch.chdir(alerts_module.PROJECT_ROOT)
+    session = FakeTelegramSession()
+    await _alerter(session).alert_error(
+        Alert(_compiled_failure(), origin="update message")
+    )
+    [sent] = session.sent(SendMessage)
+    assert "at test_alerts.py:_compiled_failure" in sent.text
+
+
+def test_a_closing_loop_refusing_the_notice_is_only_logged(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """notify() is called from fail-open paths, which must not fail over it."""
+    monkeypatch.setattr(alerts_module.asyncio, "get_running_loop", ClosingLoop)
+    session = FakeTelegramSession()
+    alerter = _alerter(session)
+    with captured_logs("src.core.telegram.alerts") as records:
+        alerter.notify("Redis is degraded")
+    [record] = records
+    assert record.levelno == logging.ERROR
+    assert record.getMessage() == "Alert not sent: RuntimeError"
+    assert session.sent(SendMessage) == []
+    assert alerter._background == set()
