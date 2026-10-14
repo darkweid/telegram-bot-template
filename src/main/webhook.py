@@ -85,7 +85,7 @@ async def register_webhook(runtime: BotRuntime) -> None:
         # The secret token sits in exc.method; `from None` keeps the error
         # from carrying it along as its cause.
         raise WebhookRegistrationError(
-            f"Telegram refused the webhook: {exc.message}"
+            f"Cannot set the webhook ({type(exc).__name__}): {exc.message}"
         ) from None
 
 

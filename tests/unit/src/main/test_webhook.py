@@ -1,7 +1,7 @@
 import asyncio
 from unittest.mock import AsyncMock
 
-from aiogram.exceptions import TelegramBadRequest
+from aiogram.exceptions import TelegramBadRequest, TelegramNetworkError
 from aiogram.methods import SendMessage, SetWebhook
 from aiogram.types import Update
 from aiogram.utils.i18n import I18n
@@ -196,7 +196,37 @@ async def test_a_refused_webhook_becomes_a_startup_error(
         with pytest.raises(WebhookRegistrationError) as caught:
             await register_webhook(runtime)
     assert str(caught.value) == (
-        "Telegram refused the webhook: Bad Request: bad webhook: Failed to resolve host"
+        "Cannot set the webhook (TelegramBadRequest): "
+        "Bad Request: bad webhook: Failed to resolve host"
     )
     assert caught.value.__cause__ is None
     assert WEBHOOK_SECRET not in str(caught.value)
+
+
+async def test_a_network_failure_names_its_class_and_leaks_no_secret(
+    settings: Config, i18n: I18n
+) -> None:
+    """The line must not call a dropped connection a refusal, and the failed
+    request carries the bot token and the webhook secret, which stay out."""
+    session = FakeTelegramSession()
+    session.queue(
+        SetWebhook,
+        TelegramNetworkError(
+            method=SetWebhook(
+                url="https://bot.example.com/webhook/telegram",
+                secret_token=WEBHOOK_SECRET,
+            ),
+            message="Request timeout error",
+        ),
+    )
+    config = configured(settings, webhook=True)
+    async with bot_runtime(
+        config, TestOverrides(session, i18n), Stubs(session)
+    ) as runtime:
+        with pytest.raises(WebhookRegistrationError) as caught:
+            await register_webhook(runtime)
+    message = str(caught.value)
+    assert message.startswith("Cannot set the webhook (TelegramNetworkError): ")
+    assert caught.value.__cause__ is None
+    assert WEBHOOK_SECRET not in message
+    assert config.bot.BOT_TOKEN.get_secret_value() not in message
