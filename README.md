@@ -152,6 +152,37 @@ on. It never carries what the user sent or their name. The same failure (type,
 place and origin) is alerted once per `ALERT_COOLDOWN_SECONDS` (300), and a
 task once however often it is redelivered.
 
+## Broadcast
+
+`/broadcast` (admins) sends one message to every user who can receive it:
+reachable and not banned.
+
+1. Send `/broadcast`, then the message: text, a photo or video with a caption,
+   a document. Albums are refused. The bot shows an exact copy and the number of
+   recipients.
+2. Press Send. The bot copies the message to every recipient and keeps a
+   progress message with a Stop button, updated at most every 5 seconds. When
+   the broadcast ends, the progress message turns into the report and the bot
+   sends the report again, so the admin gets a notification.
+
+Only one broadcast runs at a time. It goes to the users the bot had when Send
+was pressed; someone who starts the bot later does not get it. Do not delete
+the original message until the broadcast has finished: every copy is made from
+it, and if it is gone, the broadcast stops as failed and developers are
+alerted.
+
+The worker sends `BROADCAST_RATE_PER_SECOND` messages a second (25 by default;
+Telegram allows about 30 to different users) and saves its position every
+`BROADCAST_CHECKPOINT_EVERY` recipients (50) and at least once a minute. If the
+worker stops mid-broadcast, a scheduled task resumes it within about five
+minutes from the last saved position, so up to `BROADCAST_CHECKPOINT_EVERY`
+users may get the message twice. Stop takes effect at the next save, within
+about a minute, flood waits included.
+
+A user who blocked the bot is counted as unreachable and marked so; a chat
+Telegram cannot find counts as failed. Network errors are retried. Anything
+else marks the broadcast failed, sends the report and alerts developers.
+
 ## Background tasks
 
 Background work runs on [taskiq](https://taskiq-python.github.io/) over Redis
@@ -261,6 +292,7 @@ models/             every SQLAlchemy model, imported for Alembic autogenerate
 scripts/ops/        helpers behind make targets and pre-commit hooks
 src/core/           shared infrastructure: database, Redis, task queue, errors, i18n, Telegram helpers
 src/admin/          admin role: commands and handlers
+src/broadcast/      broadcasts: model, repository, use cases, tasks, handlers
 src/developer/      developer role: commands and handlers
 src/main/           entry points (bot, worker, scheduler), config, dependency container, dispatcher
 src/system/         health checks behind the probes

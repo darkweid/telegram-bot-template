@@ -251,6 +251,17 @@ class ThrottlingConfig(BaseSettings):
     model_config = SettingsConfigDict(extra="ignore")
 
 
+class BroadcastConfig(BaseSettings):
+    # Copies a broadcast sends per second. Telegram allows about 30 messages a
+    # second to different users; closer to it every copy meets flood control.
+    BROADCAST_RATE_PER_SECOND: float = Field(25, gt=0, le=30)
+    # Recipients per batch and checkpoint. A worker restart may send up to this
+    # many messages a second time; a large value also makes a stop slower.
+    BROADCAST_CHECKPOINT_EVERY: int = Field(50, ge=1, le=1000)
+
+    model_config = SettingsConfigDict(extra="ignore")
+
+
 class WebServerConfig(BaseSettings):
     # The aiohttp server runs in both modes: health endpoints always, the
     # Telegram webhook only when BOT_MODE=webhook. Inside the container it
@@ -330,6 +341,7 @@ class Config(BaseModel):
     app: AppConfig
     bot: BotConfig
     throttling: ThrottlingConfig
+    broadcast: BroadcastConfig
     web_server: WebServerConfig
     webhook: WebhookConfig
     postgres: PostgresConfig
@@ -386,6 +398,7 @@ def get_settings() -> Config:
         app=AppConfig(_env_file=env_file),
         bot=BotConfig(_env_file=env_file),
         throttling=ThrottlingConfig(_env_file=env_file),
+        broadcast=BroadcastConfig(_env_file=env_file),
         web_server=WebServerConfig(_env_file=env_file),
         webhook=WebhookConfig(_env_file=env_file),
         postgres=PostgresConfig(_env_file=env_file),

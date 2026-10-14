@@ -201,3 +201,4 @@ async def test_role_routers_come_before_the_user_router(
         names = [router.name for router in running.dp.sub_routers]
     assert names.index("admin") < names.index("user")
     assert names.index("developer") < names.index("user")
+    assert names.index("broadcast") < names.index("user")

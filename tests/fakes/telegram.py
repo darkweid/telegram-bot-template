@@ -8,7 +8,7 @@ from typing import Any, TypeVar, get_args
 from aiogram import Bot
 from aiogram.client.session.base import BaseSession
 from aiogram.methods import GetMe, TelegramMethod
-from aiogram.types import Chat, Message, User
+from aiogram.types import Chat, Message, MessageId, User
 
 TEST_BOT_TOKEN = "123456789:AAtest-bot-token-not-real-0000000000000"
 BOT_ID = 123456789
@@ -36,12 +36,12 @@ class FakeTelegramSession(BaseSession):
     """A Bot API session that records calls instead of sending them.
 
     Results are queued per method type; without one, a call that returns a
-    bool succeeds and a call that returns a Message gets one echoing its chat
-    and text, bound to the bot like a real reply, which covers what handlers
-    send. Anything else must be queued, so a test never passes on a made-up
-    answer it did not ask for. Queued results come back exactly as given:
-    bind a queued Message with `.as_(bot)` if the code under test calls its
-    methods.
+    bool succeeds, a call that returns a Message gets one echoing its chat
+    and text, bound to the bot like a real reply, and a copy gets a fresh
+    MessageId, which covers what handlers send. Anything else must be
+    queued, so a test never passes on a made-up answer it did not ask for.
+    Queued results come back exactly as given: bind a queued Message with
+    `.as_(bot)` if the code under test calls its methods.
     """
 
     def __init__(self) -> None:
@@ -112,6 +112,8 @@ class FakeTelegramSession(BaseSession):
                 from_user=bot_user(),
                 text=getattr(method, "text", None),
             ).as_(bot)
+        if MessageId in returns:
+            return MessageId(message_id=next(self._message_ids))
         if returns == (bool,):
             return True
         raise LookupError(f"Queue a result for {type(method).__name__} first")

@@ -2,7 +2,7 @@ from datetime import UTC, datetime
 
 from aiogram.exceptions import TelegramForbiddenError
 from aiogram.methods import EditMessageText, GetChat, SendMessage, SetMyCommands
-from aiogram.types import BotCommand, Chat, Message
+from aiogram.types import BotCommand, Chat, Message, MessageId
 import pytest
 
 from tests.factories.updates import (
@@ -193,3 +193,14 @@ def test_my_chat_member_chat_id_follows_the_chat_type() -> None:
     assert group.my_chat_member.chat.id == -7
     assert explicit.my_chat_member.chat.id == -100
     assert explicit.my_chat_member.from_user.language_code == "ru"
+
+
+async def test_copy_returns_a_new_message_id() -> None:
+    """copyMessage answers with the id of the copy, not a Message; a
+    broadcast test would otherwise queue one result per recipient."""
+    session = FakeTelegramSession()
+    bot = make_bot(session)
+    first = await bot.copy_message(chat_id=10, from_chat_id=1, message_id=7)
+    second = await bot.copy_message(chat_id=20, from_chat_id=1, message_id=7)
+    assert isinstance(first, MessageId)
+    assert first.message_id != second.message_id

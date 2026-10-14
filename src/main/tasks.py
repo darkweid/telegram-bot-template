@@ -6,6 +6,7 @@ publish a name nobody runs.
 
 from taskiq import AsyncBroker, InMemoryBroker
 
+from src.broadcast.tasks import BROADCAST_TASKS
 from src.core.outbox.sweeper import purge_outbox, sweep_outbox
 from src.core.tasks.broker import create_stream_broker
 from src.core.tasks.middlewares import TaskFailureAlertMiddleware
@@ -19,6 +20,7 @@ TASKS: tuple[TaskSpec, ...] = (
     TaskSpec("outbox.sweep", sweep_outbox, schedule=({"cron": "* * * * *"},)),
     TaskSpec("outbox.purge", purge_outbox, schedule=({"cron": "0 3 * * *"},)),
     *USER_TASKS,
+    *BROADCAST_TASKS,
 )
 
 

@@ -9,6 +9,7 @@ from sqlalchemy.engine import make_url
 from src.main.config import (
     AppConfig,
     BotConfig,
+    BroadcastConfig,
     CacheConfig,
     Config,
     HttpConfig,
@@ -477,3 +478,24 @@ def test_user_cache_ttl_may_not_outlive_the_version_counter() -> None:
         _config(bot=_bot(USER_CACHE_TTL_SECONDS=100), cache=cache).model_dump()
     )
     assert config.bot.USER_CACHE_TTL_SECONDS == 100
+
+
+def test_broadcast_defaults_stay_under_the_bot_api_limit() -> None:
+    """Telegram allows about 30 messages a second to different users; the
+    default leaves headroom for the bot's other traffic."""
+    config = BroadcastConfig()
+    assert config.BROADCAST_RATE_PER_SECOND == 25
+    assert config.BROADCAST_CHECKPOINT_EVERY == 50
+
+
+@pytest.mark.parametrize(
+    "values",
+    [
+        {"BROADCAST_RATE_PER_SECOND": 0},
+        {"BROADCAST_RATE_PER_SECOND": 31},
+        {"BROADCAST_CHECKPOINT_EVERY": 0},
+    ],
+)
+def test_broadcast_settings_out_of_range_are_refused(values: dict[str, float]) -> None:
+    with pytest.raises(ValidationError):
+        BroadcastConfig(**values)

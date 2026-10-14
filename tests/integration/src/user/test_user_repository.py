@@ -8,10 +8,11 @@ import pytest_asyncio
 from sqlalchemy import delete
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
+from src.core.utils.datetime_utils import get_utc_now
 from src.user.models import User
 from src.user.repositories import UserRepository
 from src.user.schemas import TelegramProfile
-from tests.integration.conftest import new_user_id
+from tests.integration.conftest import build_user_data, new_user_id
 
 pytestmark = pytest.mark.asyncio(loop_scope="session")
 
@@ -342,3 +343,53 @@ async def test_of_two_concurrent_bans_only_one_changes_the_user(
         async with AsyncSession(integration_engine) as session:
             await session.execute(delete(User).where(User.id == user_id))
             await session.commit()
+
+
+async def test_recipients_are_reachable_unbanned_users_in_id_order(
+    db_session: AsyncSession,
+) -> None:
+    """The broadcast walks this keyset; a banned or unreachable user must
+    never get a copy, and the count shown in the preview must match."""
+    users = UserRepository()
+    base = new_user_id()
+    before = await users.count_recipients(db_session)
+    db_session.add_all(
+        [
+            User(**build_user_data(base + 3)),
+            User(**build_user_data(base + 1)),
+            User(**build_user_data(base + 2, is_banned=True)),
+            User(**build_user_data(base + 4, is_reachable=False)),
+        ]
+    )
+    await db_session.flush()
+    assert await users.get_recipient_ids(db_session, after=base, limit=2) == [
+        base + 1,
+        base + 3,
+    ]
+    assert await users.count_recipients(db_session) - before == 2
+
+
+async def test_users_who_joined_after_the_start_are_not_recipients(
+    db_session: AsyncSession,
+) -> None:
+    """Ids are not monotonic, so a user who starts the bot mid-broadcast may
+    land ahead of the cursor; without the cutoff the progress would pass the
+    total counted at the start."""
+    users = UserRepository()
+    base = new_user_id()
+    cutoff = get_utc_now()
+    before = await users.count_recipients(db_session, registered_by=cutoff)
+    db_session.add_all(
+        [
+            User(**build_user_data(base + 1, created_at=cutoff - timedelta(minutes=1))),
+            User(**build_user_data(base + 2, created_at=cutoff + timedelta(seconds=1))),
+        ]
+    )
+    await db_session.flush()
+    assert await users.get_recipient_ids(
+        db_session, after=base, limit=1, registered_by=cutoff
+    ) == [base + 1]
+    assert base + 2 not in await users.get_recipient_ids(
+        db_session, after=base + 1, limit=1, registered_by=cutoff
+    )
+    assert await users.count_recipients(db_session, registered_by=cutoff) - before == 1

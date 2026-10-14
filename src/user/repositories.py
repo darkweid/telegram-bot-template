@@ -2,13 +2,31 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
-from sqlalchemy import Boolean, func, literal_column, select, update
+from sqlalchemy import (
+    Boolean,
+    ColumnElement,
+    func,
+    literal_column,
+    select,
+    update,
+)
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.core.database.repositories import BaseRepository
 from src.user.models import User
 from src.user.schemas import TelegramProfile, UserStats
+
+
+def _recipient_filter(registered_by: datetime | None) -> list[ColumnElement[bool]]:
+    """Who gets a broadcast: reachable, not banned, and present by `registered_by`."""
+    conditions: list[ColumnElement[bool]] = [
+        User.is_reachable.expression,
+        ~User.is_banned,
+    ]
+    if registered_by is not None:
+        conditions.append(User.created_at <= registered_by)
+    return conditions
 
 
 @dataclass(frozen=True, slots=True)
@@ -152,3 +170,35 @@ class UserRepository(BaseRepository[User]):
         ).select_from(User)
         row = (await session.execute(statement)).one()
         return UserStats(**row._mapping)
+
+    async def get_recipient_ids(
+        self,
+        session: AsyncSession,
+        *,
+        after: int,
+        limit: int,
+        registered_by: datetime | None = None,
+    ) -> list[int]:
+        """The next broadcast recipients after `after`, in id order.
+
+        The predicate is the one of the partial index ix_users_recipients, so
+        each batch is an index range scan. `registered_by` leaves out users
+        created later.
+        """
+        query = (
+            select(User.id)
+            .where(*_recipient_filter(registered_by), User.id > after)
+            .order_by(User.id)
+            .limit(limit)
+        )
+        return list((await session.scalars(query)).all())
+
+    async def count_recipients(
+        self, session: AsyncSession, *, registered_by: datetime | None = None
+    ) -> int:
+        query = (
+            select(func.count())
+            .select_from(User)
+            .where(*_recipient_filter(registered_by))
+        )
+        return (await session.execute(query)).scalar_one()

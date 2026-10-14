@@ -26,6 +26,7 @@ from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from taskiq import AsyncBroker
 
+from src.broadcast.di import BroadcastProvider
 from src.core.cache.interface import Cache
 from src.core.cache.redis_cache import RedisCache
 from src.core.cache.serializer import JsonSerializer
@@ -62,6 +63,7 @@ from src.core.telegram.session import (
 from src.main.config import (
     AppConfig,
     BotConfig,
+    BroadcastConfig,
     CacheConfig,
     Config,
     HttpConfig,
@@ -93,6 +95,10 @@ class ConfigProvider(Provider):
     @provide
     def throttling(self, config: Config) -> ThrottlingConfig:
         return config.throttling
+
+    @provide
+    def broadcast(self, config: Config) -> BroadcastConfig:
+        return config.broadcast
 
     @provide
     def roles(self, bot: BotConfig) -> Roles:
@@ -403,6 +409,7 @@ def build_container(
         HttpProvider(),
         BrokerProvider(),
         UserProvider(),
+        BroadcastProvider(),
         SystemProvider(),
         AiogramProvider(),
         *providers,

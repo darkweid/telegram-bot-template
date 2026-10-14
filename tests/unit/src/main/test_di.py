@@ -24,12 +24,14 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 from taskiq import AsyncBroker, InMemoryBroker
 from taskiq.message import BrokerMessage
 
+from src.broadcast.usecases.run_broadcast import RunBroadcastUseCase
 from src.core.cache.interface import Cache, CacheKey
 from src.core.cache.redis_cache import RedisCache
 from src.core.database.uow import SQLAlchemyUnitOfWork
 from src.core.events.registry import event_subscribers, set_event_subscribers
 from src.core.events.schemas import DomainEvent
 from src.core.http.user_agent import UserAgent
+from src.core.limiter.pacer import Pacer
 from src.core.outbox.interface import TaskPublisher
 from src.core.outbox.models import OutboxMessage
 from src.core.outbox.publisher import UnregisteredTaskError
@@ -617,3 +619,18 @@ async def test_closing_the_container_releases_the_alert_session(
 
     assert closed.count(alert_session) == 1
     assert closed.count(bot_session) == 1
+
+
+async def test_every_broadcast_run_gets_its_own_pacer(
+    settings: Config, i18n: I18n
+) -> None:
+    """A pacer shared across runs would carry one run's schedule into the next."""
+    container = build_test_container(settings, FakeTelegramSession(), i18n)
+    try:
+        async with container() as first:
+            await first.get(RunBroadcastUseCase)
+            pacer = await first.get(Pacer)
+        async with container() as second:
+            assert await second.get(Pacer) is not pacer
+    finally:
+        await container.close()

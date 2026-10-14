@@ -2,6 +2,7 @@ from taskiq import InMemoryBroker
 from taskiq.middlewares import SmartRetryMiddleware
 from taskiq_redis import RedisStreamBroker
 
+from src.broadcast.task_names import RESUME_STALLED_BROADCASTS, RUN_BROADCAST
 from src.core.tasks.middlewares import TaskFailureAlertMiddleware
 from src.main import tasks as tasks_module
 from src.main.config import Config
@@ -68,3 +69,12 @@ def test_the_notice_is_never_retried() -> None:
     """A retry would repeat the notice to every admin who already got it."""
     [spec] = [spec for spec in TASKS if spec.name == NOTIFY_ADMINS_OF_NEW_USER]
     assert spec.retry_on_error is False
+
+
+def test_broadcasts_run_once_and_stalled_ones_resume_every_minute() -> None:
+    """A retried run would restart a broadcast marked FAILED; without the
+    resume task a run cut off by a restart would never finish."""
+    specs = {spec.name: spec for spec in TASKS}
+    assert specs[RUN_BROADCAST].retry_on_error is False
+    assert specs[RUN_BROADCAST].schedule == ()
+    assert specs[RESUME_STALLED_BROADCASTS].schedule == ({"cron": "* * * * *"},)

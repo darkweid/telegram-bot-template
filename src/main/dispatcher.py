@@ -8,6 +8,7 @@ from dishka import AsyncContainer
 from dishka.integrations.aiogram import ContainerMiddleware, inject_router
 
 from src.admin.handlers import build_admin_router
+from src.broadcast.handlers import build_broadcast_router
 from src.core.i18n.middleware import UserLocaleMiddleware
 from src.core.telegram.errors import build_errors_router
 from src.core.telegram.middlewares.callback_answer import (
@@ -71,6 +72,7 @@ async def create_dispatcher(container: AsyncContainer) -> Dispatcher:
         build_errors_router(),
         build_admin_router(),
         build_developer_router(),
+        build_broadcast_router(),
         build_user_router(),
         _build_unmatched_router(),
     )

@@ -19,6 +19,7 @@ forbidden_modules =
     src.admin
     src.developer
     src.system
+    src.broadcast
     models
 
 [importlinter:contract:handlers-skip-repositories]
@@ -28,8 +29,10 @@ source_modules =
     src.user.handlers
     src.admin.handlers
     src.developer.handlers
+    src.broadcast.handlers
 forbidden_modules =
     src.user.repositories
+    src.broadcast.repositories
     sqlalchemy
 # Only direct imports count: a handler calls a use case, and the use case
 # reaching repositories and SQLAlchemy is the point of having one.
