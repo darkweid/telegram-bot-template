@@ -1,6 +1,8 @@
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator
 from datetime import timedelta
 
+from aiogram.methods import SendMessage
+from aiogram.utils.i18n import I18n
 import pytest
 import pytest_asyncio
 from sqlalchemy import delete, select, update
@@ -9,7 +11,8 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 from src.core.cache.memory_cache import InMemoryCache
 from src.core.cache.serializer import JsonSerializer
 from src.core.database.uow import SQLAlchemyUnitOfWork
-from src.core.events.registry import event_subscribers, set_event_subscribers
+from src.core.events.registry import set_event_subscribers
+from src.core.outbox.interface import TaskPublisher
 from src.core.outbox.models import OutboxMessage
 from src.main.config import Config
 from src.main.event_subscribers import EVENT_SUBSCRIBERS
@@ -18,17 +21,18 @@ from src.user.repositories import UserRepository
 from src.user.schemas import TelegramProfile
 from src.user.tasks import NOTIFY_ADMINS_OF_NEW_USER
 from src.user.usecases.touch_user import TouchUserUseCase
+from tests.factories.updates import build_message_update
+from tests.helpers.dispatcher import running_bot
+from tests.helpers.providers import RecordingTaskPublisher
 from tests.integration.conftest import new_user_id
 
 pytestmark = pytest.mark.asyncio(loop_scope="session")
 
 
 @pytest.fixture(autouse=True)
-def _production_subscribers() -> Iterator[None]:
-    saved = event_subscribers()
+def _production_subscribers() -> None:
+    # The root conftest puts the previous registry back after the test.
     set_event_subscribers(EVENT_SUBSCRIBERS)
-    yield
-    set_event_subscribers(saved)
 
 
 @pytest.fixture
@@ -102,4 +106,25 @@ async def test_a_returning_user_is_not_announced_again(
             .values(last_seen_at=User.last_seen_at - timedelta(hours=1))
         )
     await _touch(integration_engine, settings, user_id)
+    assert len(await _notices(integration_engine, user_id)) == 1
+
+
+async def test_a_first_start_through_the_dispatcher_sends_the_notice(
+    integration_engine: AsyncEngine,
+    settings: Config,
+    i18n: I18n,
+    user_id: int,
+    cleanup: None,
+) -> None:
+    """The production wiring end to end: UserMiddleware's touch publishes the
+    event, the installed subscriber stores the task, and after the commit the
+    publisher sends it. A link missing anywhere stores the user silently."""
+    async with running_bot(settings, i18n) as running:
+        await running.feed(build_message_update("/start", user_id=user_id))
+        publisher = await running.container.get(TaskPublisher)
+        assert isinstance(publisher, RecordingTaskPublisher)
+        assert publisher.published == [
+            (NOTIFY_ADMINS_OF_NEW_USER, [], {"user_id": user_id})
+        ]
+        assert len(running.session.sent(SendMessage)) == 1
     assert len(await _notices(integration_engine, user_id)) == 1

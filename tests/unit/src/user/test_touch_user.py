@@ -1,4 +1,3 @@
-from collections.abc import Iterator
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -10,7 +9,7 @@ from src.core.cache.interface import Cache, CacheKey
 from src.core.cache.memory_cache import InMemoryCache
 from src.core.cache.serializer import JsonSerializer
 from src.core.database.uow import SQLAlchemyUnitOfWork
-from src.core.events.registry import event_subscribers, set_event_subscribers
+from src.core.events.registry import set_event_subscribers
 from src.core.events.schemas import Actor, PublishedEvent
 from src.main.config import Config
 from src.user.cache import user_cache_key
@@ -246,17 +245,16 @@ async def test_a_failed_commit_drops_the_snapshot_it_cached(settings: Config) ->
 
 
 @pytest.fixture
-def published() -> Iterator[list[PublishedEvent]]:
-    """Record what the use case publishes, then put the real registry back."""
+def published() -> list[PublishedEvent]:
+    """Record what the use case publishes; the root conftest restores the
+    registry."""
     seen: list[PublishedEvent] = []
 
     async def record(_uow: SQLAlchemyUnitOfWork, event: PublishedEvent) -> None:
         seen.append(event)
 
-    saved = event_subscribers()
     set_event_subscribers({UserRegistered: [record]})
-    yield seen
-    set_event_subscribers(saved)
+    return seen
 
 
 async def test_a_new_user_publishes_user_registered(
@@ -294,19 +292,13 @@ async def test_a_failed_subscriber_leaves_nothing_cached_or_committed(
     async def broken(_uow: SQLAlchemyUnitOfWork, _event: PublishedEvent) -> None:
         raise ConnectionError("outbox insert failed")
 
-    saved = event_subscribers()
     set_event_subscribers({UserRegistered: [broken]})
-    try:
-        users = AsyncMock(spec=UserRepository)
-        users.get_single.return_value = None
-        users.upsert_from_telegram.return_value = UpsertedUser(
-            user=_model(), created=True
-        )
-        cache = build_cache()
-        use_case, session = _use_case(settings, users, cache)
-        with pytest.raises(ConnectionError):
-            await use_case.execute(PROFILE)
-    finally:
-        set_event_subscribers(saved)
+    users = AsyncMock(spec=UserRepository)
+    users.get_single.return_value = None
+    users.upsert_from_telegram.return_value = UpsertedUser(user=_model(), created=True)
+    cache = build_cache()
+    use_case, session = _use_case(settings, users, cache)
+    with pytest.raises(ConnectionError):
+        await use_case.execute(PROFILE)
     session.commit.assert_not_awaited()
     assert await cache.get(user_cache_key(PROFILE.id), model=UserProfile) is None

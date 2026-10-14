@@ -3,11 +3,13 @@ import os
 # Before any src.* import: importing it loads the config, which reads TESTING.
 os.environ.setdefault("TESTING", "true")
 
+from collections.abc import Iterator
 from pathlib import Path
 
 from aiogram.utils.i18n import I18n
 import pytest
 
+from src.core.events.registry import event_subscribers, set_event_subscribers
 from src.core.i18n import LOCALES_DIR, build_i18n
 from src.main.config import Config, get_settings
 from tests.helpers.i18n import compile_catalogs
@@ -29,3 +31,13 @@ def compiled_locales(tmp_path_factory: pytest.TempPathFactory) -> Path:
 @pytest.fixture(scope="session")
 def i18n(compiled_locales: Path) -> I18n:
     return build_i18n(compiled_locales, default_locale="en")
+
+
+@pytest.fixture(autouse=True)
+def _restore_event_subscribers() -> Iterator[None]:
+    """The registry is global, and build_container installs the production
+    one without putting the previous one back: a test that replaced it, or
+    built a container, would change what every later test publishes to."""
+    saved = event_subscribers()
+    yield
+    set_event_subscribers(saved)
