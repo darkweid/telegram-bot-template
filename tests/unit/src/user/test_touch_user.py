@@ -1,10 +1,13 @@
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
+from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
 
-from src.core.cache.interface import Cache
+from src.core.cache.interface import Cache, CacheKey
+from src.core.cache.memory_cache import InMemoryCache
+from src.core.cache.serializer import JsonSerializer
 from src.core.database.uow import SQLAlchemyUnitOfWork
 from src.main.config import Config
 from src.user.cache import user_cache_key
@@ -186,3 +189,53 @@ async def test_a_cached_snapshot_that_needs_a_write_is_upserted(
     assert await cache.get(
         user_cache_key(PROFILE.id), model=UserProfile
     ) == UserProfile.from_model(refreshed)
+
+
+class TransactionWatchingCache(InMemoryCache):
+    """Records, at every write, whether the session's transaction was still open."""
+
+    def __init__(self) -> None:
+        super().__init__(JsonSerializer(), default_ttl=60, version_ttl=600)
+        self.session: FakeAsyncSession | None = None
+        self.writes_in_transaction: list[bool] = []
+
+    async def set(self, key: CacheKey, value: Any, *, ttl: int | None = None) -> None:
+        assert self.session is not None
+        ended = self.session.commit.await_count + self.session.rollback.await_count
+        self.writes_in_transaction.append(ended == 0)
+        await super().set(key, value, ttl=ttl)
+
+
+@pytest.mark.parametrize("write", [False, True], ids=["read-only", "upsert"])
+async def test_the_snapshot_is_cached_while_the_row_is_locked(
+    settings: Config, write: bool
+) -> None:
+    """A ban commits and drops the snapshot after it. Cached once the lock is
+    released, the touch could store the unbanned row after that drop, and the
+    ban would be ignored until the snapshot expires."""
+    cache = TransactionWatchingCache()
+    users = AsyncMock(spec=UserRepository)
+    users.get_single.return_value = _model(
+        last_seen_at=NOW - (timedelta(hours=1) if write else timedelta(seconds=10))
+    )
+    users.upsert_from_telegram.return_value = UpsertedUser(user=_model(), created=False)
+    use_case, session = _use_case(settings, users, cache)
+    cache.session = session
+    await use_case.execute(PROFILE)
+    assert users.get_single.await_args is not None
+    assert users.get_single.await_args.kwargs["for_update"] is True
+    assert cache.writes_in_transaction == [True]
+
+
+async def test_a_failed_commit_drops_the_snapshot_it_cached(settings: Config) -> None:
+    """The snapshot was cached before the commit; kept, it would describe a row
+    that was never written."""
+    cache = build_cache()
+    users = AsyncMock(spec=UserRepository)
+    users.get_single.return_value = None
+    users.upsert_from_telegram.return_value = UpsertedUser(user=_model(), created=True)
+    use_case, session = _use_case(settings, users, cache)
+    session.commit.side_effect = ConnectionError("database down")
+    with pytest.raises(ConnectionError):
+        await use_case.execute(PROFILE)
+    assert await cache.get(user_cache_key(PROFILE.id), model=UserProfile) is None

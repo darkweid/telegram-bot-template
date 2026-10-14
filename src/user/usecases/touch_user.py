@@ -18,6 +18,18 @@ class TouchUserUseCase:
 
     The cached snapshot answers most updates without the database; a missing,
     stale or outdated snapshot is read from the database and cached again.
+
+    On that path the row is read `FOR UPDATE` and the snapshot is cached before
+    the transaction ends. Every use case that changes the user (a ban, a locale)
+    takes the row lock with its UPDATE and drops the snapshot after its commit,
+    so its drop always lands after this write. Cached after the lock is
+    released, the snapshot of a row read just before a ban could be stored
+    again after the ban dropped it, and the ban would go unnoticed until the
+    snapshot expired. The cost is one Redis call made under a row lock, bounded
+    by the Redis client's socket timeout. `FOR UPDATE` rather than `FOR SHARE`:
+    two updates of one user that both need a write would each hold a share
+    lock and deadlock upgrading it; with `FOR UPDATE` the second waits and reads
+    the row the first wrote.
     """
 
     def __init__(
@@ -35,12 +47,12 @@ class TouchUserUseCase:
 
     async def execute(self, profile: TelegramProfile) -> UserProfile:
         now = get_utc_now()
-        key = user_cache_key(profile.id)
-        cached: UserProfile | None = await self._cache.get(key, model=UserProfile)
+        cached: UserProfile | None = await self._cache.get(
+            user_cache_key(profile.id), model=UserProfile
+        )
         if cached is not None and not needs_write(cached, profile, now, self._interval):
             return cached
         snapshot, created = await self._load_or_write(profile, now)
-        await self._cache.set(key, snapshot, ttl=self._ttl)
         if created:
             logger.info("New user %s", profile.id)
         return snapshot
@@ -48,13 +60,25 @@ class TouchUserUseCase:
     async def _load_or_write(
         self, profile: TelegramProfile, now: datetime
     ) -> tuple[UserProfile, bool]:
+        key = user_cache_key(profile.id)
         async with self._uow as uow:
-            stored = await self._users.get_single(uow.session, id=profile.id)
+            stored = await self._users.get_single(
+                uow.session, for_update=True, id=profile.id
+            )
             snapshot = UserProfile.from_model(stored) if stored else None
             if snapshot is not None and not needs_write(
                 snapshot, profile, now, self._interval
             ):
+                await self._cache.set(key, snapshot, ttl=self._ttl)
                 return snapshot, False
             upserted = await self._users.upsert_from_telegram(uow.session, profile, now)
-            await uow.commit()
-        return UserProfile.from_model(upserted.user), upserted.created
+            snapshot = UserProfile.from_model(upserted.user)
+            await self._cache.set(key, snapshot, ttl=self._ttl)
+            try:
+                await uow.commit()
+            except BaseException:
+                # Cached before the commit, the snapshot describes a row that
+                # was never written.
+                await self._cache.delete(key)
+                raise
+        return snapshot, upserted.created
