@@ -27,7 +27,7 @@ def _model(**overrides: object) -> User:
         "last_name": None,
         "language_code": "en",
         "locale": None,
-        "is_blocked": False,
+        "is_reachable": True,
         "last_seen_at": NOW,
     }
     return User(**(fields | overrides))
@@ -72,9 +72,9 @@ async def test_a_new_user_is_written_and_committed(settings: Config) -> None:
     [
         _model(last_seen_at=NOW - timedelta(hours=1)),
         _model(username="old"),
-        _model(is_blocked=True, last_seen_at=NOW - timedelta(seconds=10)),
+        _model(is_reachable=False, last_seen_at=NOW - timedelta(seconds=10)),
     ],
-    ids=["stale-last-seen", "changed-profile", "blocked-user-returns"],
+    ids=["stale-last-seen", "changed-profile", "unreachable-user-returns"],
 )
 async def test_an_existing_user_that_needs_a_write_is_upserted(
     settings: Config, stored: User

@@ -6,18 +6,18 @@ from aiogram.fsm.storage.memory import MemoryStorage, SimpleEventIsolation
 from aiogram.utils.i18n import I18n
 from dishka import AsyncContainer, Provider, Scope, provide
 
-from src.core.telegram.session import BlockedUserRecorder
+from src.core.telegram.session import UnreachableUserRecorder
 from src.main.config import Config
 from src.main.di import build_container
 from tests.fakes.telegram import FakeTelegramSession
 
 
-class RecordingBlockRecorder:
+class RecordingUnreachableRecorder:
     def __init__(self) -> None:
-        self.blocked: list[int] = []
+        self.unreachable: list[int] = []
 
-    async def record_blocked(self, user_id: int) -> None:
-        self.blocked.append(user_id)
+    async def record_unreachable(self, user_id: int) -> None:
+        self.unreachable.append(user_id)
 
 
 class TestOverrides(Provider):
@@ -32,7 +32,7 @@ class TestOverrides(Provider):
         super().__init__()
         self._session = session
         self._i18n = i18n
-        self.recorder = RecordingBlockRecorder()
+        self.recorder = RecordingUnreachableRecorder()
 
     @provide(override=True)
     async def session(self) -> AsyncIterator[BaseSession]:
@@ -53,7 +53,7 @@ class TestOverrides(Provider):
         return self._i18n
 
     @provide(override=True)
-    def block_recorder(self) -> BlockedUserRecorder:
+    def unreachable_recorder(self) -> UnreachableUserRecorder:
         return self.recorder
 
 

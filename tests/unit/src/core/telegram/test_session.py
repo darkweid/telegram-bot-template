@@ -24,10 +24,10 @@ class Sleeps:
 
 class Recorder:
     def __init__(self) -> None:
-        self.blocked: list[int] = []
+        self.unreachable: list[int] = []
 
-    async def record_blocked(self, user_id: int) -> None:
-        self.blocked.append(user_id)
+    async def record_unreachable(self, user_id: int) -> None:
+        self.unreachable.append(user_id)
 
 
 def _flood(seconds: int, chat_id: int = 42) -> TelegramRetryAfter:
@@ -83,13 +83,15 @@ async def test_other_errors_pass_through_untouched() -> None:
     assert sleeps.calls == []
 
 
-async def test_forbidden_in_a_private_chat_records_the_block_and_reraises() -> None:
+async def test_forbidden_in_a_private_chat_records_the_user_as_unreachable_and_reraises() -> (
+    None
+):
     session, recorder = FakeTelegramSession(), Recorder()
     session.middleware(ForbiddenMiddleware(recorder))
     session.queue(SendMessage, _forbidden(42))
     with pytest.raises(TelegramForbiddenError):
         await make_bot(session).send_message(chat_id=42, text="x")
-    assert recorder.blocked == [42]
+    assert recorder.unreachable == [42]
 
 
 @pytest.mark.parametrize(
@@ -105,7 +107,7 @@ async def test_any_forbidden_in_a_private_chat_is_recorded(reason: str) -> None:
     )
     with pytest.raises(TelegramForbiddenError):
         await make_bot(session).send_message(chat_id=42, text="x")
-    assert recorder.blocked == [42]
+    assert recorder.unreachable == [42]
 
 
 async def test_no_retries_with_zero_attempts() -> None:
@@ -133,12 +135,12 @@ async def test_a_retried_call_ending_in_forbidden_is_recorded_once() -> None:
     session.queue(SendMessage, _forbidden(42))
     with pytest.raises(TelegramForbiddenError):
         await make_bot(session).send_message(chat_id=42, text="x")
-    assert recorder.blocked == [42]
+    assert recorder.unreachable == [42]
     assert sleeps.calls == [2]
 
 
 @pytest.mark.parametrize("chat_id", [-100123, "@channel"])
-async def test_forbidden_in_a_group_or_channel_is_not_a_user_block(
+async def test_forbidden_in_a_group_or_channel_does_not_make_a_user_unreachable(
     chat_id: int | str,
 ) -> None:
     session, recorder = FakeTelegramSession(), Recorder()
@@ -151,12 +153,12 @@ async def test_forbidden_in_a_group_or_channel_is_not_a_user_block(
     )
     with pytest.raises(TelegramForbiddenError):
         await make_bot(session).send_message(chat_id=chat_id, text="x")
-    assert recorder.blocked == []
+    assert recorder.unreachable == []
 
 
 async def test_a_failing_recorder_does_not_hide_the_telegram_error() -> None:
     class Broken:
-        async def record_blocked(self, user_id: int) -> None:
+        async def record_unreachable(self, user_id: int) -> None:
             raise ConnectionError("database down")
 
     session = FakeTelegramSession()

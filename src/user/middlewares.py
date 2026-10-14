@@ -19,7 +19,7 @@ class UserMiddleware(BaseMiddleware):
     - group and channel updates: the users table holds people who talk to
       the bot, not every member of every group it is in;
     - `my_chat_member`: its own handler records the membership change, and
-      touching the user first would undo a block it reports.
+      touching the user first would undo the unreachable mark it reports.
     """
 
     async def __call__(

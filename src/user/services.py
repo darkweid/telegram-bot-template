@@ -16,6 +16,6 @@ def needs_write(
     `last_seen_at` by a second, so the stamp is refreshed at most once per
     `interval` unless something real changed.
     """
-    if stored is None or stored.is_blocked or stored.differs_from(profile):
+    if stored is None or not stored.is_reachable or stored.differs_from(profile):
         return True
     return now - stored.last_seen_at >= interval

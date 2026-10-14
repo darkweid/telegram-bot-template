@@ -15,17 +15,17 @@ def _use_case(session: FakeAsyncSession, users: AsyncMock) -> ChangeMembershipUs
     return ChangeMembershipUseCase(SQLAlchemyUnitOfWork(session), users)  # type: ignore[arg-type]
 
 
-async def test_kicking_the_bot_marks_the_user_blocked() -> None:
+async def test_kicking_the_bot_marks_the_user_unreachable() -> None:
     session, users = FakeAsyncSession(), AsyncMock(spec=UserRepository)
     await _use_case(session, users).execute(PROFILE, is_member=False)
-    assert users.set_blocked.await_args.args[1:3] == (1, True)
+    assert users.set_reachable.await_args.args[1:3] == (1, False)
     users.upsert_from_telegram.assert_not_awaited()
     session.commit.assert_awaited_once()
 
 
-async def test_restarting_the_bot_stores_and_unblocks_the_user() -> None:
+async def test_restarting_the_bot_stores_and_marks_the_user_reachable() -> None:
     session, users = FakeAsyncSession(), AsyncMock(spec=UserRepository)
     await _use_case(session, users).execute(PROFILE, is_member=True)
     assert users.upsert_from_telegram.await_args.args[1] == PROFILE
-    users.set_blocked.assert_not_awaited()
+    users.set_reachable.assert_not_awaited()
     session.commit.assert_awaited_once()

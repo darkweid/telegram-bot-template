@@ -35,7 +35,7 @@ STORED = UserProfile(
     last_name=None,
     language_code="en",
     locale="ru",
-    is_blocked=False,
+    is_reachable=True,
     last_seen_at=datetime(2026, 1, 1),
 )
 

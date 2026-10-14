@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import BigInteger, Boolean, DateTime, Index, Text, false, text
+from sqlalchemy import BigInteger, Boolean, DateTime, Index, Text, text, true
 from sqlalchemy.orm import Mapped, mapped_column
 
 from src.core.database.base import Base
@@ -18,10 +18,10 @@ class User(TimestampMixin, Base):
 
     __tablename__ = "users"
     __table_args__ = (
-        # A broadcast walks reachable users in id order (`WHERE NOT is_blocked AND
+        # A broadcast walks reachable users in id order (`WHERE is_reachable AND
         # id > :cursor`). A partial index on id serves that keyset scan directly;
         # a plain index on a boolean column would not.
-        Index("ix_users_active", "id", postgresql_where=text("NOT is_blocked")),
+        Index("ix_users_reachable", "id", postgresql_where=text("is_reachable")),
     )
 
     # Telegram ids exceed 2**31 and are assigned by Telegram, never by us.
@@ -33,8 +33,8 @@ class User(TimestampMixin, Base):
     # we have no catalog for, so it is stored as given and resolved on use.
     language_code: Mapped[str | None] = mapped_column(Text)
     locale: Mapped[str | None] = mapped_column(Text)
-    is_blocked: Mapped[bool] = mapped_column(
-        Boolean, default=False, server_default=false()
+    is_reachable: Mapped[bool] = mapped_column(
+        Boolean, default=True, server_default=true()
     )
-    blocked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    unreachable_since: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))

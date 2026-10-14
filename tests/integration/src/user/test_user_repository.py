@@ -57,7 +57,7 @@ async def test_first_upsert_creates_the_user(
         "Ann",
         T0,
     )
-    assert upserted.user.is_blocked is False
+    assert upserted.user.is_reachable is True
 
 
 async def test_second_upsert_updates_profile_and_last_seen(
@@ -105,55 +105,58 @@ async def test_upsert_keeps_the_chosen_locale(
     assert (upserted.user.locale, upserted.user.language_code) == ("en", "de")
 
 
-async def test_blocking_keeps_the_first_block_time_and_upsert_unblocks(
+async def test_unreachable_keeps_the_first_time_and_upsert_makes_reachable(
     db_session: AsyncSession, user_id: int, cleanup: None
 ) -> None:
     repository = UserRepository()
     await repository.upsert_from_telegram(db_session, _profile(user_id), T0)
     assert (
-        await repository.set_blocked(
-            db_session, user_id, True, T0 + timedelta(minutes=1)
+        await repository.set_reachable(
+            db_session, user_id, False, T0 + timedelta(minutes=1)
         )
         is True
     )
     assert (
-        await repository.set_blocked(
-            db_session, user_id, True, T0 + timedelta(minutes=2)
+        await repository.set_reachable(
+            db_session, user_id, False, T0 + timedelta(minutes=2)
         )
         is True
     )
     await db_session.commit()
-    blocked = await repository.get_single(
+    unreachable = await repository.get_single(
         db_session, id=user_id, populate_existing=True
     )
-    assert blocked is not None
-    assert (blocked.is_blocked, blocked.blocked_at) == (True, T0 + timedelta(minutes=1))
+    assert unreachable is not None
+    assert (unreachable.is_reachable, unreachable.unreachable_since) == (
+        False,
+        T0 + timedelta(minutes=1),
+    )
 
     upserted = await repository.upsert_from_telegram(
         db_session, _profile(user_id), T0 + timedelta(minutes=3)
     )
     await db_session.commit()
-    assert (upserted.user.is_blocked, upserted.user.blocked_at) == (False, None)
+    assert (upserted.user.is_reachable, upserted.user.unreachable_since) == (True, None)
 
 
-async def test_unblocking_clears_the_block_time(
+async def test_reachable_again_clears_the_unreachable_time(
     db_session: AsyncSession, user_id: int, cleanup: None
 ) -> None:
     repository = UserRepository()
     await repository.upsert_from_telegram(db_session, _profile(user_id), T0)
-    await repository.set_blocked(db_session, user_id, True, T0)
-    await repository.set_blocked(db_session, user_id, False, T0)
+    await repository.set_reachable(db_session, user_id, False, T0)
+    await repository.set_reachable(db_session, user_id, True, T0)
     await db_session.commit()
     user = await repository.get_single(db_session, id=user_id, populate_existing=True)
     assert user is not None
-    assert (user.is_blocked, user.blocked_at) == (False, None)
+    assert (user.is_reachable, user.unreachable_since) == (True, None)
 
 
 async def test_writes_to_an_unknown_user_report_false(
     db_session: AsyncSession, user_id: int
 ) -> None:
     repository = UserRepository()
-    assert await repository.set_blocked(db_session, user_id, True, T0) is False
+    assert await repository.set_reachable(db_session, user_id, False, T0) is False
     assert await repository.set_locale(db_session, user_id, "en") is False
     await db_session.rollback()
 
@@ -202,7 +205,7 @@ async def test_a_concurrent_first_upsert_waits_and_then_updates(
             await session.commit()
 
 
-async def test_set_blocked_and_set_locale_move_updated_at(
+async def test_set_reachable_and_set_locale_move_updated_at(
     db_session: AsyncSession, user_id: int, cleanup: None
 ) -> None:
     repository = UserRepository()
@@ -213,7 +216,7 @@ async def test_set_blocked_and_set_locale_move_updated_at(
     stamps = [created.updated_at]
 
     for write in (
-        lambda: repository.set_blocked(db_session, user_id, True, T0),
+        lambda: repository.set_reachable(db_session, user_id, False, T0),
         lambda: repository.set_locale(db_session, user_id, "en"),
     ):
         assert await write() is True

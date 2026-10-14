@@ -65,22 +65,22 @@ class RetryAfterMiddleware(BaseRequestMiddleware):
                 await self._sleep(error.retry_after)
 
 
-class BlockedUserRecorder(Protocol):
-    async def record_blocked(self, user_id: int) -> None: ...
+class UnreachableUserRecorder(Protocol):
+    async def record_unreachable(self, user_id: int) -> None: ...
 
 
 class ForbiddenMiddleware(BaseRequestMiddleware):
     """Record a private chat the bot can no longer reach.
 
     Any Forbidden for a positive integer chat id (a private chat, and so a
-    user) marks the user: a blocked bot, a deactivated account and "bot can't
-    initiate conversation" all mean broadcasts would only waste calls. A
-    Forbidden from a group or channel means the bot was removed from it,
-    which is not a user's block. The error is re-raised either way: the
-    caller still has to know its call failed.
+    user) marks the user unreachable: a blocked bot, a deactivated account
+    and "bot can't initiate conversation" all mean broadcasts would only
+    waste calls. A Forbidden from a group or channel means the bot was
+    removed from it, which says nothing about a user. The error is re-raised
+    either way: the caller still has to know its call failed.
     """
 
-    def __init__(self, recorder: BlockedUserRecorder) -> None:
+    def __init__(self, recorder: UnreachableUserRecorder) -> None:
         self._recorder = recorder
 
     async def __call__(
@@ -95,11 +95,9 @@ class ForbiddenMiddleware(BaseRequestMiddleware):
             chat_id: Any = getattr(method, "chat_id", None)
             if isinstance(chat_id, int) and chat_id > 0:
                 try:
-                    await self._recorder.record_blocked(chat_id)
+                    await self._recorder.record_unreachable(chat_id)
                 except Exception:
                     # The Telegram error is what the caller must see; a
                     # failure to record it is ours to log, not theirs.
-                    logger.exception(
-                        "Could not mark unreachable user %s as blocked", chat_id
-                    )
+                    logger.exception("Could not mark user %s as unreachable", chat_id)
             raise

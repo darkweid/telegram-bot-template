@@ -29,8 +29,8 @@ class UserRepository(BaseRepository[User]):
         One statement rather than a read and a write: two updates of a new
         user that arrive together (a message and a callback in different
         chats) would otherwise both try the INSERT. The stored `locale` is
-        never touched here, and the block flag is cleared: Telegram delivered
-        an update from this user, so the bot is not blocked.
+        never touched here, and the user is marked reachable: Telegram delivered
+        an update from this user, so the bot can still reach them.
         """
         values = {
             "id": profile.id,
@@ -39,8 +39,8 @@ class UserRepository(BaseRepository[User]):
             "last_name": profile.last_name,
             "language_code": profile.language_code,
             "last_seen_at": now,
-            "is_blocked": False,
-            "blocked_at": None,
+            "is_reachable": True,
+            "unreachable_since": None,
         }
         insertion = insert(User).values(**values)
         statement = insertion.on_conflict_do_update(
@@ -67,20 +67,22 @@ class UserRepository(BaseRepository[User]):
         ).one()
         return UpsertedUser(user=row[0], created=bool(row.created))
 
-    async def set_blocked(
-        self, session: AsyncSession, user_id: int, blocked: bool, now: datetime
+    async def set_reachable(
+        self, session: AsyncSession, user_id: int, reachable: bool, now: datetime
     ) -> bool:
-        """Record that the user blocked (or unblocked) the bot.
+        """Record whether the bot can still deliver messages to the user.
 
-        `blocked_at` keeps the first time: a broadcast that hits the same
-        blocked user twice must not move it.
+        `unreachable_since` keeps the first time: a broadcast that hits the
+        same unreachable user twice must not move it.
         """
         statement = (
             update(User)
             .where(User.id == user_id)
             .values(
-                is_blocked=blocked,
-                blocked_at=func.coalesce(User.blocked_at, now) if blocked else None,
+                is_reachable=reachable,
+                unreachable_since=(
+                    None if reachable else func.coalesce(User.unreachable_since, now)
+                ),
             )
             .returning(User.id)
         )

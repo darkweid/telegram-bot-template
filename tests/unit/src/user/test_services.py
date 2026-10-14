@@ -20,7 +20,7 @@ def _stored(**overrides: object) -> UserProfile:
         "last_name": None,
         "language_code": "en",
         "locale": None,
-        "is_blocked": False,
+        "is_reachable": True,
         "last_seen_at": NOW - timedelta(minutes=1),
     }
     return UserProfile(**(fields | overrides))  # type: ignore[arg-type]
@@ -32,7 +32,7 @@ def _stored(**overrides: object) -> UserProfile:
         (None, True),  # new user
         (_stored(), False),  # seen a minute ago, nothing changed
         (_stored(username="old"), True),  # profile changed
-        (_stored(is_blocked=True), True),  # came back after blocking
+        (_stored(is_reachable=False), True),  # came back after being unreachable
         (_stored(last_seen_at=NOW - INTERVAL), True),  # interval reached
         (_stored(last_seen_at=NOW - INTERVAL + timedelta(seconds=1)), False),
     ],

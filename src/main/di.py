@@ -30,9 +30,9 @@ from src.core.i18n import LOCALES_DIR, build_i18n
 from src.core.redis.core import create_redis_client
 from src.core.telegram.fsm import create_event_isolation, create_fsm_storage
 from src.core.telegram.session import (
-    BlockedUserRecorder,
     ForbiddenMiddleware,
     RetryAfterMiddleware,
+    UnreachableUserRecorder,
 )
 from src.main.config import (
     AppConfig,
@@ -147,7 +147,7 @@ class TelegramProvider(Provider):
         self,
         bot_config: BotConfig,
         session: BaseSession,
-        recorder: BlockedUserRecorder,
+        recorder: UnreachableUserRecorder,
     ) -> Bot:
         # Retry outermost, so a retried call that ends in Forbidden is
         # recorded once.

@@ -38,7 +38,7 @@ class UserProfile:
     last_name: str | None
     language_code: str | None
     locale: str | None
-    is_blocked: bool
+    is_reachable: bool
     last_seen_at: datetime
 
     @classmethod
@@ -50,7 +50,7 @@ class UserProfile:
             last_name=user.last_name,
             language_code=user.language_code,
             locale=user.locale,
-            is_blocked=user.is_blocked,
+            is_reachable=user.is_reachable,
             last_seen_at=user.last_seen_at,
         )
 

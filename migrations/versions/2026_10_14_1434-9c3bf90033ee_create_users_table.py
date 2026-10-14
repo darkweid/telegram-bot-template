@@ -28,23 +28,23 @@ def upgrade() -> None:
         sa.Column("language_code", sa.Text(), nullable=True),
         sa.Column("locale", sa.Text(), nullable=True),
         sa.Column(
-            "is_blocked", sa.Boolean(), server_default=sa.false(), nullable=False
+            "is_reachable", sa.Boolean(), server_default=sa.true(), nullable=False
         ),
-        sa.Column("blocked_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("unreachable_since", sa.DateTime(timezone=True), nullable=True),
         sa.Column("last_seen_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
         sa.PrimaryKeyConstraint("id", name=op.f("pk_users")),
     )
     op.create_index(
-        op.f("ix_users_active"),
+        op.f("ix_users_reachable"),
         "users",
         ["id"],
         unique=False,
-        postgresql_where=sa.text("NOT is_blocked"),
+        postgresql_where=sa.text("is_reachable"),
     )
 
 
 def downgrade() -> None:
-    op.drop_index(op.f("ix_users_active"), table_name="users")
+    op.drop_index(op.f("ix_users_reachable"), table_name="users")
     op.drop_table("users")
