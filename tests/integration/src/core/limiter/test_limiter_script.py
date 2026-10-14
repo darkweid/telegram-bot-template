@@ -1,6 +1,4 @@
 import asyncio
-from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
 from uuid import uuid4
 
 import pytest
@@ -12,6 +10,7 @@ from src.core.limiter.limiter import RateLimiter
 from src.core.limiter.script import RATE_LIMIT_SCRIPT
 from src.core.redis.degradation import RedisDegradationReporter
 from tests.fakes.redis import InMemoryRedis
+from tests.helpers.redis import full_redis
 
 pytestmark = pytest.mark.asyncio(loop_scope="session")
 
@@ -70,20 +69,6 @@ async def test_the_window_key_expires(backend: Redis | InMemoryRedis) -> None:
     assert await backend.pttl(f"{prefix}:key") == -2
 
 
-@asynccontextmanager
-async def _full(client: Redis) -> AsyncIterator[Redis]:
-    """The throwaway test instance with no room left and noeviction."""
-    maxmemory = await client.config_get("maxmemory")
-    policy = await client.config_get("maxmemory-policy")
-    await client.config_set("maxmemory-policy", "noeviction")
-    await client.config_set("maxmemory", "1")
-    try:
-        yield client
-    finally:
-        await client.config_set("maxmemory", maxmemory["maxmemory"])
-        await client.config_set("maxmemory-policy", policy["maxmemory-policy"])
-
-
 async def _outcome(client: Redis | InMemoryRedis, sha: str, key: str) -> str:
     try:
         answer = await client.evalsha(sha, 1, key, "2", "60000")
@@ -118,7 +103,7 @@ async def test_the_fake_refuses_what_a_full_redis_refuses(
     outcomes["fake"] = {
         name: await _outcome(fake, shas["fake"], key) for name, key in keys.items()
     }
-    async with _full(redis_client) as client:
+    async with full_redis(redis_client) as client:
         outcomes["real"] = {
             name: await _outcome(client, shas["real"], key)
             for name, key in keys.items()

@@ -8,6 +8,7 @@ from sqlalchemy.engine import make_url
 
 from src.main.config import (
     BotConfig,
+    CacheConfig,
     Config,
     HttpConfig,
     PostgresConfig,
@@ -391,3 +392,16 @@ def test_a_user_agent_that_could_split_a_request_is_refused(value: str) -> None:
     """A control character in a header is a request-splitting vector."""
     with pytest.raises(ValidationError):
         HttpConfig(HTTP_USER_AGENT=value)
+
+
+def test_cache_default_ttl_may_not_outlive_the_version_counter() -> None:
+    """A default TTL above the counter's would raise on every write that does
+    not set its own TTL, failing each update that touches the cache."""
+    with pytest.raises(ValidationError, match="CACHE_DEFAULT_TTL"):
+        CacheConfig(_env_file=None, CACHE_DEFAULT_TTL=100, CACHE_VERSION_TTL=99)
+    assert (
+        CacheConfig(
+            _env_file=None, CACHE_DEFAULT_TTL=100, CACHE_VERSION_TTL=100
+        ).CACHE_DEFAULT_TTL
+        == 100
+    )

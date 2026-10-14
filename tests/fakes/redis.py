@@ -315,7 +315,6 @@ class InMemoryRedis:
         if normalized == CACHE_INVALIDATE_SCRIPT.strip():
             return self._eval_cache_invalidate(counters, *args)
         raise NotImplementedError("Script not supported in fake Redis.")
-        raise NotImplementedError("Script not supported in fake Redis.")
 
     # Every script body below is synchronous, and a new one must be too: an
     # await between the read that decides and the write that acts would let two
@@ -372,6 +371,7 @@ class InMemoryRedis:
         return 1
 
     def _eval_cache_delete(self, counters: list[str], *args: Any) -> int:
+        self.cache_eval_calls += 1
         versions = self._cache_versions(counters)
         if versions is None:
             return 0
@@ -381,6 +381,7 @@ class InMemoryRedis:
         return self._drop(key)
 
     def _eval_cache_invalidate(self, counters: list[str], *args: Any) -> int:
+        self.cache_eval_calls += 1
         return sum(self._drop(counter) for counter in counters)
 
     async def info(self, section: str | None = None) -> dict[str, int]:

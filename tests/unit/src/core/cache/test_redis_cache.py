@@ -239,6 +239,9 @@ async def test_disabled_cache_never_touches_redis(fake_redis: InMemoryRedis) -> 
     await cache.set(KEY, {"name": "ada"}, ttl=60)
 
     assert await cache.get(KEY) is None
+    await cache.delete(KEY)
+    await cache.invalidate(KEY.namespace)
+    await cache.invalidate_tags("any")
     assert fake_redis.cache_eval_calls == 0
 
 
@@ -249,7 +252,7 @@ async def test_read_fails_open_when_redis_is_out_of_memory(
     cache: RedisCache, fake_redis: InMemoryRedis, sentry_capture: MagicMock
 ) -> None:
     # Under noeviction a full Redis answers OOM. That is an outage of the shared
-    # instance, and a cache that raised it would turn every miss into a 500.
+    # instance, and a cache that raised it would fail every update that reads it.
     fake_redis.fail_next_commands(1, error=OOM)
 
     assert await cache.get(KEY) is None

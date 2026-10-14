@@ -3,9 +3,9 @@ One suite, both Cache implementations.
 
 Everything a caller may rely on regardless of which implementation is bound runs
 here against RedisCache (on the fake Redis) and InMemoryCache alike, so a
-semantic divergence between the two - the in-memory one is what every other test
-in this repository actually exercises - fails immediately instead of surfacing in
-production. Storage mechanics that only one of them has (Redis round-trip
+semantic divergence between the two fails immediately instead of surfacing in
+production; the in-memory one is the implementation tests are meant to bind in
+place of Redis. Storage mechanics that only one of them has (Redis round-trip
 counting, Sentry degradation reporting, clock-driven expiry) stay in the
 per-implementation modules.
 """

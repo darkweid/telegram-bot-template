@@ -58,6 +58,15 @@ class CacheConfig(BaseSettings):
 
     model_config = SettingsConfigDict(extra="ignore")
 
+    @model_validator(mode="after")
+    def default_ttl_fits_the_version_ttl(self) -> Self:
+        # Checked at startup: otherwise every write without an explicit TTL
+        # raises when the update runs, and the cache fails every update that
+        # touches it.
+        if self.CACHE_DEFAULT_TTL > self.CACHE_VERSION_TTL:
+            raise ValueError("CACHE_DEFAULT_TTL must not exceed CACHE_VERSION_TTL")
+        return self
+
 
 class SentryConfig(BaseSettings):
     SENTRY_DSN: str | None = None
