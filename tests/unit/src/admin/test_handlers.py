@@ -60,8 +60,20 @@ async def test_unban_by_username(settings: Config, i18n: I18n) -> None:
     stub.change.execute.return_value = BanChange(
         user=build_user_snapshot(id=5, username="bob_smith"), changed=True
     )
-    await _reply(settings, i18n, "/unban @bob_smith", stub)
+    [reply] = await _reply(settings, i18n, "/unban @bob_smith", stub)
     stub.change.execute.assert_awaited_once_with(ADMIN, "bob_smith", banned=False)
+    assert reply == "Ann (5) is unbanned."
+
+
+async def test_unbanning_a_user_who_is_not_banned_says_so(
+    settings: Config, i18n: I18n
+) -> None:
+    stub = BanStub()
+    stub.change.execute.return_value = BanChange(
+        user=build_user_snapshot(id=5), changed=False
+    )
+    [reply] = await _reply(settings, i18n, "/unban 5", stub)
+    assert reply == "Ann (5) is not banned."
 
 
 async def test_ban_without_a_user_shows_the_usage(settings: Config, i18n: I18n) -> None:
@@ -84,7 +96,7 @@ async def test_a_repeated_ban_says_so(settings: Config, i18n: I18n) -> None:
         user=build_user_snapshot(id=5, is_banned=True), changed=False
     )
     [reply] = await _reply(settings, i18n, "/ban 5", stub)
-    assert "already" in reply
+    assert reply == "Ann (5) is already banned."
 
 
 async def test_a_non_admin_cannot_ban(settings: Config, i18n: I18n) -> None:
