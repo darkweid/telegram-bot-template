@@ -4,11 +4,14 @@ import pytest
 
 from src.core.cache.interface import Cache
 from src.core.database.uow import SQLAlchemyUnitOfWork
+from src.core.events.registry import set_event_subscribers
+from src.core.events.schemas import Actor, PublishedEvent
 from src.user.cache import user_cache_key
-from src.user.repositories import UserRepository
+from src.user.events import UserRegistered
+from src.user.repositories import UpsertedUser, UserRepository
 from src.user.schemas import TelegramProfile, UserProfile
 from src.user.usecases.change_membership import ChangeMembershipUseCase
-from tests.factories.users import build_cache, build_user_snapshot
+from tests.factories.users import build_cache, build_user_model, build_user_snapshot
 from tests.fakes.db import FakeAsyncSession
 
 PROFILE = TelegramProfile(
@@ -80,3 +83,44 @@ async def test_a_failed_commit_keeps_the_snapshot(is_member: bool) -> None:
     with pytest.raises(ConnectionError):
         await _use_case(session, users, cache).execute(PROFILE, is_member=is_member)
     assert await cache.get(user_cache_key(1), model=UserProfile) is not None
+
+
+@pytest.fixture
+def published() -> list[PublishedEvent]:
+    """Record what the use case publishes; the root conftest restores the
+    registry."""
+    seen: list[PublishedEvent] = []
+
+    async def record(_uow: SQLAlchemyUnitOfWork, event: PublishedEvent) -> None:
+        seen.append(event)
+
+    set_event_subscribers({UserRegistered: [record]})
+    return seen
+
+
+async def test_a_user_first_stored_by_a_membership_change_is_registered(
+    published: list[PublishedEvent],
+) -> None:
+    """Telegram can report "member" before the user's first message; without
+    the event the admins would never hear of that user."""
+    session, users = FakeAsyncSession(), AsyncMock(spec=UserRepository)
+    users.upsert_from_telegram.return_value = UpsertedUser(
+        user=build_user_model(id=PROFILE.id), created=True
+    )
+    await _use_case(session, users).execute(PROFILE, is_member=True)
+    [event] = published
+    assert event.event == UserRegistered(user_id=PROFILE.id)
+    assert event.actor == Actor.telegram_user(PROFILE.id)
+    session.commit.assert_awaited_once()
+
+
+async def test_a_known_user_rejoining_is_not_registered_again(
+    published: list[PublishedEvent],
+) -> None:
+    """An unblock is no new user; admins would get a notice for every one."""
+    session, users = FakeAsyncSession(), AsyncMock(spec=UserRepository)
+    users.upsert_from_telegram.return_value = UpsertedUser(
+        user=build_user_model(id=PROFILE.id), created=False
+    )
+    await _use_case(session, users).execute(PROFILE, is_member=True)
+    assert published == []
