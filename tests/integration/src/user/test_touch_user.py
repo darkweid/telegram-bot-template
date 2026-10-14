@@ -4,6 +4,8 @@ import pytest
 from sqlalchemy import delete
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 
+from src.core.cache.memory_cache import InMemoryCache
+from src.core.cache.serializer import JsonSerializer
 from src.core.database.uow import SQLAlchemyUnitOfWork
 from src.main.config import Config
 from src.user.models import User
@@ -25,12 +27,17 @@ async def test_touch_writes_only_when_needed(
         id=user_id, first_name="Ann", username=None, last_name=None, language_code="en"
     )
     t0 = datetime(2026, 1, 1, tzinfo=UTC)
+    # Disabled: this test is about which rows the database writes, so every
+    # touch must reach it.
+    cache = InMemoryCache(
+        JsonSerializer(), default_ttl=60, version_ttl=600, enabled=False
+    )
 
     async def touch(at: datetime) -> datetime:
         monkeypatch.setattr(module, "get_utc_now", lambda: at)
         async with sessions() as session:
             use_case = TouchUserUseCase(
-                SQLAlchemyUnitOfWork(session), UserRepository(), settings.bot
+                SQLAlchemyUnitOfWork(session), UserRepository(), cache, settings.bot
             )
             result = await use_case.execute(profile)
         return result.last_seen_at

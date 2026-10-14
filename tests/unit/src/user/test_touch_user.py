@@ -1,15 +1,19 @@
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock
 
 import pytest
 
+from src.core.cache.interface import Cache
 from src.core.database.uow import SQLAlchemyUnitOfWork
 from src.main.config import Config
+from src.user.cache import user_cache_key
 from src.user.models import User
 from src.user.repositories import UpsertedUser, UserRepository
 from src.user.schemas import TelegramProfile, UserProfile
 from src.user.usecases import touch_user as module
 from src.user.usecases.touch_user import TouchUserUseCase
+from tests.factories.users import build_cache, build_user_snapshot
 from tests.fakes.db import FakeAsyncSession
 from tests.helpers.logs import captured_logs
 
@@ -39,11 +43,11 @@ def frozen_clock(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def _use_case(
-    settings: Config, users: AsyncMock
+    settings: Config, users: AsyncMock, cache: Cache | None = None
 ) -> tuple[TouchUserUseCase, FakeAsyncSession]:
     session = FakeAsyncSession()
     uow = SQLAlchemyUnitOfWork(session)
-    return TouchUserUseCase(uow, users, settings.bot), session
+    return TouchUserUseCase(uow, users, cache or build_cache(), settings.bot), session
 
 
 async def test_a_fresh_user_is_returned_without_a_write(settings: Config) -> None:
@@ -104,3 +108,47 @@ async def test_only_a_new_user_is_logged(settings: Config, created: bool) -> Non
         await use_case.execute(PROFILE)
     messages = [record.getMessage() for record in records]
     assert messages == (["New user 1"] if created else [])
+
+
+async def test_a_fresh_cached_snapshot_skips_the_database(settings: Config) -> None:
+    """Every update of every user passes here; the database is read only when
+    the snapshot is missing, stale or out of date with Telegram."""
+    cache = build_cache()
+    snapshot = build_user_snapshot(last_seen_at=NOW - timedelta(seconds=10))
+    await cache.set(user_cache_key(PROFILE.id), snapshot)
+    users = AsyncMock(spec=UserRepository)
+    use_case, _ = _use_case(settings, users, cache)
+    assert await use_case.execute(PROFILE) == snapshot
+    users.get_single.assert_not_awaited()
+
+
+async def test_a_changed_telegram_profile_goes_to_the_database(
+    settings: Config,
+) -> None:
+    """A cached snapshot must not hide a profile edit from the stored row."""
+    cache = build_cache()
+    await cache.set(
+        user_cache_key(PROFILE.id),
+        build_user_snapshot(last_seen_at=NOW - timedelta(seconds=10)),
+    )
+    users = AsyncMock(spec=UserRepository)
+    users.get_single.return_value = _model(last_seen_at=NOW - timedelta(seconds=10))
+    users.upsert_from_telegram.return_value = UpsertedUser(
+        user=_model(first_name="Bob"), created=False
+    )
+    use_case, _ = _use_case(settings, users, cache)
+    result = await use_case.execute(replace(PROFILE, first_name="Bob"))
+    assert result.first_name == "Bob"
+    cached = await cache.get(user_cache_key(PROFILE.id), model=UserProfile)
+    assert cached is not None and cached.first_name == "Bob"
+
+
+async def test_a_database_read_fills_the_cache(settings: Config) -> None:
+    """Without it every update of a user the cache never saw reads the row."""
+    cache = build_cache()
+    users = AsyncMock(spec=UserRepository)
+    users.get_single.return_value = _model(last_seen_at=NOW - timedelta(seconds=10))
+    use_case, _ = _use_case(settings, users, cache)
+    await use_case.execute(PROFILE)
+    assert await cache.get(user_cache_key(PROFILE.id), model=UserProfile) is not None
+    users.upsert_from_telegram.assert_not_awaited()

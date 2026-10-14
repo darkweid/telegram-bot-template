@@ -430,3 +430,17 @@ def test_throttling_defaults_match_the_spec(settings: Config) -> None:
         5,
         60,
     )
+
+
+def test_user_cache_ttl_may_not_outlive_the_version_counter() -> None:
+    """The cache refuses to write a value that outlives its version counter,
+    which would fail every update that caches a user."""
+    cache = get_settings().cache.model_copy(update={"CACHE_VERSION_TTL": 100})
+    with pytest.raises(ValidationError, match="USER_CACHE_TTL_SECONDS"):
+        Config.model_validate(
+            _config(bot=_bot(USER_CACHE_TTL_SECONDS=101), cache=cache).model_dump()
+        )
+    config = Config.model_validate(
+        _config(bot=_bot(USER_CACHE_TTL_SECONDS=100), cache=cache).model_dump()
+    )
+    assert config.bot.USER_CACHE_TTL_SECONDS == 100

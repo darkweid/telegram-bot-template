@@ -6,6 +6,9 @@ from aiogram.fsm.storage.memory import MemoryStorage, SimpleEventIsolation
 from aiogram.utils.i18n import I18n
 from dishka import AsyncContainer, Provider, Scope, provide
 
+from src.core.cache.interface import Cache
+from src.core.cache.memory_cache import InMemoryCache
+from src.core.cache.serializer import JsonSerializer
 from src.core.limiter.limiter import RateLimiter
 from src.core.redis.degradation import RedisDegradationReporter
 from src.core.telegram.middlewares.throttling import ThrottleLimiter
@@ -55,6 +58,13 @@ class TestOverrides(Provider):
     @provide(override=True)
     def i18n(self) -> I18n:
         return self._i18n
+
+    @provide(override=True)
+    def cache(self) -> Cache:
+        # In process and per container: tests never share cached users.
+        return InMemoryCache(
+            JsonSerializer(), prefix="cache", default_ttl=60, version_ttl=600
+        )
 
     @provide(override=True)
     def unreachable_recorder(self) -> UnreachableUserRecorder:

@@ -164,6 +164,10 @@ class BotConfig(BaseSettings):
     # A user row is rewritten when the Telegram profile changes, or when
     # last_seen_at is older than this; every other update reads it and moves on.
     USER_TOUCH_INTERVAL_SECONDS: int = Field(300, gt=0)
+    # How long a user's snapshot answers updates from the cache. A language
+    # change, a ban and a reachability change drop it at once; anything else
+    # that edits the row by hand shows up after at most this long.
+    USER_CACHE_TTL_SECONDS: int = Field(300, gt=0)
     # Flood-wait retries per Bot API call (src/core/telegram/session.py).
     TELEGRAM_RETRY_ATTEMPTS: int = Field(3, ge=0, le=10)
     # How long a stopping bot waits for updates already being handled. Keep it
@@ -310,6 +314,14 @@ class Config(BaseModel):
     http: HttpConfig
 
     model_config = ConfigDict(extra="ignore")
+
+    @model_validator(mode="after")
+    def user_cache_ttl_fits_the_version_ttl(self) -> Self:
+        # Checked at startup: the cache refuses to write a value that outlives
+        # its version counter, which would fail every update that caches a user.
+        if self.bot.USER_CACHE_TTL_SECONDS > self.cache.CACHE_VERSION_TTL:
+            raise ValueError("USER_CACHE_TTL_SECONDS must not exceed CACHE_VERSION_TTL")
+        return self
 
     @model_validator(mode="after")
     def require_webhook_settings(self) -> Self:

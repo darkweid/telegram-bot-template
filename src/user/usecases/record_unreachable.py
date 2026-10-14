@@ -1,8 +1,10 @@
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from loggers import get_logger
+from src.core.cache.interface import Cache
 from src.core.database.uow import SQLAlchemyUnitOfWork
 from src.core.utils.datetime_utils import get_utc_now
+from src.user.cache import invalidate_user_after_commit
 from src.user.repositories import UserRepository
 
 logger = get_logger(__name__)
@@ -18,10 +20,14 @@ class RecordUnreachableUseCase:
     """
 
     def __init__(
-        self, sessionmaker: async_sessionmaker[AsyncSession], users: UserRepository
+        self,
+        sessionmaker: async_sessionmaker[AsyncSession],
+        users: UserRepository,
+        cache: Cache,
     ) -> None:
         self._sessionmaker = sessionmaker
         self._users = users
+        self._cache = cache
 
     async def record_unreachable(self, user_id: int) -> None:
         async with self._sessionmaker() as session:
@@ -37,5 +43,6 @@ class RecordUnreachableUseCase:
             found = await self._users.set_reachable(
                 uow.session, user_id, False, get_utc_now()
             )
+            invalidate_user_after_commit(uow, self._cache, user_id)
             await uow.commit()
         return found

@@ -19,6 +19,8 @@ pull requests.
 - Users stored on their first private-chat update and kept fresh with
   minimal writes: a row is rewritten only when the Telegram profile changes
   or once per `USER_TOUCH_INTERVAL_SECONDS`.
+  A snapshot of the stored user is cached in Redis for
+  `USER_CACHE_TTL_SECONDS`, so most updates read no row at all.
 - Tracking of users the bot can no longer reach (they blocked the bot or
   deleted their account) in `is_reachable` and `unreachable_since`, for code
   that messages users unprompted. A user becomes reachable again with their
