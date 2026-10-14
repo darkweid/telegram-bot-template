@@ -1,19 +1,27 @@
 from collections.abc import Awaitable, Callable
+from datetime import UTC, datetime
+from functools import partial
+import logging
 from typing import Any
+from unittest.mock import AsyncMock
+from uuid import uuid4
 
 from aiogram import Bot
 from aiogram.client.session.base import BaseSession
 from aiogram.enums import ParseMode
 from aiogram.fsm.storage.base import BaseEventIsolation, BaseStorage
-from aiogram.fsm.storage.memory import MemoryStorage
+from aiogram.fsm.storage.memory import MemoryStorage, SimpleEventIsolation
 from aiogram.fsm.storage.redis import RedisEventIsolation, RedisStorage
+from aiogram.methods import SendMessage
 from aiogram.utils.i18n import I18n
 from dishka import Provider, Scope, provide
 from dishka.exceptions import NoFactoryError
 import pytest
+from redis import exceptions as redis_exceptions
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 from taskiq import AsyncBroker, InMemoryBroker
+from taskiq.message import BrokerMessage
 
 from src.core.cache.interface import Cache
 from src.core.cache.redis_cache import RedisCache
@@ -21,14 +29,22 @@ from src.core.database.uow import SQLAlchemyUnitOfWork
 from src.core.events.registry import event_subscribers, set_event_subscribers
 from src.core.events.schemas import DomainEvent
 from src.core.http.user_agent import UserAgent
+from src.core.outbox.interface import TaskPublisher
+from src.core.outbox.models import OutboxMessage
+from src.core.outbox.publisher import UnregisteredTaskError
 from src.core.telegram.session import ForbiddenMiddleware, RetryAfterMiddleware
 from src.main import di as di_module
 from src.main.config import BotConfig, Config
 from src.main.di import build_container
+from src.main.dispatcher import create_dispatcher
 from src.system.repositories import SystemRepository
 from src.system.services import HealthService
+from src.user.schemas import TelegramProfile, UserProfile
+from src.user.usecases.touch_user import TouchUserUseCase
+from tests.factories.updates import build_message_update
 from tests.fakes.db import FakeAsyncSession
 from tests.fakes.telegram import FakeTelegramSession
+from tests.helpers.logs import captured_logs
 from tests.helpers.providers import SessionOnly, TestOverrides, build_test_container
 
 
@@ -320,7 +336,7 @@ async def test_a_unit_of_work_publishes_after_commit(
     assert overrides.publisher.published == [("test.task", [], {"user_id": 7})]
 
 
-async def test_the_bots_broker_starts_and_stops_with_the_container(
+async def test_the_bots_broker_starts_on_its_first_send_and_stops_with_the_container(
     settings: Config, i18n: I18n, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The bot has no taskiq CLI to start and stop its broker; without the
@@ -332,7 +348,109 @@ async def test_the_bots_broker_starts_and_stops_with_the_container(
         broker = await container.get(AsyncBroker)
         assert isinstance(broker, InMemoryBroker)
         assert {"outbox.sweep", "outbox.purge"} <= set(broker.get_all_tasks())
+        publisher = await container.get(TaskPublisher)
+        assert started == []
+        # Unregistered, so nothing runs inline; the start comes first.
+        with pytest.raises(UnregisteredTaskError):
+            await publisher.publish(uuid4(), "test.missing", [], {})
         assert (started, stopped) == ([broker], [])
     finally:
         await container.close()
     assert stopped == [broker]
+
+
+class DownBroker(InMemoryBroker):
+    """A broker whose tasks Redis is down: it cannot even start."""
+
+    def __init__(self) -> None:
+        super().__init__(await_inplace=True)
+        self.starts = 0
+        self.kicks = 0
+
+    async def startup(self) -> None:
+        self.starts += 1
+        raise redis_exceptions.ConnectionError("tasks Redis down")
+
+    async def kick(self, message: BrokerMessage) -> None:
+        self.kicks += 1
+
+
+class TasksRedisDown(Provider):
+    """A fake database session, in-memory FSM state, and a TouchUserUseCase
+    that enqueues a task the way a real use case does. The broker and the
+    publisher stay the production ones: TestOverrides would replace the
+    publisher."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.sessions: list[FakeAsyncSession] = []
+
+    @provide(scope=Scope.APP, override=True)
+    def fsm_storage(self) -> BaseStorage:
+        return MemoryStorage()
+
+    @provide(scope=Scope.APP, override=True)
+    def event_isolation(self) -> BaseEventIsolation:
+        return SimpleEventIsolation()
+
+    @provide(scope=Scope.REQUEST, override=True)
+    def session(self) -> AsyncSession:
+        session = FakeAsyncSession()
+        self.sessions.append(session)
+        return session
+
+    @provide(scope=Scope.REQUEST, override=True)
+    def touch_user(self, uow: SQLAlchemyUnitOfWork) -> TouchUserUseCase:
+        touch = AsyncMock(spec=TouchUserUseCase)
+        touch.execute.side_effect = partial(_touch_and_enqueue, uow)
+        return touch
+
+
+async def _touch_and_enqueue(
+    uow: SQLAlchemyUnitOfWork, profile: TelegramProfile
+) -> UserProfile:
+    async with uow:
+        await uow.enqueue_task("test.task", user_id=profile.id)
+        await uow.commit()
+    return UserProfile(
+        id=profile.id,
+        first_name=profile.first_name,
+        username=profile.username,
+        last_name=profile.last_name,
+        language_code=profile.language_code,
+        locale=None,
+        is_reachable=True,
+        last_seen_at=datetime(2026, 1, 1, tzinfo=UTC),
+    )
+
+
+async def test_a_tasks_redis_outage_does_not_fail_an_update(
+    settings: Config, i18n: I18n, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Every update resolves a unit of work, and with it the publisher: a
+    broker started there would fail them all while the tasks Redis is down.
+    The task enqueued meanwhile stays pending for the sweeper."""
+    broker = DownBroker()
+    monkeypatch.setattr(di_module, "build_broker", lambda _config: broker)
+    session = FakeTelegramSession()
+    down = TasksRedisDown()
+    container = build_container(settings, SessionOnly(session, i18n), down)
+    try:
+        dp = await create_dispatcher(container)
+        bot = await container.get(Bot)
+        await dp.emit_startup(bot=bot)
+        try:
+            with captured_logs("src.core.outbox.publisher") as records:
+                await dp.feed_update(bot, build_message_update("/start"))
+        finally:
+            await dp.emit_shutdown(bot=bot)
+    finally:
+        await container.close()
+    assert len(session.sent(SendMessage)) == 1
+    assert (broker.starts, broker.kicks) == (1, 0)
+    [db_session] = down.sessions
+    [(row,), _] = db_session.add.call_args
+    assert isinstance(row, OutboxMessage)
+    assert row.task_name == "test.task"
+    # Logged as an outage, not a failed hook; never marked published.
+    assert [r.levelno for r in records] == [logging.WARNING]

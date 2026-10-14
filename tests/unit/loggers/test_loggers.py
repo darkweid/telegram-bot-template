@@ -184,3 +184,28 @@ def test_setup_logging_routes_third_party_loggers_through_one_handler() -> None:
     finally:
         root.handlers[:] = saved_handlers
         root.setLevel(saved_level)
+
+
+def test_task_arguments_stay_out_of_debug_logs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """taskiq's kicker and receiver log every task's arguments at DEBUG;
+    LOG_LEVEL=DEBUG must not print them."""
+    root = logging.getLogger()
+    saved_handlers, saved_level = root.handlers[:], root.level
+    saved_levels = {
+        name: logging.getLogger(name).level for name in loggers.ARGUMENT_LOGGING_LOGGERS
+    }
+    monkeypatch.setattr(loggers, "log_level", logging.DEBUG)
+    try:
+        root.handlers.clear()
+        loggers.setup_logging()
+        assert root.isEnabledFor(logging.DEBUG)
+        for name in ("taskiq.kicker", "taskiq.receiver.receiver", "taskiq_redis.x"):
+            assert not logging.getLogger(name).isEnabledFor(logging.DEBUG)
+            assert logging.getLogger(name).isEnabledFor(logging.INFO)
+    finally:
+        root.handlers[:] = saved_handlers
+        root.setLevel(saved_level)
+        for name, level in saved_levels.items():
+            logging.getLogger(name).setLevel(level)

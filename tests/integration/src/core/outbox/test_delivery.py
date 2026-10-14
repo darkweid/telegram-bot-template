@@ -1,27 +1,37 @@
+import asyncio
 from collections.abc import AsyncGenerator
-from datetime import timedelta
+from datetime import datetime, timedelta
+import logging
 from typing import Any
 from uuid import UUID
 
 import pytest
 import pytest_asyncio
 from redis import exceptions as redis_exceptions
+from redis.asyncio import Redis
 from sqlalchemy import delete, update
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from taskiq import InMemoryBroker
 from taskiq.message import BrokerMessage
 
 from src.core.database.uow import SQLAlchemyUnitOfWork
+from src.core.outbox import publisher as publisher_module, sweeper as sweeper_module
 from src.core.outbox.enums import OutboxMessageStatus
 from src.core.outbox.models import OutboxMessage
 from src.core.outbox.publisher import OutboxPublisher
+from src.core.outbox.repositories import OutboxRepository
 from src.core.outbox.sweeper import (
     MAX_PUBLISH_ATTEMPTS,
     PUBLISHED_RETENTION_DAYS,
     purge_outbox,
     sweep_outbox,
 )
+from src.core.redis.core import create_redis_client
+from src.core.tasks.broker import STREAM_QUEUE_NAME, create_stream_broker
 from src.core.utils.datetime_utils import get_utc_now
+from src.main.config import Config
+from tests.helpers.logs import captured_logs
+from tests.helpers.redis import full_redis
 
 pytestmark = pytest.mark.asyncio(loop_scope="session")
 
@@ -47,6 +57,13 @@ class UnreachableBroker(InMemoryBroker):
 
     async def kick(self, message: BrokerMessage) -> None:
         raise redis_exceptions.ConnectionError("broker down")
+
+
+class HangingBroker(InMemoryBroker):
+    """Accepts the connection and never answers, like a blackholed Redis."""
+
+    async def kick(self, message: BrokerMessage) -> None:
+        await asyncio.Event().wait()
 
 
 class RefusingBroker(InMemoryBroker):
@@ -182,12 +199,18 @@ async def test_an_unreachable_broker_does_not_count_an_attempt(
     try:
         message_id = await _enqueue(integration_engine, committed_ids, down)
         await _age(integration_engine, message_id)
-        await _sweep(integration_engine, down)
+        with captured_logs("src.core.outbox.sweeper") as records:
+            await _sweep(integration_engine, down)
     finally:
         await down.shutdown()
     row = await _row(integration_engine, message_id)
     assert (row.status, row.attempts) == (OutboxMessageStatus.PENDING, 0)
     assert row.last_error == "ConnectionError"
+    # The outage is named once; the summary follows.
+    [warning, summary] = records
+    assert warning.levelno == logging.WARNING
+    assert "ConnectionError" in warning.getMessage()
+    assert summary.levelno == logging.INFO
 
 
 async def test_a_row_refused_too_often_is_failed(
@@ -231,20 +254,28 @@ async def test_a_row_of_an_unregistered_task_is_failed_at_once(
     ).status == OutboxMessageStatus.FAILED
 
 
-async def test_purge_deletes_published_rows_past_retention(
-    integration_engine: AsyncEngine, committed_ids: list[UUID]
+async def test_purge_deletes_published_rows_past_retention_in_batches(
+    integration_engine: AsyncEngine,
+    committed_ids: list[UUID],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """One DELETE over a large backlog would run into the statement timeout
+    and purge nothing, every night."""
+    monkeypatch.setattr(sweeper_module, "PURGE_BATCH_SIZE", 2)
+    batches = _spy_purge_batches(monkeypatch)
     received = Received()
     broker = await _broker(InMemoryBroker(await_inplace=True), received)
     try:
-        old = await _enqueue(integration_engine, committed_ids, broker)
+        old = [
+            await _enqueue(integration_engine, committed_ids, broker) for _ in range(5)
+        ]
         recent = await _enqueue(integration_engine, committed_ids, broker)
     finally:
         await broker.shutdown()
     async with AsyncSession(integration_engine) as session, session.begin():
         await session.execute(
             update(OutboxMessage)
-            .where(OutboxMessage.id == old)
+            .where(OutboxMessage.id.in_(old))
             .values(
                 published_at=get_utc_now()
                 - timedelta(days=PUBLISHED_RETENTION_DAYS + 1)
@@ -253,5 +284,89 @@ async def test_purge_deletes_published_rows_past_retention(
     async with AsyncSession(integration_engine) as session:
         await purge_outbox(SQLAlchemyUnitOfWork(session))
     async with AsyncSession(integration_engine) as session:
-        assert await session.get(OutboxMessage, old) is None
+        for message_id in old:
+            assert await session.get(OutboxMessage, message_id) is None
         assert await session.get(OutboxMessage, recent) is not None
+    assert len(batches) >= 3
+    assert all(size <= 2 for size in batches)
+    assert batches[-1] < 2
+
+
+def _spy_purge_batches(monkeypatch: pytest.MonkeyPatch) -> list[int]:
+    """The size of every DELETE the purge runs."""
+    original = OutboxRepository.purge_published
+    sizes: list[int] = []
+
+    async def recording(
+        self: OutboxRepository, session: AsyncSession, cutoff: datetime, *, limit: int
+    ) -> int:
+        deleted = await original(self, session, cutoff, limit=limit)
+        sizes.append(deleted)
+        return deleted
+
+    monkeypatch.setattr(OutboxRepository, "purge_published", recording)
+    return sizes
+
+
+async def test_a_hanging_broker_holds_the_sweep_only_for_the_send_bound(
+    integration_engine: AsyncEngine,
+    committed_ids: list[UUID],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The sweep holds its batch's row locks while it sends: a blackholed
+    Redis must cost one bounded send, and it is no attempt of the row's."""
+    monkeypatch.setattr(publisher_module, "SEND_TIMEOUT_SECONDS", 0.1)
+    received = Received()
+    down = await _broker(UnreachableBroker(await_inplace=True), received)
+    try:
+        message_id = await _enqueue(integration_engine, committed_ids, down)
+    finally:
+        await down.shutdown()
+    await _age(integration_engine, message_id)
+    hanging = await _broker(HangingBroker(await_inplace=True), received)
+    try:
+        async with asyncio.timeout(5):
+            await _sweep(integration_engine, hanging)
+    finally:
+        await hanging.shutdown()
+    row = await _row(integration_engine, message_id)
+    assert (row.status, row.attempts, row.last_error) == (
+        OutboxMessageStatus.PENDING,
+        0,
+        "TimeoutError",
+    )
+
+
+async def test_a_full_tasks_redis_does_not_count_an_attempt(
+    integration_engine: AsyncEngine,
+    committed_ids: list[UUID],
+    settings: Config,
+    redis_client: Redis,
+) -> None:
+    """Under noeviction a full Redis refuses XADD with OOM; counted against
+    the rows, it would fail the whole backlog in ten sweeps."""
+    received = Received()
+    down = await _broker(UnreachableBroker(await_inplace=True), received)
+    try:
+        message_id = await _enqueue(integration_engine, committed_ids, down)
+    finally:
+        await down.shutdown()
+    await _age(integration_engine, message_id)
+    stream = create_stream_broker(settings.redis.tasks_dsn)
+    stream.register_task(received.task, task_name=TASK)
+    # Started before Redis fills up: the start creates the consumer group.
+    await stream.startup()
+    tasks_redis = create_redis_client(settings.redis.tasks_dsn)
+    try:
+        async with full_redis(redis_client):
+            await _sweep(integration_engine, stream)
+    finally:
+        await stream.shutdown()
+        await tasks_redis.delete(STREAM_QUEUE_NAME)
+        await tasks_redis.aclose()
+    row = await _row(integration_engine, message_id)
+    assert (row.status, row.attempts, row.last_error) == (
+        OutboxMessageStatus.PENDING,
+        0,
+        "OutOfMemoryError",
+    )

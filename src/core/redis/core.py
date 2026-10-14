@@ -1,11 +1,15 @@
 from redis.asyncio import Redis
 
+# Every Redis connection of the project, the task broker's included: a
+# blackholed Redis must fail a command in seconds.
+REDIS_SOCKET_TIMEOUT_SECONDS = 5.0
+
 
 def create_redis_client(
     connection_url: str,
     *,
-    socket_timeout: float = 5.0,
-    socket_connect_timeout: float = 5.0,
+    socket_timeout: float = REDIS_SOCKET_TIMEOUT_SECONDS,
+    socket_connect_timeout: float = REDIS_SOCKET_TIMEOUT_SECONDS,
     health_check_interval: int = 30,
 ) -> Redis:
     """Connects lazily, on first command.

@@ -5,11 +5,14 @@ Each task gets a REQUEST scope of the worker's container, opened by dishka's
 taskiq middleware; the Bot, the engine and Redis live in its APP scope.
 """
 
-from dishka import AsyncContainer, Provider, Scope, from_context
+from dishka import AsyncContainer, Provider, Scope, from_context, provide
 from dishka.integrations.taskiq import TaskiqProvider, setup_dishka
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from taskiq import AsyncBroker, TaskiqEvents, TaskiqState
 
 from loggers import setup_logging
+from src.core.outbox.interface import TaskPublisher
+from src.core.outbox.publisher import OutboxPublisher
 from src.main.config import Config, get_settings
 from src.main.di import build_container
 from src.main.runtime import require_dependencies
@@ -20,6 +23,14 @@ from src.main.tasks import build_broker
 class WorkerProvider(Provider):
     # The CLI's broker, which the CLI starts and stops; replaces the bot's.
     broker = from_context(provides=AsyncBroker, scope=Scope.APP, override=True)
+
+    @provide(scope=Scope.APP, override=True)
+    def publisher(
+        self, broker: AsyncBroker, sessionmaker: async_sessionmaker[AsyncSession]
+    ) -> TaskPublisher:
+        # Started already: a second startup would rerun the worker's startup
+        # hooks.
+        return OutboxPublisher(broker, sessionmaker)
 
 
 class WorkerLifecycle:

@@ -287,9 +287,10 @@ class BrokerProvider(Provider):
     """The bot's side of the task queue: it only sends.
 
     The worker gets its broker from the taskiq CLI instead (WorkerProvider),
-    which also starts and stops it. Here the broker starts when an update first
-    needs it (a unit of work asks for the publisher), and its startup already
-    talks to Redis (it declares the stream's consumer group). A wrong
+    which also starts and stops it. The bot's broker is started by the
+    publisher on its first send, not here: a unit of work needs the publisher,
+    and a start in this factory would fail every update, the ones that enqueue
+    nothing included, while the tasks Redis is down. A wrong
     REDIS_TASKS_DATABASE is still caught before the first update: the startup
     check pings the same database through TasksRedis.
     """
@@ -299,15 +300,16 @@ class BrokerProvider(Provider):
     @provide
     async def broker(self, config: Config) -> AsyncIterator[AsyncBroker]:
         broker = build_broker(config)
-        await broker.startup()
         yield broker
+        # Safe on a broker that never started: it closes the connection pool
+        # and runs the shutdown hooks, nothing more.
         await broker.shutdown()
 
     @provide
     def publisher(
         self, broker: AsyncBroker, sessionmaker: async_sessionmaker[AsyncSession]
     ) -> TaskPublisher:
-        return OutboxPublisher(broker, sessionmaker)
+        return OutboxPublisher(broker, sessionmaker, start_broker=True)
 
 
 def build_container(

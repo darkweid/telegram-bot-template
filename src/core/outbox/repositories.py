@@ -71,12 +71,21 @@ class OutboxRepository(BaseRepository[OutboxMessage]):
             update(self.model).where(self.model.id == message_id).values(**values)
         )
 
-    async def purge_published(self, session: AsyncSession, cutoff: datetime) -> int:
-        result = await session.execute(
-            delete(self.model).where(
+    async def purge_published(
+        self, session: AsyncSession, cutoff: datetime, *, limit: int
+    ) -> int:
+        """Delete at most `limit` rows published before `cutoff`; returns how
+        many went. A caller loops until fewer than `limit` come back."""
+        doomed = (
+            select(self.model.id)
+            .where(
                 self.model.status == OutboxMessageStatus.PUBLISHED,
                 self.model.published_at < cutoff,
             )
+            .limit(limit)
+        )
+        result = await session.execute(
+            delete(self.model).where(self.model.id.in_(doomed))
         )
         return int(result.rowcount) if hasattr(result, "rowcount") else 0
 

@@ -1,14 +1,34 @@
+import asyncio
+import logging
 from typing import Any
+from unittest.mock import MagicMock
 from uuid import uuid4
 
 import pytest
+from redis import exceptions as redis_exceptions
 from taskiq import Context, InMemoryBroker, TaskiqDepends
+from taskiq.exceptions import SendTaskError
+from taskiq.message import BrokerMessage
 
-from src.core.outbox.publisher import UnregisteredTaskError, kick_stored
+from src.core.outbox import publisher as publisher_module
+from src.core.outbox.publisher import (
+    OutboxPublisher,
+    UnregisteredTaskError,
+    is_broker_unreachable,
+    kick_stored,
+)
+from tests.helpers.logs import captured_logs
 
 # A shared marker, not a call in the default: taskiq only reads it.
 TASK_CONTEXT = TaskiqDepends()
 RECEIVED: list[tuple[str, dict[str, Any], tuple[Any, ...], dict[str, Any]]] = []
+
+
+def _sent(cause: Exception) -> SendTaskError:
+    """The error as taskiq's kicker raises it."""
+    error = SendTaskError()
+    error.__cause__ = cause
+    return error
 
 
 async def received_task(
@@ -40,3 +60,91 @@ async def test_an_unregistered_task_is_refused() -> None:
     """A name no worker runs would sit in the stream forever."""
     with pytest.raises(UnregisteredTaskError, match="test.missing"):
         await kick_stored(InMemoryBroker(), uuid4(), "test.missing", [], {})
+
+
+class HangingBroker(InMemoryBroker):
+    """Accepts the connection and never answers, like a blackholed Redis."""
+
+    async def kick(self, message: BrokerMessage) -> None:
+        await asyncio.Event().wait()
+
+
+class DownBroker(InMemoryBroker):
+    """Cannot even start: the tasks Redis is down."""
+
+    def __init__(self) -> None:
+        super().__init__(await_inplace=True)
+        self.starts = 0
+
+    async def startup(self) -> None:
+        self.starts += 1
+        raise redis_exceptions.ConnectionError("tasks Redis down")
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        TimeoutError(),
+        ConnectionError(),
+        redis_exceptions.ConnectionError(),
+        redis_exceptions.TimeoutError(),
+        redis_exceptions.OutOfMemoryError(),
+        _sent(redis_exceptions.ConnectionError()),
+        _sent(redis_exceptions.OutOfMemoryError()),
+    ],
+)
+def test_an_outage_is_the_brokers_fault(error: BaseException) -> None:
+    """Counted against the message, an outage would fail every pending row;
+    a raw error (our own send timeout) is classified like a wrapped one."""
+    assert is_broker_unreachable(error)
+
+
+@pytest.mark.parametrize(
+    "error", [ValueError(), _sent(ValueError()), redis_exceptions.ResponseError()]
+)
+def test_a_refusal_is_the_messages_fault(error: BaseException) -> None:
+    assert not is_broker_unreachable(error)
+
+
+async def test_a_hanging_send_gives_up_within_the_bound(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The send runs inside an update's commit: a blackholed Redis must not
+    hold the update for the kernel's TCP timeout."""
+    monkeypatch.setattr(publisher_module, "SEND_TIMEOUT_SECONDS", 0.05)
+    broker = HangingBroker(await_inplace=True)
+    broker.register_task(received_task, task_name="test.task")
+    sessionmaker = MagicMock()
+    publisher = OutboxPublisher(broker, sessionmaker)
+    with captured_logs("src.core.outbox.publisher") as records:
+        async with asyncio.timeout(5):
+            await publisher.publish(uuid4(), "test.task", [], {})
+    # Not marked published: the row stays pending for the sweeper.
+    sessionmaker.assert_not_called()
+    [record] = records
+    assert record.levelno == logging.WARNING
+    assert "TimeoutError" in record.getMessage()
+
+
+async def test_a_broker_that_cannot_start_leaves_the_row_and_retries_the_start() -> (
+    None
+):
+    """The bot starts its broker on the first send; an outage then must cost
+    the send, not the update, and the next send tries again."""
+    broker = DownBroker()
+    sessionmaker = MagicMock()
+    publisher = OutboxPublisher(broker, sessionmaker, start_broker=True)
+    await publisher.publish(uuid4(), "test.task", [], {})
+    await publisher.publish(uuid4(), "test.task", [], {})
+    assert broker.starts == 2
+    sessionmaker.assert_not_called()
+
+
+async def test_a_started_broker_is_not_started_again() -> None:
+    """The worker's broker belongs to the taskiq CLI: a second startup would
+    rerun the worker's startup hooks."""
+    broker = DownBroker()
+    publisher = OutboxPublisher(broker, MagicMock())
+    with pytest.raises(UnregisteredTaskError):
+        await publisher.publish(uuid4(), "test.missing", [], {})
+    assert broker.starts == 0

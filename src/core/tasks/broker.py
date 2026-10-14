@@ -5,6 +5,7 @@ from taskiq import TaskiqEvents, TaskiqMiddleware, TaskiqState
 from taskiq.middlewares import SmartRetryMiddleware
 from taskiq_redis import ListRedisScheduleSource, RedisStreamBroker
 
+from src.core.redis.core import REDIS_SOCKET_TIMEOUT_SECONDS
 from src.core.tasks.middlewares import SentryMiddleware
 
 # The client of REDIS_TASKS_DATABASE: the broker's streams, retry schedules and
@@ -59,6 +60,11 @@ def create_stream_broker(dsn: str, *first: TaskiqMiddleware) -> RedisStreamBroke
         maxlen=STREAM_MAXLEN,
         approximate=True,
         idle_timeout=STREAM_IDLE_TIMEOUT_SECONDS * 1000,
+        # The project clients' timeouts: without them a blackholed Redis holds
+        # a send for the kernel's TCP timeout. Above the 2 s XREADGROUP block
+        # of the worker's listen loop, which would otherwise time out idle.
+        socket_timeout=REDIS_SOCKET_TIMEOUT_SECONDS,
+        socket_connect_timeout=REDIS_SOCKET_TIMEOUT_SECONDS,
     )
     # Retries are scheduled onto the source at now + delay; without a schedule
     # source RedisStreamBroker ignores the `delay` label and every retry fires

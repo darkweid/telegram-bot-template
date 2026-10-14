@@ -5,14 +5,17 @@ from datetime import timedelta
 from dishka import FromDishka
 import sentry_sdk
 from taskiq import AsyncBroker
-from taskiq.exceptions import SendTaskError
 
 from loggers import get_logger
 from src.core.database.uow import SQLAlchemyUnitOfWork
 from src.core.outbox.models import OutboxMessage
-from src.core.outbox.publisher import UnregisteredTaskError, kick_stored
+from src.core.outbox.publisher import (
+    UnregisteredTaskError,
+    broker_error,
+    is_broker_unreachable,
+    kick_stored,
+)
 from src.core.outbox.repositories import OutboxRepository
-from src.core.redis.errors import TRANSPORT_ERRORS
 from src.core.utils.datetime_utils import get_utc_now
 
 logger = get_logger(__name__)
@@ -20,28 +23,14 @@ logger = get_logger(__name__)
 SWEEPER_BATCH_SIZE = 100
 MAX_PUBLISH_ATTEMPTS = 10
 PUBLISHED_RETENTION_DAYS = 7
+# Rows per DELETE of the purge: each statement stays far inside the
+# connection's statement timeout however large the backlog has grown.
+PURGE_BATCH_SIZE = 1000
 # How long a fresh row belongs to its own after-commit publish before the
 # sweeper may take it. Far longer than a send plus one UPDATE ever takes, and
 # short enough that a publish which did fail is retried within a sweep or two.
 SWEEPER_GRACE = timedelta(seconds=60)
-# A broker that cannot be reached says nothing about the message: counting it
-# toward MAX_PUBLISH_ATTEMPTS would fail every pending row during an outage.
-BROKER_UNREACHABLE_ERRORS: tuple[type[Exception], ...] = (
-    *TRANSPORT_ERRORS,
-    ConnectionError,
-    TimeoutError,
-)
-
 _outbox = OutboxRepository()
-
-
-def _broker_error(error: Exception) -> BaseException:
-    """What the broker itself raised: taskiq's kicker wraps every error of
-    `broker.kick` in SendTaskError, which tells an outage from a refusal
-    nothing."""
-    if isinstance(error, SendTaskError) and error.__cause__ is not None:
-        return error.__cause__
-    return error
 
 
 def _report_failed(message: OutboxMessage) -> None:
@@ -77,8 +66,8 @@ async def sweep_outbox(
                 failed += 1
                 continue
             except Exception as error:
-                cause = _broker_error(error)
-                if isinstance(cause, BROKER_UNREACHABLE_ERRORS):
+                cause = broker_error(error)
+                if is_broker_unreachable(error):
                     await _outbox.mark_publish_failure(
                         uow.session,
                         message.id,
@@ -87,8 +76,13 @@ async def sweep_outbox(
                         count_attempt=False,
                     )
                     failed += 1
-                    # The rest of the batch would wait out the same timeout one
-                    # by one; the next sweep takes it.
+                    logger.warning(
+                        "Outbox sweep stopped, the broker is unreachable (%s)",
+                        type(cause).__name__,
+                    )
+                    # Every further send would fail the same way, a hanging one
+                    # only after SEND_TIMEOUT_SECONDS, while this transaction
+                    # holds the batch's row locks; the next sweep takes it.
                     break
                 # Any other refusal is the message's own: count it, give up
                 # after MAX_PUBLISH_ATTEMPTS.
@@ -109,9 +103,17 @@ async def sweep_outbox(
 
 
 async def purge_outbox(uow: FromDishka[SQLAlchemyUnitOfWork]) -> str:
-    """Delete published rows older than the retention window."""
+    """Delete published rows older than the retention window, in batches of
+    PURGE_BATCH_SIZE."""
     cutoff = get_utc_now() - timedelta(days=PUBLISHED_RETENTION_DAYS)
+    deleted = 0
     async with uow:
-        deleted = await _outbox.purge_published(uow.session, cutoff)
+        while True:
+            batch = await _outbox.purge_published(
+                uow.session, cutoff, limit=PURGE_BATCH_SIZE
+            )
+            deleted += batch
+            if batch < PURGE_BATCH_SIZE:
+                break
         await uow.commit()
     return f"Deleted {deleted} published outbox messages."
