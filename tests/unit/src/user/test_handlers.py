@@ -1,5 +1,4 @@
 from datetime import UTC, datetime
-from unittest.mock import AsyncMock
 
 from aiogram.methods import AnswerCallbackQuery, EditMessageText, SendMessage
 from aiogram.types import (
@@ -11,54 +10,19 @@ from aiogram.types import (
     User,
 )
 from aiogram.utils.i18n import I18n
-from dishka import Provider, Scope, provide
 import pytest
 
 from src.main.config import Config
 from src.user.callbacks import LanguageCallback
 from src.user.exceptions import UnsupportedLocaleError
-from src.user.schemas import TelegramProfile, UserProfile
-from src.user.usecases.change_membership import ChangeMembershipUseCase
-from src.user.usecases.set_locale import SetLocaleUseCase
-from src.user.usecases.touch_user import TouchUserUseCase
+from src.user.schemas import TelegramProfile
 from tests.factories.updates import (
     build_callback_update,
     build_message_update,
     build_my_chat_member_update,
 )
 from tests.helpers.dispatcher import running_bot
-
-
-class UseCases(Provider):
-    """The user use cases as mocks; the stored user has `locale`."""
-
-    def __init__(self, locale: str | None = None) -> None:
-        super().__init__()
-        self.touch = AsyncMock(spec=TouchUserUseCase)
-        self.touch.execute.side_effect = lambda profile: UserProfile(
-            id=profile.id,
-            first_name=profile.first_name,
-            username=profile.username,
-            last_name=profile.last_name,
-            language_code=profile.language_code,
-            locale=locale,
-            is_reachable=True,
-            last_seen_at=datetime(2026, 1, 1, tzinfo=UTC),
-        )
-        self.set_locale = AsyncMock(spec=SetLocaleUseCase)
-        self.change = AsyncMock(spec=ChangeMembershipUseCase)
-
-    @provide(scope=Scope.REQUEST, override=True)
-    def touch_user(self) -> TouchUserUseCase:
-        return self.touch
-
-    @provide(scope=Scope.REQUEST, override=True)
-    def set_locale_use_case(self) -> SetLocaleUseCase:
-        return self.set_locale
-
-    @provide(scope=Scope.REQUEST, override=True)
-    def change_membership(self) -> ChangeMembershipUseCase:
-        return self.change
+from tests.helpers.user import UseCases
 
 
 async def _replies(

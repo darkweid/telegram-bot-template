@@ -2,6 +2,7 @@ from dishka import Provider, Scope, provide
 
 from src.core.telegram.session import UnreachableUserRecorder
 from src.user.repositories import UserRepository
+from src.user.usecases.change_ban import ChangeBanUseCase
 from src.user.usecases.change_membership import ChangeMembershipUseCase
 from src.user.usecases.record_unreachable import RecordUnreachableUseCase
 from src.user.usecases.set_locale import SetLocaleUseCase
@@ -18,3 +19,4 @@ class UserProvider(Provider):
     touch_user = provide(TouchUserUseCase, scope=Scope.REQUEST)
     set_locale = provide(SetLocaleUseCase, scope=Scope.REQUEST)
     change_membership = provide(ChangeMembershipUseCase, scope=Scope.REQUEST)
+    change_ban = provide(ChangeBanUseCase, scope=Scope.REQUEST)

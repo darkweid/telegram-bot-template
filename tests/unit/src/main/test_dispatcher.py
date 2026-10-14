@@ -22,7 +22,7 @@ from src.core.telegram.middlewares.update_context import UpdateContextMiddleware
 from src.core.telegram.roles import Roles
 from src.main.config import Config
 from src.main.dispatcher import create_dispatcher
-from src.user.middlewares import UserMiddleware
+from src.user.middlewares import BanMiddleware, UserMiddleware
 from src.user.schemas import UserProfile
 from src.user.usecases.touch_user import TouchUserUseCase
 from tests.factories.updates import build_callback_update, build_message_update
@@ -43,6 +43,7 @@ async def test_middlewares_run_in_the_documented_order(
             ContainerMiddleware,
             UserMiddleware,
             UserLocaleMiddleware,
+            BanMiddleware,
         ]
         assert [type(m) for m in running.dp.callback_query.middleware] == [
             SkipAwareCallbackAnswerMiddleware,
@@ -101,6 +102,7 @@ class CountingTouch(Provider):
             language_code="en",
             locale=None,
             is_reachable=True,
+            is_banned=False,
             last_seen_at=datetime(2026, 1, 1, tzinfo=UTC),
         )
 

@@ -29,6 +29,7 @@ def _stored(**overrides: object) -> UserProfile:
         "language_code": "ru",
         "locale": None,
         "is_reachable": True,
+        "is_banned": False,
         "last_seen_at": NOW,
     }
     return UserProfile(**(fields | overrides))
@@ -60,6 +61,7 @@ def test_user_profile_is_built_from_the_model() -> None:
         language_code="ru",
         locale="en",
         is_reachable=True,
+        is_banned=False,
         last_seen_at=NOW,
     )
     assert UserProfile.from_model(model) == _stored(locale="en")

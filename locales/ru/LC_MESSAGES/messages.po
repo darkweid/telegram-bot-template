@@ -17,6 +17,12 @@ msgstr ""
 "Content-Transfer-Encoding: 8bit\n"
 "Generated-By: Babel 2.18.0\n"
 
+msgid "Admins and developers cannot be banned."
+msgstr "Админов и разработчиков банить нельзя."
+
+msgid "Ban a user"
+msgstr "Забанить пользователя"
+
 msgid "Change language"
 msgstr "Сменить язык"
 
@@ -40,6 +46,13 @@ msgstr ""
 msgid "Language: {language}"
 msgstr "Язык: {language}"
 
+msgid "No such user. They have to start the bot first."
+msgstr "Такого пользователя нет. Сначала он должен запустить бота."
+
+#, python-brace-format
+msgid "Several users have had @{username}. Use the numeric id instead."
+msgstr "@{username} был у нескольких пользователей. Укажите числовой id."
+
 msgid "Show help"
 msgstr "Показать справку"
 
@@ -58,3 +71,29 @@ msgid_plural "Too many requests. Try again in {seconds} seconds."
 msgstr[0] "Слишком много запросов. Попробуйте через {seconds} секунду."
 msgstr[1] "Слишком много запросов. Попробуйте через {seconds} секунды."
 msgstr[2] "Слишком много запросов. Попробуйте через {seconds} секунд."
+
+msgid "Unban a user"
+msgstr "Разбанить пользователя"
+
+#, python-brace-format
+msgid "Usage: /{command} USER_ID or /{command} @username"
+msgstr "Использование: /{command} ID или /{command} @username"
+
+msgid "You cannot ban yourself."
+msgstr "Себя забанить нельзя."
+
+#, python-brace-format
+msgid "{name} ({id}) is already banned."
+msgstr "{name} ({id}) уже забанен."
+
+#, python-brace-format
+msgid "{name} ({id}) is banned."
+msgstr "{name} ({id}) забанен."
+
+#, python-brace-format
+msgid "{name} ({id}) is not banned."
+msgstr "{name} ({id}) не забанен."
+
+#, python-brace-format
+msgid "{name} ({id}) is unbanned."
+msgstr "{name} ({id}) разбанен."

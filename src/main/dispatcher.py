@@ -18,7 +18,7 @@ from src.core.telegram.middlewares.update_context import UpdateContextMiddleware
 from src.core.telegram.roles import Roles
 from src.developer.handlers import build_developer_router
 from src.user.handlers import build_user_router
-from src.user.middlewares import UserMiddleware
+from src.user.middlewares import BanMiddleware, UserMiddleware
 
 
 async def create_dispatcher(container: AsyncContainer) -> Dispatcher:
@@ -31,7 +31,8 @@ async def create_dispatcher(container: AsyncContainer) -> Dispatcher:
     2. dishka's ContainerMiddleware - one request scope per update, which the
        handler shares;
     3. UserMiddleware - stores the sender, needs the request scope;
-    4. UserLocaleMiddleware - needs the stored user's chosen language.
+    4. UserLocaleMiddleware - needs the stored user's chosen language;
+    5. BanMiddleware - drops a banned user's updates; a role beats a ban.
 
     Inner middlewares on message and callback_query: the callback answer
     middleware, then ThrottlingMiddleware.
@@ -49,6 +50,7 @@ async def create_dispatcher(container: AsyncContainer) -> Dispatcher:
     dp.update.outer_middleware(container_middleware)
     dp.update.outer_middleware(UserMiddleware())
     dp.update.outer_middleware(UserLocaleMiddleware(await container.get(I18n)))
+    dp.update.outer_middleware(BanMiddleware())
     # Error handlers run from aiogram's ErrorsMiddleware, after the update's
     # scope has closed, so they get a scope of their own.
     dp.errors.outer_middleware(container_middleware)

@@ -190,6 +190,14 @@ its private chat: the user commands plus those of its roles. An id that never
 opened the bot cannot get a menu yet; the bot logs one warning and starts
 anyway, and the menu is set on the next start after that user opens the bot.
 
+Admins ban and unban users with `/ban` and `/unban`, followed by a Telegram
+user id or `@username` (matched ignoring case; a username that several stored
+users have had is refused, use the id). Only users who have started the bot
+can be named. Admins and developers cannot be banned, and nobody bans
+themselves. A banned user's updates are dropped without an answer. A role
+beats a ban: someone banned before their id was added to `ADMIN_IDS` or
+`DEVELOPER_IDS` is served as usual.
+
 The role menus are set for each listed id on every start. Removing an id from
 `ADMIN_IDS` or `DEVELOPER_IDS` takes the role away at once, but Telegram keeps
 showing that user the old menu: the bot never deletes a menu it set. Clear it

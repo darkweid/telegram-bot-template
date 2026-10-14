@@ -7,8 +7,12 @@ from aiogram.types import Chat, TelegramObject, Update, User
 from dishka import AsyncContainer
 from dishka.integrations.aiogram import CONTAINER_NAME
 
-from src.user.schemas import TelegramProfile
+from loggers import get_logger
+from src.core.telegram.roles import Roles
+from src.user.schemas import TelegramProfile, UserProfile
 from src.user.usecases.touch_user import TouchUserUseCase
+
+logger = get_logger(__name__)
 
 
 class UserMiddleware(BaseMiddleware):
@@ -42,4 +46,30 @@ class UserMiddleware(BaseMiddleware):
         container: AsyncContainer = data[CONTAINER_NAME]
         touch = await container.get(TouchUserUseCase)
         data["user"] = await touch.execute(TelegramProfile.from_aiogram(sender))
+        return await handler(event, data)
+
+
+class BanMiddleware(BaseMiddleware):
+    """Drop every update of a banned user, without an answer.
+
+    Reads the snapshot UserMiddleware stored; an update without one (a group,
+    `my_chat_member`) passes, so a banned user's reachability is still
+    tracked. A role beats a ban: someone banned before joining ADMIN_IDS or
+    DEVELOPER_IDS is not locked out.
+
+    Only updates that carry a stored user (private chats) are checked; a router
+    for inline queries or groups must check `is_banned` itself.
+    """
+
+    async def __call__(
+        self,
+        handler: Callable[[TelegramObject, dict[str, Any]], Awaitable[Any]],
+        event: TelegramObject,
+        data: dict[str, Any],
+    ) -> Any:
+        user: UserProfile | None = data.get("user")
+        roles: Roles = data["roles"]
+        if user is not None and user.is_banned and not roles.is_privileged(user.id):
+            logger.info("Dropped an update of banned user %s", user.id)
+            return None
         return await handler(event, data)

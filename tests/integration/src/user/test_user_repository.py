@@ -158,6 +158,9 @@ async def test_writes_to_an_unknown_user_report_false(
     repository = UserRepository()
     assert await repository.set_reachable(db_session, user_id, False, T0) is False
     assert await repository.set_locale(db_session, user_id, "en") is False
+    assert not await repository.set_banned(
+        db_session, user_id, banned=True, by=7, now=T0
+    )
     await db_session.rollback()
 
 
@@ -229,3 +232,57 @@ async def test_set_reachable_and_set_locale_move_updated_at(
         await db_session.commit()
 
     assert stamps == sorted(set(stamps))
+
+
+async def test_a_ban_records_who_and_when(
+    db_session: AsyncSession, user_id: int, cleanup: None
+) -> None:
+    users = UserRepository()
+    await users.upsert_from_telegram(db_session, _profile(user_id), T0)
+    assert await users.set_banned(db_session, user_id, banned=True, by=7, now=T0)
+    await db_session.commit()
+    user = await users.get_single(db_session, id=user_id, populate_existing=True)
+    assert user is not None
+    assert (user.is_banned, user.banned_at, user.banned_by) == (True, T0, 7)
+
+
+async def test_an_unban_keeps_who_touched_it_last(
+    db_session: AsyncSession, user_id: int, cleanup: None
+) -> None:
+    users = UserRepository()
+    await users.upsert_from_telegram(db_session, _profile(user_id), T0)
+    await users.set_banned(db_session, user_id, banned=True, by=7, now=T0)
+    await users.set_banned(db_session, user_id, banned=False, by=8, now=T0)
+    await db_session.commit()
+    user = await users.get_single(db_session, id=user_id, populate_existing=True)
+    assert user is not None
+    assert (user.is_banned, user.banned_at, user.banned_by) == (False, None, 8)
+
+
+async def test_a_username_is_found_whatever_its_case(
+    db_session: AsyncSession, user_id: int, cleanup: None
+) -> None:
+    """Telegram treats usernames case-insensitively; an admin types them as
+    they remember them."""
+    users = UserRepository()
+    username = f"Ann_{user_id}"
+    await users.upsert_from_telegram(
+        db_session, _profile(user_id, username=username), T0
+    )
+    await db_session.commit()
+    [found] = await users.find_by_username(db_session, username.upper())
+    assert found.id == user_id
+
+
+async def test_a_refresh_keeps_the_ban(
+    db_session: AsyncSession, user_id: int, cleanup: None
+) -> None:
+    """Every update upserts the profile; a ban must survive it."""
+    users = UserRepository()
+    await users.upsert_from_telegram(db_session, _profile(user_id), T0)
+    await users.set_banned(db_session, user_id, banned=True, by=7, now=T0)
+    upserted = await users.upsert_from_telegram(
+        db_session, _profile(user_id, first_name="New"), T0 + timedelta(minutes=1)
+    )
+    await db_session.commit()
+    assert upserted.user.is_banned is True

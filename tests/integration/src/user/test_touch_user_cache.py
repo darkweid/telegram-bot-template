@@ -31,6 +31,7 @@ async def test_a_snapshot_survives_the_redis_round_trip(redis_client: Redis) -> 
         language_code="en",
         locale="ru",
         is_reachable=True,
+        is_banned=False,
         last_seen_at=datetime(2026, 1, 1, 12, 0, tzinfo=UTC),
     )
     await cache.set(user_cache_key(42), snapshot)

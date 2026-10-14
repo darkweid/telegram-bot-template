@@ -32,6 +32,7 @@ def _model(**overrides: object) -> User:
         "language_code": "en",
         "locale": None,
         "is_reachable": True,
+        "is_banned": False,
         "last_seen_at": NOW,
     }
     return User(**(fields | overrides))

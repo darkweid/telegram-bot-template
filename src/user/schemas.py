@@ -39,6 +39,7 @@ class UserProfile:
     language_code: str | None
     locale: str | None
     is_reachable: bool
+    is_banned: bool
     last_seen_at: datetime
 
     @classmethod
@@ -51,6 +52,7 @@ class UserProfile:
             language_code=user.language_code,
             locale=user.locale,
             is_reachable=user.is_reachable,
+            is_banned=user.is_banned,
             last_seen_at=user.last_seen_at,
         )
 
@@ -67,3 +69,10 @@ class UserProfile:
             profile.last_name,
             profile.language_code,
         )
+
+
+@dataclass(frozen=True, slots=True)
+class BanChange:
+    user: UserProfile
+    # False when the user already was in the requested state.
+    changed: bool

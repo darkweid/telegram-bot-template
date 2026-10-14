@@ -1,7 +1,8 @@
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
 
-from sqlalchemy import Boolean, func, literal_column, update
+from sqlalchemy import Boolean, func, literal_column, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -98,3 +99,28 @@ class UserRepository(BaseRepository[User]):
             .returning(User.id)
         )
         return (await session.execute(statement)).scalar_one_or_none() is not None
+
+    async def set_banned(
+        self,
+        session: AsyncSession,
+        user_id: int,
+        *,
+        banned: bool,
+        by: int | None,
+        now: datetime,
+    ) -> bool:
+        statement = (
+            update(User)
+            .where(User.id == user_id)
+            .values(is_banned=banned, banned_at=now if banned else None, banned_by=by)
+            .returning(User.id)
+        )
+        return (await session.execute(statement)).scalar_one_or_none() is not None
+
+    async def find_by_username(
+        self, session: AsyncSession, username: str
+    ) -> Sequence[User]:
+        """Every stored user with this username, ignoring case. More than one
+        when a username changed hands and the old owner's row is stale."""
+        statement = select(User).where(func.lower(User.username) == username.lower())
+        return (await session.execute(statement)).scalars().all()
