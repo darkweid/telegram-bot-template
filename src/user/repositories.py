@@ -1,6 +1,6 @@
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from sqlalchemy import Boolean, func, literal_column, select, update
 from sqlalchemy.dialects.postgresql import insert
@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.core.database.repositories import BaseRepository
 from src.user.models import User
-from src.user.schemas import TelegramProfile
+from src.user.schemas import TelegramProfile, UserStats
 
 
 @dataclass(frozen=True, slots=True)
@@ -134,3 +134,21 @@ class UserRepository(BaseRepository[User]):
         `ix_users_lower_username` serves it."""
         statement = select(User).where(func.lower(User.username) == username.lower())
         return (await session.execute(statement)).scalars().all()
+
+    async def get_stats(self, session: AsyncSession, now: datetime) -> UserStats:
+        """Every count of /stats in one pass over the table, so they agree
+        with each other."""
+        day, week, month = (now - timedelta(days=days) for days in (1, 7, 30))
+        statement = select(
+            func.count().label("total"),
+            func.count().filter(User.is_reachable).label("reachable"),
+            func.count().filter(User.is_banned).label("banned"),
+            func.count().filter(User.last_seen_at >= day).label("active_day"),
+            func.count().filter(User.last_seen_at >= week).label("active_week"),
+            func.count().filter(User.last_seen_at >= month).label("active_month"),
+            func.count().filter(User.created_at >= day).label("new_day"),
+            func.count().filter(User.created_at >= week).label("new_week"),
+            func.count().filter(User.created_at >= month).label("new_month"),
+        ).select_from(User)
+        row = (await session.execute(statement)).one()
+        return UserStats(**row._mapping)

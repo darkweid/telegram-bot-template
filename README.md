@@ -198,6 +198,9 @@ themselves. A banned user's updates are dropped without an answer. A role
 beats a ban: someone banned before their id was added to `ADMIN_IDS` or
 `DEVELOPER_IDS` is served as usual.
 
+Admins also get `/stats`: users in total, reachable, banned, and active and
+new in the last 1, 7 and 30 days.
+
 The role menus are set for each listed id on every start. Removing an id from
 `ADMIN_IDS` or `DEVELOPER_IDS` takes the role away at once, but Telegram keeps
 showing that user the old menu: the bot never deletes a menu it set. Clear it

@@ -6,8 +6,9 @@ from dishka import Provider, Scope, provide
 
 from src.main.config import Config
 from src.user.exceptions import ProtectedUserError
-from src.user.schemas import BanChange
+from src.user.schemas import BanChange, UserStats
 from src.user.usecases.change_ban import ChangeBanUseCase
+from src.user.usecases.get_user_stats import GetUserStatsUseCase
 from tests.factories.updates import build_message_update
 from tests.factories.users import build_user_snapshot
 from tests.helpers.dispatcher import running_bot
@@ -104,3 +105,51 @@ async def test_a_non_admin_cannot_ban(settings: Config, i18n: I18n) -> None:
     stub = BanStub()
     await _reply(settings, i18n, "/ban 5", stub, user_id=77)
     stub.change.execute.assert_not_awaited()
+
+
+class StatsStub(Provider):
+    def __init__(self) -> None:
+        super().__init__()
+        self.stats = AsyncMock(spec=GetUserStatsUseCase)
+        self.stats.execute.return_value = UserStats(
+            total=1,
+            reachable=1,
+            banned=0,
+            active_day=1,
+            active_week=1,
+            active_month=1,
+            new_day=0,
+            new_week=1,
+            new_month=1,
+        )
+
+    @provide(scope=Scope.REQUEST, override=True)
+    def get_user_stats(self) -> GetUserStatsUseCase:
+        return self.stats
+
+
+async def test_stats_are_shown_to_an_admin(settings: Config, i18n: I18n) -> None:
+    """The singular form matters: "1 users" is the first thing an admin of a
+    new bot would see."""
+    stub = StatsStub()
+    async with running_bot(_admin(settings), i18n, UseCases(), stub) as running:
+        await running.feed(build_message_update("/stats", user_id=ADMIN))
+        [reply] = running.session.sent(SendMessage)
+    assert reply.text == (
+        "1 user\n"
+        "Reachable: 1\n"
+        "Banned: 0\n"
+        "Active in the last day / week / month: 1 / 1 / 1\n"
+        "New in the last day / week / month: 0 / 1 / 1"
+    )
+
+
+async def test_stats_are_hidden_from_everyone_else(
+    settings: Config, i18n: I18n
+) -> None:
+    """User counts are business data; a non-admin must not learn the command
+    exists."""
+    stub = StatsStub()
+    async with running_bot(_admin(settings), i18n, UseCases(), stub) as running:
+        await running.feed(build_message_update("/stats", user_id=77))
+    stub.stats.execute.assert_not_awaited()

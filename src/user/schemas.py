@@ -76,3 +76,19 @@ class BanChange:
     user: UserProfile
     # False when the user already was in the requested state.
     changed: bool
+
+
+@dataclass(frozen=True, slots=True)
+class UserStats:
+    """User counts for /stats. `active_*` count by the last update seen,
+    `new_*` by the first; the windows are the last 1, 7 and 30 days."""
+
+    total: int
+    reachable: int
+    banned: int
+    active_day: int
+    active_week: int
+    active_month: int
+    new_day: int
+    new_week: int
+    new_month: int

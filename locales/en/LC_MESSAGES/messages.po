@@ -16,10 +16,18 @@ msgstr ""
 "Content-Transfer-Encoding: 8bit\n"
 "Generated-By: Babel 2.18.0\n"
 
+#, python-brace-format
+msgid "Active in the last day / week / month: {day} / {week} / {month}"
+msgstr ""
+
 msgid "Admins and developers cannot be banned."
 msgstr ""
 
 msgid "Ban a user"
+msgstr ""
+
+#, python-brace-format
+msgid "Banned: {count}"
 msgstr ""
 
 msgid "Change language"
@@ -42,7 +50,15 @@ msgstr ""
 msgid "Language: {language}"
 msgstr ""
 
+#, python-brace-format
+msgid "New in the last day / week / month: {day} / {week} / {month}"
+msgstr ""
+
 msgid "No such user. They have to start the bot first."
+msgstr ""
+
+#, python-brace-format
+msgid "Reachable: {count}"
 msgstr ""
 
 #, python-brace-format
@@ -50,6 +66,9 @@ msgid "Several users have had @{username}. Use the numeric id instead."
 msgstr ""
 
 msgid "Show help"
+msgstr ""
+
+msgid "Show user statistics"
 msgstr ""
 
 msgid "Something went wrong. Please try again later."
@@ -76,6 +95,12 @@ msgstr ""
 
 msgid "You cannot ban yourself."
 msgstr ""
+
+#, python-brace-format
+msgid "{count} user"
+msgid_plural "{count} users"
+msgstr[0] ""
+msgstr[1] ""
 
 #, python-brace-format
 msgid "{name} ({id}) is already banned."

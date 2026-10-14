@@ -17,11 +17,19 @@ msgstr ""
 "Content-Transfer-Encoding: 8bit\n"
 "Generated-By: Babel 2.18.0\n"
 
+#, python-brace-format
+msgid "Active in the last day / week / month: {day} / {week} / {month}"
+msgstr "Активны за день / неделю / месяц: {day} / {week} / {month}"
+
 msgid "Admins and developers cannot be banned."
 msgstr "Админов и разработчиков банить нельзя."
 
 msgid "Ban a user"
 msgstr "Забанить пользователя"
+
+#, python-brace-format
+msgid "Banned: {count}"
+msgstr "Забанены: {count}"
 
 msgid "Change language"
 msgstr "Сменить язык"
@@ -46,8 +54,16 @@ msgstr ""
 msgid "Language: {language}"
 msgstr "Язык: {language}"
 
+#, python-brace-format
+msgid "New in the last day / week / month: {day} / {week} / {month}"
+msgstr "Новые за день / неделю / месяц: {day} / {week} / {month}"
+
 msgid "No such user. They have to start the bot first."
 msgstr "Такого пользователя нет. Сначала он должен запустить бота."
+
+#, python-brace-format
+msgid "Reachable: {count}"
+msgstr "Достижимы: {count}"
 
 #, python-brace-format
 msgid "Several users have had @{username}. Use the numeric id instead."
@@ -55,6 +71,9 @@ msgstr "@{username} был у нескольких пользователей. �
 
 msgid "Show help"
 msgstr "Показать справку"
+
+msgid "Show user statistics"
+msgstr "Статистика пользователей"
 
 msgid "Something went wrong. Please try again later."
 msgstr "Что-то пошло не так. Попробуйте ещё раз чуть позже."
@@ -81,6 +100,13 @@ msgstr "Использование: /{command} ID или /{command} @username"
 
 msgid "You cannot ban yourself."
 msgstr "Себя забанить нельзя."
+
+#, python-brace-format
+msgid "{count} user"
+msgid_plural "{count} users"
+msgstr[0] "{count} пользователь"
+msgstr[1] "{count} пользователя"
+msgstr[2] "{count} пользователей"
 
 #, python-brace-format
 msgid "{name} ({id}) is already banned."
