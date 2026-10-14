@@ -5,7 +5,7 @@ import pytest
 from src.core.cache.interface import Cache
 from src.core.database.uow import SQLAlchemyUnitOfWork
 from src.core.telegram.roles import Roles
-from src.user.cache import user_cache_key
+from src.user.cache import DROP_USER_SNAPSHOT, user_cache_key
 from src.user.exceptions import (
     AmbiguousUsernameError,
     ProtectedUserError,
@@ -18,6 +18,7 @@ from src.user.schemas import UserProfile
 from src.user.usecases.change_ban import ChangeBanUseCase
 from tests.factories.users import build_cache, build_user_model, build_user_snapshot
 from tests.fakes.db import FakeAsyncSession
+from tests.helpers.providers import RecordingTaskPublisher
 
 ADMIN = 1
 DEVELOPER = 2
@@ -36,9 +37,10 @@ def _use_case(
     users: AsyncMock,
     cache: Cache | None = None,
     session: FakeAsyncSession | None = None,
+    publisher: RecordingTaskPublisher | None = None,
 ) -> ChangeBanUseCase:
     return ChangeBanUseCase(
-        SQLAlchemyUnitOfWork(session or FakeAsyncSession()),
+        SQLAlchemyUnitOfWork(session or FakeAsyncSession(), publisher),
         users,
         cache or build_cache(),
         ROLES,
@@ -55,6 +57,19 @@ async def test_a_ban_is_stored_and_the_snapshot_dropped() -> None:
     assert users.set_banned.await_args is not None
     assert users.set_banned.await_args.kwargs["by"] == ADMIN
     assert await cache.get(user_cache_key(42), model=UserProfile) is None
+
+
+@pytest.mark.parametrize("banned", [True, False])
+async def test_a_ban_change_also_drops_the_snapshot_through_the_outbox(
+    banned: bool,
+) -> None:
+    """The after-commit drop fails open: lost to a Redis outage, the old
+    snapshot would let a banned user through, or keep an unbanned one out,
+    once Redis is back. The outbox delivers the drop after the outage."""
+    publisher = RecordingTaskPublisher()
+    users = _users(build_user_model(id=42, is_banned=not banned))
+    await _use_case(users, publisher=publisher).execute(ADMIN, 42, banned=banned)
+    assert publisher.published == [(DROP_USER_SNAPSHOT, [], {"user_id": 42})]
 
 
 async def test_a_failed_commit_keeps_the_snapshot() -> None:
@@ -78,10 +93,14 @@ async def test_banning_a_banned_user_changes_nothing() -> None:
     await cache.set(user_cache_key(42), build_user_snapshot(id=42))
     users = _users(build_user_model(id=42))
     users.set_banned.return_value = False
-    session = FakeAsyncSession()
-    change = await _use_case(users, cache, session).execute(ADMIN, 42, banned=True)
+    session, publisher = FakeAsyncSession(), RecordingTaskPublisher()
+    change = await _use_case(users, cache, session, publisher).execute(
+        ADMIN, 42, banned=True
+    )
     assert (change.changed, change.user.is_banned) == (False, True)
     session.commit.assert_not_awaited()
+    session.add.assert_not_called()
+    assert publisher.published == []
     assert await cache.get(user_cache_key(42), model=UserProfile) is not None
 
 

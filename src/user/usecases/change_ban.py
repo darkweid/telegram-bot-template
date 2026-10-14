@@ -5,7 +5,7 @@ from src.core.cache.interface import Cache
 from src.core.database.uow import SQLAlchemyUnitOfWork
 from src.core.telegram.roles import Roles
 from src.core.utils.datetime_utils import get_utc_now
-from src.user.cache import invalidate_user_after_commit
+from src.user.cache import DROP_USER_SNAPSHOT, invalidate_user_after_commit
 from src.user.exceptions import (
     AmbiguousUsernameError,
     ProtectedUserError,
@@ -57,6 +57,11 @@ class ChangeBanUseCase:
             if not changed:
                 return BanChange(user=replace(target, is_banned=banned), changed=False)
             invalidate_user_after_commit(uow, self._cache, target.id)
+            # The fast delete above fails open: lost to a Redis outage, the old
+            # snapshot would be served again once Redis is back, letting a
+            # banned user through until it expires. The outbox delivers this
+            # one after the outage.
+            await uow.enqueue_task(DROP_USER_SNAPSHOT, user_id=target.id)
             await uow.commit()
         logger.info(
             "User %s %s by %s", target.id, "banned" if banned else "unbanned", admin_id

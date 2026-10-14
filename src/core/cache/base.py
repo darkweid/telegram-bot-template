@@ -17,9 +17,10 @@ class BaseCache(ABC):
     """
     Semantics shared by every Cache implementation.
 
-    Subclasses supply storage only - reading, writing, dropping a key and retiring
-    version counters. TTL validation, the `enabled` switch, serialization, key
-    composition and the decode-and-drop rule live here, so the in-memory
+    Subclasses supply storage only - reading, writing, dropping a key (failing
+    open or raising) and retiring version counters. TTL validation, the
+    `enabled` switch, serialization, key composition and the decode-and-drop
+    rule live here, so the in-memory
     implementation the tests run against cannot drift from the Redis one that
     serves production traffic.
     """
@@ -107,6 +108,18 @@ class BaseCache(ABC):
             return
         await self._drop(key)
 
+    async def delete_or_raise(self, key: CacheKey) -> None:
+        """
+        Drop the key like `delete`, except that a Redis outage raises.
+
+        For a caller that must know the entry is gone and can try again later,
+        such as a retried task: a fail-open delete would report success while
+        the entry stays.
+        """
+        if not self._enabled:
+            return
+        await self._drop_or_raise(key)
+
     async def invalidate(self, namespace: str) -> None:
         if not self._enabled:
             return
@@ -149,6 +162,9 @@ class BaseCache(ABC):
 
     @abstractmethod
     async def _drop(self, key: CacheKey) -> None: ...
+
+    @abstractmethod
+    async def _drop_or_raise(self, key: CacheKey) -> None: ...
 
     @abstractmethod
     async def _retire_counters(self, counters: Sequence[str]) -> None: ...

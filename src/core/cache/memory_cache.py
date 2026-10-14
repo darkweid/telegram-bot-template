@@ -90,6 +90,9 @@ class InMemoryCache(BaseCache):
         if current_key is not None:
             self._entries.pop(current_key, None)
 
+    # Nothing in process can be out, so there is no outage to fail open on.
+    _drop_or_raise = _drop
+
     async def _retire_counters(self, counters: Sequence[str]) -> None:
         for counter in counters:
             self._versions.pop(counter, None)

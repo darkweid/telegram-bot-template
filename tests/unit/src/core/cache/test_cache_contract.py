@@ -208,6 +208,16 @@ async def test_delete_removes_only_the_addressed_key(cache: Cache) -> None:
     assert await cache.get(OTHER_KEY) == {"phone": "1"}
 
 
+async def test_delete_or_raise_removes_only_the_addressed_key(cache: Cache) -> None:
+    await cache.set(KEY, {"name": "ada"}, ttl=60)
+    await cache.set(OTHER_KEY, {"phone": "1"}, ttl=60)
+
+    await cache.delete_or_raise(KEY)
+
+    assert await cache.get(KEY) is None
+    assert await cache.get(OTHER_KEY) == {"phone": "1"}
+
+
 async def test_undecodable_payload_reads_as_a_miss_and_is_dropped(
     cache: Cache,
 ) -> None:
@@ -267,6 +277,7 @@ async def test_disabled_cache_neither_deletes_nor_invalidates(
     monkeypatch.setattr(cache, "_enabled", False)
 
     await cache.delete(KEY)
+    await cache.delete_or_raise(KEY)
     await cache.invalidate(KEY.namespace)
     await cache.invalidate_tags("users")
 

@@ -1,6 +1,8 @@
 from dishka import FromDishka
 
+from src.core.cache.interface import Cache
 from src.core.tasks.registry import TaskSpec
+from src.user.cache import DROP_USER_SNAPSHOT, user_cache_key
 from src.user.usecases.notify_admins import NotifyAdminsOfNewUserUseCase
 
 NOTIFY_ADMINS_OF_NEW_USER = "user.notify_admins_of_new_user"
@@ -13,7 +15,15 @@ async def notify_admins_of_new_user(
     return f"Notified {sent} admins."
 
 
-# No retry: a retry would repeat the notice to every admin who already got it.
+async def drop_user_snapshot(user_id: int, cache: FromDishka[Cache]) -> None:
+    """Raises while Redis is out, so the retry tries again: the after-commit
+    delete this backs up already failed open."""
+    await cache.delete_or_raise(user_cache_key(user_id))
+
+
 USER_TASKS: tuple[TaskSpec, ...] = (
+    # No retry: a retry would repeat the notice to every admin who already got it.
     TaskSpec(NOTIFY_ADMINS_OF_NEW_USER, notify_admins_of_new_user),
+    # A second delete changes nothing, so retrying is safe.
+    TaskSpec(DROP_USER_SNAPSHOT, drop_user_snapshot, retry_on_error=True),
 )

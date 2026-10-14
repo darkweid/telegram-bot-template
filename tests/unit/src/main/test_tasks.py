@@ -8,6 +8,7 @@ from src.main import tasks as tasks_module
 from src.main.config import Config
 from src.main.event_subscribers import EVENT_SUBSCRIBERS
 from src.main.tasks import TASKS, build_broker
+from src.user.cache import DROP_USER_SNAPSHOT
 from src.user.events import UserRegistered
 from src.user.subscribers import enqueue_new_user_notice
 from src.user.tasks import NOTIFY_ADMINS_OF_NEW_USER
@@ -69,6 +70,13 @@ def test_the_notice_is_never_retried() -> None:
     """A retry would repeat the notice to every admin who already got it."""
     [spec] = [spec for spec in TASKS if spec.name == NOTIFY_ADMINS_OF_NEW_USER]
     assert spec.retry_on_error is False
+
+
+def test_the_snapshot_drop_is_registered_and_retried() -> None:
+    """Unregistered, the outbox would store a drop no worker runs; without a
+    retry, one failed while Redis is out would never land."""
+    [spec] = [spec for spec in TASKS if spec.name == DROP_USER_SNAPSHOT]
+    assert spec.retry_on_error is True
 
 
 def test_broadcasts_run_once_and_stalled_ones_resume_every_minute() -> None:

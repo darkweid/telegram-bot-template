@@ -240,6 +240,7 @@ async def test_disabled_cache_never_touches_redis(fake_redis: InMemoryRedis) -> 
 
     assert await cache.get(KEY) is None
     await cache.delete(KEY)
+    await cache.delete_or_raise(KEY)
     await cache.invalidate(KEY.namespace)
     await cache.invalidate_tags("any")
     assert fake_redis.cache_eval_calls == 0
@@ -277,6 +278,27 @@ async def test_delete_fails_open_when_redis_is_out_of_memory(
     await cache.delete(KEY)
 
     assert sentry_capture.call_count == 1
+
+
+@pytest.mark.parametrize(
+    "error", [redis_exc.ConnectionError("down"), redis_exc.TimeoutError("slow"), OOM]
+)
+async def test_delete_or_raise_raises_on_an_outage(
+    cache: RedisCache,
+    fake_redis: InMemoryRedis,
+    sentry_capture: MagicMock,
+    error: redis_exc.RedisError,
+) -> None:
+    # Its caller retries until the delete lands; failing open would report
+    # success with the entry still in place.
+    await cache.set(KEY, {"name": "ada"}, ttl=60)
+    fake_redis.fail_next_commands(1, error=error)
+
+    with pytest.raises(type(error)):
+        await cache.delete_or_raise(KEY)
+
+    assert await cache.get(KEY) == {"name": "ada"}
+    sentry_capture.assert_not_called()
 
 
 async def test_invalidate_fails_open_when_redis_is_out_of_memory(

@@ -95,6 +95,19 @@ async def test_delete_removes_only_its_own_entry(
 
 
 @pytest.mark.parametrize("backend", ["real", "fake"], indirect=True)
+async def test_a_raising_delete_removes_only_its_own_entry(
+    backend: Redis | InMemoryRedis,
+) -> None:
+    """The snapshot task deletes through this path; the fake must agree."""
+    cache = _cache(backend, _prefix())
+    await cache.set(KEY, {"a": 1})
+    await cache.set(SIBLING, {"a": 2})
+    await cache.delete_or_raise(KEY)
+    assert await cache.get(KEY) is None
+    assert await cache.get(SIBLING) == {"a": 2}
+
+
+@pytest.mark.parametrize("backend", ["real", "fake"], indirect=True)
 async def test_a_retired_generation_stays_unreachable_after_a_sibling_write(
     backend: Redis | InMemoryRedis,
 ) -> None:

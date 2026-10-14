@@ -26,7 +26,8 @@ class RedisCache(BaseCache):
     Reads and writes go through Lua so that resolving every version counter the
     key composes from - the namespace and each of its tags - and touching the
     value happen in a single round trip. Transport failures and OOM refusals are
-    swallowed (a cache outage must not fail an update); programmer errors -
+    swallowed (a cache outage must not fail an update), except by
+    `delete_or_raise`, whose caller asked to know; programmer errors -
     unserializable values, a ttl outside (0, version_ttl], a rejected command -
     are raised. Only a successful write reports recovery.
     """
@@ -95,14 +96,17 @@ class RedisCache(BaseCache):
 
     async def _drop(self, key: CacheKey) -> None:
         try:
-            await self._eval(
-                CACHE_DELETE_SCRIPT,
-                self._counter_keys(key),
-                self._namespace_prefix(key.namespace),
-                key.suffix,
-            )
+            await self._drop_or_raise(key)
         except FAIL_OPEN_ERRORS as error:
             self._on_redis_outage("delete", key, error)
+
+    async def _drop_or_raise(self, key: CacheKey) -> None:
+        await self._eval(
+            CACHE_DELETE_SCRIPT,
+            self._counter_keys(key),
+            self._namespace_prefix(key.namespace),
+            key.suffix,
+        )
 
     async def _retire_counters(self, counters: Sequence[str]) -> None:
         try:

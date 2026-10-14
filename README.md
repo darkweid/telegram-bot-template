@@ -146,10 +146,14 @@ Admins ban and unban users with `/ban` and `/unban`, followed by a Telegram
 user id or `@username` (matched ignoring case; a username that several stored
 users have had is refused, use the id). Only users who have started the bot
 can be named. Admins and developers cannot be banned, and nobody bans
-themselves. A banned user's updates are dropped without an answer. A role
-beats a ban for updates only: someone banned before their id was added to
-`ADMIN_IDS` or `DEVELOPER_IDS` is served as usual, but broadcasts skip them and
-`/stats` counts them as banned until they are unbanned with `/unban`.
+themselves. A banned user's updates are dropped without an answer. A ban or
+unban made while Redis is down holds during the outage, when every update
+reads the stored row; the snapshot cached before it could undo it once Redis
+is back, so the worker drops that snapshot then, usually within a couple of
+minutes. A role beats a ban for updates only: someone banned before their id
+was added to `ADMIN_IDS` or `DEVELOPER_IDS` is served as usual, but
+broadcasts skip them and `/stats` counts them as banned until they are
+unbanned with `/unban`.
 
 Admins also get `/stats`: users in total, reachable, banned, and active and
 new in the last 1, 7 and 30 days.
