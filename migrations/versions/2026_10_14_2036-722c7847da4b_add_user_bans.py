@@ -36,9 +36,16 @@ def upgrade() -> None:
         unique=False,
         postgresql_where=sa.text("is_reachable AND NOT is_banned"),
     )
+    op.create_index(
+        "ix_users_lower_username",
+        "users",
+        [sa.literal_column("lower(username)")],
+        unique=False,
+    )
 
 
 def downgrade() -> None:
+    op.drop_index("ix_users_lower_username", table_name="users")
     op.drop_index("ix_users_recipients", table_name="users")
     op.create_index(
         op.f("ix_users_reachable"),

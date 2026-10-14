@@ -27,6 +27,10 @@ class User(TimestampMixin, Base):
             "id",
             postgresql_where=text("is_reachable AND NOT is_banned"),
         ),
+        # /ban @username matches case-insensitively (`lower(username) = ...`);
+        # the expression index serves that lookup, a plain one on username
+        # would not.
+        Index("ix_users_lower_username", text("lower(username)")),
     )
 
     # Telegram ids exceed 2**31 and are assigned by Telegram, never by us.

@@ -128,6 +128,9 @@ class UserRepository(BaseRepository[User]):
         self, session: AsyncSession, username: str
     ) -> Sequence[User]:
         """Every stored user with this username, ignoring case. More than one
-        when a username changed hands and the old owner's row is stale."""
+        when a username changed hands and the old owner's row is stale.
+
+        The comparison is written as `lower(username)` so that
+        `ix_users_lower_username` serves it."""
         statement = select(User).where(func.lower(User.username) == username.lower())
         return (await session.execute(statement)).scalars().all()

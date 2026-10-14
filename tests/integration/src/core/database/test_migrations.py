@@ -134,3 +134,21 @@ async def test_broadcast_recipients_have_a_partial_index_on_id(
 
     assert "(id)" in definition
     assert definition.endswith("WHERE (is_reachable AND (NOT is_banned))")
+
+
+async def test_usernames_have_a_case_insensitive_index(
+    integration_engine: AsyncEngine,
+) -> None:
+    """`/ban @username` looks users up by `lower(username)`; without the
+    expression index every lookup scans the whole table."""
+    async with integration_engine.connect() as connection:
+        definition = (
+            await connection.execute(
+                text(
+                    "SELECT indexdef FROM pg_indexes WHERE tablename = 'users'"
+                    " AND indexname = 'ix_users_lower_username'"
+                )
+            )
+        ).scalar_one()
+
+    assert definition.endswith("(lower(username))")
