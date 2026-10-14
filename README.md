@@ -182,7 +182,8 @@ Streams, in two more services of the same image:
   writes every 30 seconds.
 
 The queue lives in its own Redis database, `REDIS_TASKS_DATABASE` (default
-`1`), which must differ from `REDIS_DATABASE` and `REDIS_FSM_DATABASE`.
+`1`), which must differ from `REDIS_DATABASE` and `REDIS_FSM_DATABASE`; the
+configuration refuses two roles on one database at startup.
 `make run` and `make run-dev` start both services; `make logs s=worker` and
 `make logs s=scheduler` show their output.
 

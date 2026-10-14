@@ -211,6 +211,33 @@ def test_each_redis_role_has_its_own_database(settings: Config) -> None:
     assert redis.tasks_dsn.endswith(f"/{redis.REDIS_TASKS_DATABASE}")
 
 
+@pytest.mark.parametrize(
+    ("databases", "message"),
+    [
+        (
+            {"REDIS_DATABASE": "1"},
+            "REDIS_DATABASE and REDIS_TASKS_DATABASE must differ, both are 1",
+        ),
+        (
+            {"REDIS_DATABASE": "2"},
+            "REDIS_DATABASE and REDIS_FSM_DATABASE must differ, both are 2",
+        ),
+        (
+            {"REDIS_DATABASE": "0", "REDIS_TASKS_DATABASE": "2"},
+            "REDIS_FSM_DATABASE and REDIS_TASKS_DATABASE must differ, both are 2",
+        ),
+    ],
+)
+def test_redis_roles_on_one_database_are_refused(
+    databases: dict[str, str], message: str
+) -> None:
+    """A cache flush on a shared database would empty the task queue or every
+    user's dialog state with it."""
+    values = {"REDIS_HOST": "redis-host", "REDIS_PORT": 6379, "REDIS_PASSWORD": "x"}
+    with pytest.raises(ValidationError, match=message):
+        RedisConfig(**values, **databases)
+
+
 def test_redis_dsn_escapes_special_characters_in_password() -> None:
     raw_password = "p@ss/word%:x"
     redis_config = RedisConfig(

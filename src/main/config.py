@@ -27,6 +27,24 @@ class RedisConfig(BaseSettings):
 
     model_config = SettingsConfigDict(extra="ignore")
 
+    @model_validator(mode="after")
+    def each_role_has_its_own_database(self) -> Self:
+        # Two roles on one database mix their keys: a cache flush takes the
+        # task queue or the FSM state with it.
+        databases = {
+            "REDIS_DATABASE": self.REDIS_DATABASE,
+            "REDIS_FSM_DATABASE": self.REDIS_FSM_DATABASE,
+            "REDIS_TASKS_DATABASE": self.REDIS_TASKS_DATABASE,
+        }
+        names = list(databases)
+        for index, name in enumerate(names):
+            for other in names[index + 1 :]:
+                if databases[name] == databases[other]:
+                    raise ValueError(
+                        f"{name} and {other} must differ, both are {databases[name]}"
+                    )
+        return self
+
     def _dsn(self, database: str) -> str:
         # quote(safe="") because generated passwords routinely contain @ / % :
         # and every URL parser downstream would silently misread the DSN.
