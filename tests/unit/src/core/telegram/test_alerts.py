@@ -6,6 +6,8 @@ from aiogram.methods import SendMessage
 import pytest
 import redis.exceptions as redis_exc
 
+from src.core.errors.exceptions import CoreException
+from src.core.errors.scrubbed import scrubbed
 from src.core.limiter.limiter import RateLimiter
 from src.core.redis.degradation import RedisDegradationReporter
 from src.core.telegram import alerts as alerts_module
@@ -41,6 +43,21 @@ def _failure() -> RuntimeError:
     try:
         raise RuntimeError("boom <b>")
     except RuntimeError as error:
+        return error
+
+
+def _user_input_failure(text: str) -> ValueError:
+    try:
+        int(text)
+    except ValueError as error:
+        return error
+    raise AssertionError("expected a ValueError")
+
+
+def _expected_failure() -> CoreException:
+    try:
+        raise CoreException("boom <b>")
+    except CoreException as error:
         return error
 
 
@@ -106,8 +123,41 @@ async def test_an_alert_names_the_error_its_origin_user_and_sentry_event() -> No
     assert sent.chat_id == -100500
     for part in ("RuntimeError", "update message", "_failure", "42", "abc123"):
         assert part in sent.text
+    assert "message in the logs and Sentry" in sent.text
+
+
+async def test_an_error_message_that_can_quote_user_input_stays_out() -> None:
+    """`int(message.text)` puts what the user typed into the ValueError; the
+    alert chat is no place for it, the logs and Sentry keep it."""
+    session = FakeTelegramSession()
+    await _alerter(session).alert_error(
+        Alert(_user_input_failure("call me at +7 999 123"), origin="update message")
+    )
+    [sent] = session.sent(SendMessage)
+    assert "ValueError" in sent.text
+    assert "999" not in sent.text
+    assert "message in the logs" in sent.text
+
+
+async def test_a_project_exception_shows_its_message() -> None:
+    """A CoreException that fails a task carries a message the project wrote."""
+    session = FakeTelegramSession()
+    await _alerter(session).alert_error(
+        Alert(_expected_failure(), origin="task test.fail", task_id="task-1")
+    )
+    [sent] = session.sent(SendMessage)
     # The message is HTML: an error message is text, never markup.
-    assert "boom &lt;b&gt;" in sent.text
+    assert "<pre>boom &lt;b&gt;</pre>" in sent.text
+
+
+async def test_a_scrubbed_error_shows_its_summary() -> None:
+    """`reportable` rebuilt the summary from safe fields: it is what tells
+    developers which driver error it was."""
+    session = FakeTelegramSession()
+    error = scrubbed("IntegrityError from the driver (UniqueViolation)", _failure())
+    await _alerter(session).alert_error(Alert(error, origin="update message"))
+    [sent] = session.sent(SendMessage)
+    assert "IntegrityError from the driver (UniqueViolation)" in sent.text
 
 
 async def test_every_recipient_gets_the_alert() -> None:
@@ -178,7 +228,7 @@ async def test_a_long_error_message_is_cut() -> None:
     """Telegram refuses a message over 4096 characters, and the alert with it."""
     session = FakeTelegramSession()
     await _alerter(session).alert_error(
-        Alert(RuntimeError("x" * 10_000), origin="update message")
+        Alert(CoreException("x" * 10_000), origin="update message")
     )
     [sent] = session.sent(SendMessage)
     assert len(sent.text) < 1000

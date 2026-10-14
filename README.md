@@ -239,12 +239,16 @@ otherwise to each of `DEVELOPER_IDS` in private. The bot must be a member of
 the alert chat, and a developer must have opened the bot: an alert Telegram
 refuses is logged and nothing more.
 
-An error alert carries the error type, its message after scrubbing (cut to
-500 characters), where it was raised, what was being handled (`update message`,
-`task <name>`), the user id or task id, and the Sentry event id when Sentry is
-on. It never carries what the user sent or their name. The same failure (type,
-place and origin) is alerted once per `ALERT_COOLDOWN_SECONDS` (300), and a
-task once however often it is redelivered.
+An error alert carries the error type, where it was raised, what was being
+handled (`update message`, `task <name>`), the user id or task id, and the
+Sentry event id when Sentry is on. The error message is shown (cut to 500
+characters) only for a `CoreException`, whose message the project writes, and
+for a driver or validation error, whose message is rebuilt from safe fields;
+any other message can quote what the user sent (`int(message.text)`), so the
+alert says it is in the logs (and in Sentry, when on) instead. It never
+carries what the user sent or their name. The same failure (type, place and
+origin) is alerted once per `ALERT_COOLDOWN_SECONDS` (300), and a task once
+however often it is redelivered.
 
 ## Broadcast
 

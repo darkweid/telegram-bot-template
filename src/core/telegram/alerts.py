@@ -12,6 +12,8 @@ from aiogram.client.session.base import BaseSession
 from aiogram.exceptions import TelegramAPIError
 
 from loggers import get_logger
+from src.core.errors.exceptions import CoreException
+from src.core.errors.scrubbed import ScrubbedError
 from src.core.limiter.limiter import RateLimiter
 
 logger = get_logger(__name__)
@@ -23,6 +25,12 @@ _INSTALLED_PACKAGE_DIRS = frozenset({"site-packages", "dist-packages"})
 
 # The alert is one Telegram message; an error message can be anything long.
 MAX_ERROR_MESSAGE_LENGTH = 500
+
+# The only errors whose message an alert shows: a CoreException's is written by
+# the project, a ScrubbedError's is rebuilt by `reportable` from safe fields.
+# Any other message can quote what the user sent: `int(message.text)` puts the
+# text into its ValueError.
+_SAFE_MESSAGE_TYPES = (CoreException, ScrubbedError)
 
 # How long a task id that failed for good is remembered. A delivery withheld
 # while another worker held the task is reclaimed after the stream's idle
@@ -43,7 +51,8 @@ AlertBot = NewType("AlertBot", Bot)
 @dataclass(frozen=True, slots=True)
 class Alert:
     """One failure, as developers see it. `error` has already been through
-    `reportable`: no driver DETAIL, no rejected input."""
+    `reportable`: no driver DETAIL, no rejected input. Its message reaches the
+    alert only when it is a CoreException or a ScrubbedError."""
 
     error: BaseException
     # "update message", "task outbox.sweep": what was being handled.
@@ -182,9 +191,6 @@ class DeveloperAlerter:
 
 
 def _format(alert: Alert, raised_in: str) -> str:
-    message = str(alert.error)
-    if len(message) > MAX_ERROR_MESSAGE_LENGTH:
-        message = message[:MAX_ERROR_MESSAGE_LENGTH] + "..."
     lines = [
         f"<b>{html.quote(type(alert.error).__name__)}</b>"
         f" in {html.quote(alert.origin)}",
@@ -196,5 +202,13 @@ def _format(alert: Alert, raised_in: str) -> str:
         lines.append(f"task id {html.quote(alert.task_id)}")
     if alert.sentry_event_id is not None:
         lines.append(f"sentry {html.quote(alert.sentry_event_id)}")
-    lines.append(f"<pre>{html.quote(message)}</pre>")
+    if isinstance(alert.error, _SAFE_MESSAGE_TYPES):
+        message = str(alert.error)
+        if len(message) > MAX_ERROR_MESSAGE_LENGTH:
+            message = message[:MAX_ERROR_MESSAGE_LENGTH] + "..."
+        lines.append(f"<pre>{html.quote(message)}</pre>")
+    elif alert.sentry_event_id is not None:
+        lines.append("message in the logs and Sentry")
+    else:
+        lines.append("message in the logs")
     return "\n".join(lines)
