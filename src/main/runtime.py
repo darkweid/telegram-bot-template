@@ -14,6 +14,7 @@ from aiohttp import web
 from dishka import AsyncContainer, Provider
 
 from loggers import get_logger
+from src.core.http.client import close_http_clients
 from src.core.telegram.roles import Roles
 from src.main.commands import set_bot_commands
 from src.main.config import Config, WebServerConfig
@@ -56,7 +57,9 @@ async def bot_runtime(
         )
         yield BotRuntime(config=config, container=container, dp=dp, bot=bot)
     finally:
-        # The bot session, FSM storage, Redis and the engine all close here.
+        # Sessions opened on this loop close before the loop stops; the
+        # container then closes the bot session, FSM storage, Redis and the engine.
+        await close_http_clients()
         await container.close()
 
 

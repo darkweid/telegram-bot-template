@@ -26,6 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from src.core.database.engine import create_engine
 from src.core.database.uow import SQLAlchemyUnitOfWork
+from src.core.http.user_agent import UserAgent, build_user_agent
 from src.core.i18n import LOCALES_DIR, build_i18n
 from src.core.redis.core import create_redis_client
 from src.core.telegram.fsm import create_event_isolation, create_fsm_storage
@@ -39,6 +40,7 @@ from src.main.config import (
     AppConfig,
     BotConfig,
     Config,
+    HttpConfig,
     PostgresConfig,
     RedisConfig,
     WebhookConfig,
@@ -72,6 +74,10 @@ class ConfigProvider(Provider):
     @provide
     def webhook(self, config: Config) -> WebhookConfig:
         return config.webhook
+
+    @provide
+    def http(self, config: Config) -> HttpConfig:
+        return config.http
 
     @provide
     def postgres(self, config: Config) -> PostgresConfig:
@@ -180,6 +186,16 @@ class I18nProvider(Provider):
         return build_i18n(LOCALES_DIR, default_locale=bot_config.DEFAULT_LOCALE)
 
 
+class HttpProvider(Provider):
+    scope = Scope.APP
+
+    @provide
+    def user_agent(self, http: HttpConfig, app: AppConfig) -> UserAgent:
+        return UserAgent(
+            http.HTTP_USER_AGENT or build_user_agent(app.PROJECT_NAME, app.VERSION)
+        )
+
+
 def build_container(config: Config, *providers: Provider) -> AsyncContainer:
     """The bot's container. `providers` override production ones in tests."""
     return make_async_container(
@@ -188,6 +204,7 @@ def build_container(config: Config, *providers: Provider) -> AsyncContainer:
         RedisProvider(),
         TelegramProvider(),
         I18nProvider(),
+        HttpProvider(),
         UserProvider(),
         SystemProvider(),
         AiogramProvider(),

@@ -9,6 +9,7 @@ from sqlalchemy.engine import make_url
 from src.main.config import (
     BotConfig,
     Config,
+    HttpConfig,
     PostgresConfig,
     RedisConfig,
     WebhookConfig,
@@ -381,3 +382,12 @@ def test_role_ids_reject_a_group_id_passed_as_a_collection() -> None:
     in through a code path other than the environment."""
     with pytest.raises(ValidationError):
         _bot(ADMIN_IDS=frozenset({-100123}))
+
+
+@pytest.mark.parametrize(
+    "value", ["bot/1\r\nX-Evil: 1", "bot/1\x00", "бот/1", "x" * 257]
+)
+def test_a_user_agent_that_could_split_a_request_is_refused(value: str) -> None:
+    """A control character in a header is a request-splitting vector."""
+    with pytest.raises(ValidationError):
+        HttpConfig(HTTP_USER_AGENT=value)

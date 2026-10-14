@@ -14,6 +14,7 @@ from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
 from src.core.database.uow import SQLAlchemyUnitOfWork
+from src.core.http.user_agent import UserAgent
 from src.core.telegram.session import ForbiddenMiddleware, RetryAfterMiddleware
 from src.main.config import BotConfig, Config
 from src.main.di import build_container
@@ -229,5 +230,23 @@ async def test_health_service_resolves_per_request_on_the_app_clients(
             assert await second.get(HealthService) is not service
         with pytest.raises(NoFactoryError):
             await container.get(HealthService)
+    finally:
+        await container.close()
+
+
+@pytest.mark.parametrize(
+    ("configured", "expected"), [("", "telegram-bot-test/0.0.0"), ("bot/2", "bot/2")]
+)
+async def test_the_user_agent_falls_back_to_the_project(
+    settings: Config, i18n: I18n, configured: str, expected: str
+) -> None:
+    config = settings.model_copy(
+        update={
+            "http": settings.http.model_copy(update={"HTTP_USER_AGENT": configured})
+        }
+    )
+    container = build_test_container(config, FakeTelegramSession(), i18n)
+    try:
+        assert await container.get(UserAgent) == expected
     finally:
         await container.close()

@@ -241,6 +241,23 @@ class WebhookConfig(BaseSettings):
         return self.WEBHOOK_BASE_URL.rstrip("/") + self.WEBHOOK_PATH
 
 
+class HttpConfig(BaseSettings):
+    # Sent on every outgoing request (src/core/http). Blank derives
+    # "<project-name>/<VERSION>" from PROJECT_NAME and VERSION. Many APIs
+    # behind a WAF refuse the library's default agent outright.
+    HTTP_USER_AGENT: str = Field("", max_length=256)
+
+    model_config = SettingsConfigDict(extra="ignore")
+
+    @field_validator("HTTP_USER_AGENT")
+    @classmethod
+    def reject_unprintable(cls, value: str) -> str:
+        # A control character in a header is a request-splitting vector.
+        if any(not " " <= character <= "~" for character in value):
+            raise ValueError("HTTP_USER_AGENT must be printable ASCII")
+        return value.strip()
+
+
 class Config(BaseModel):
     app: AppConfig
     bot: BotConfig
@@ -249,6 +266,7 @@ class Config(BaseModel):
     postgres: PostgresConfig
     redis: RedisConfig
     sentry: SentryConfig
+    http: HttpConfig
 
     model_config = ConfigDict(extra="ignore")
 
@@ -294,4 +312,5 @@ def get_settings() -> Config:
         postgres=PostgresConfig(_env_file=env_file),
         redis=RedisConfig(_env_file=env_file),
         sentry=SentryConfig(_env_file=env_file),
+        http=HttpConfig(_env_file=env_file),
     )
