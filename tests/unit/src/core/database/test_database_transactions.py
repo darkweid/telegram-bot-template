@@ -84,7 +84,7 @@ async def test_try_advisory_xact_lock_returns_false_on_failure() -> None:
 async def test_set_local_statement_timeout_rejects_invalid_values(
     seconds: float,
 ) -> None:
-    """Zero means "no limit" to PostgreSQL, the opposite of what the caller asked for."""
+    """Zero means "no limit" to PostgreSQL, the opposite of what the caller wants."""
     session = FakeAsyncSession(in_transaction=True)
 
     with pytest.raises(ValueError):

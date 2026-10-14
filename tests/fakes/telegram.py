@@ -20,7 +20,7 @@ def bot_user() -> User:
 
 
 def _chat_type(chat_id: int) -> str:
-    """Telegram's id ranges: -100... supergroups and channels, other negatives groups."""
+    """Telegram ids: -100... is a supergroup or channel, any other negative a group."""
     if chat_id < 0:
         return "supergroup" if str(chat_id).startswith("-100") else "group"
     return "private"

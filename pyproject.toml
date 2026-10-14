@@ -9,8 +9,12 @@ select = [
     "I",  # isort (import sorting)
     "B",  # flake8-bugbear
     "ASYNC",  # flake8-async
+    "W505",  # doc-line-too-long: comments and docstrings, which black never rewraps
 ]
 extend-ignore = ["E501"]
+
+[tool.ruff.lint.pycodestyle]
+max-doc-length = 88
 
 [tool.ruff.lint.isort]
 known-first-party = ["loggers", "models", "src", "taskiq_worker"]

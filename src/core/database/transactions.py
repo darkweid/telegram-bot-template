@@ -50,18 +50,19 @@ async def set_local_statement_timeout(session: AsyncSession, seconds: float) -> 
     """
     Cancel any statement that runs longer than `seconds` until the transaction ends.
 
-    The setting is transaction-local (`set_config(..., is_local => true)`, the function
-    form of `SET LOCAL`, which takes no bind parameters): COMMIT or ROLLBACK restores the
-    previous value, so it never outlives the transaction on a pooled connection. Rolling
-    back a savepoint opened before the call restores it too. A cancelled statement fails
-    with SQLSTATE 57014 and aborts the transaction.
+    The setting is transaction-local (`set_config(..., is_local => true)`, the
+    function form of `SET LOCAL`, which takes no bind parameters): COMMIT or
+    ROLLBACK restores the previous value, so it never outlives the transaction on a
+    pooled connection. Rolling back a savepoint opened before the call restores it
+    too. A cancelled statement fails with SQLSTATE 57014 and aborts the transaction.
 
-    `seconds` is rounded up to whole milliseconds and must be positive: PostgreSQL reads
-    0 as "no limit", which is the opposite of what a caller asking for a timeout means.
+    `seconds` is rounded up to whole milliseconds and must be positive: PostgreSQL
+    reads 0 as "no limit", which is the opposite of what a caller asking for a
+    timeout means.
 
-    Raises ValueError for a non-positive, non-finite or too large value, and RuntimeError
-    outside a transaction: the session would autobegin one of its own, and the limit
-    would end whenever that implicit transaction does.
+    Raises ValueError for a non-positive, non-finite or too large value, and
+    RuntimeError outside a transaction: the session would autobegin one of its own,
+    and the limit would end whenever that implicit transaction does.
     """
     if isinstance(seconds, bool) or not math.isfinite(seconds) or seconds <= 0:
         raise ValueError(

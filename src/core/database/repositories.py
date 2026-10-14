@@ -32,7 +32,7 @@ ANY_STATE = object()
 
 
 class BaseRepository(Generic[T]):
-    """Base repository with common SQLAlchemy operations using context-managed sessions."""
+    """Base repository with common SQLAlchemy operations on a caller's session."""
 
     model: type[T]
 

@@ -41,9 +41,12 @@ def init_sentry(config: Config) -> bool:
         integrations=[
             LoggingIntegration(
                 level=logging.INFO,  # breadcrumbs from INFO and up
-                event_level=logging.CRITICAL,  # only CRITICAL+ logs become Sentry events; lower levels require explicit capture
+                # Only CRITICAL logs become Sentry events; lower levels need an
+                # explicit capture.
+                event_level=logging.CRITICAL,
             ),
-            # An exception in a task nobody awaits (a handler spawned with create_task) would otherwise vanish.
+            # An exception in a task nobody awaits (a handler spawned with
+            # create_task) would otherwise vanish.
             AsyncioIntegration(),
         ],
     )
