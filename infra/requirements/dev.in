@@ -1,0 +1,20 @@
+-r base.in
+
+# Development tools
+black
+import-linter
+mypy
+pip-tools
+pre-commit
+pyyaml
+ruff==0.16.10
+watchfiles
+
+# Testing dependencies
+pytest
+pytest-asyncio
+pytest-cov
+pytest-randomly
+
+# Type stubs
+types-PyYAML

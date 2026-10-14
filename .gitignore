@@ -1,0 +1,22 @@
+__pycache__/
+*.py[cod]
+
+.env
+.venv
+venv
+
+# Compiled by `make i18n-compile` and inside the image build
+*.mo
+*.pot
+
+.pytest_cache/
+.mypy_cache/
+.import_linter_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+
+.idea/
+.DS_Store

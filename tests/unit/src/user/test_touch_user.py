@@ -1,0 +1,106 @@
+from datetime import UTC, datetime, timedelta
+from unittest.mock import AsyncMock
+
+import pytest
+
+from src.core.database.uow import SQLAlchemyUnitOfWork
+from src.main.config import Config
+from src.user.models import User
+from src.user.repositories import UpsertedUser, UserRepository
+from src.user.schemas import TelegramProfile, UserProfile
+from src.user.usecases import touch_user as module
+from src.user.usecases.touch_user import TouchUserUseCase
+from tests.fakes.db import FakeAsyncSession
+from tests.helpers.logs import captured_logs
+
+NOW = datetime(2026, 1, 1, 12, tzinfo=UTC)
+PROFILE = TelegramProfile(
+    id=1, first_name="Ann", username="ann", last_name=None, language_code="en"
+)
+
+
+def _model(**overrides: object) -> User:
+    fields: dict[str, object] = {
+        "id": 1,
+        "first_name": "Ann",
+        "username": "ann",
+        "last_name": None,
+        "language_code": "en",
+        "locale": None,
+        "is_reachable": True,
+        "last_seen_at": NOW,
+    }
+    return User(**(fields | overrides))
+
+
+@pytest.fixture(autouse=True)
+def frozen_clock(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(module, "get_utc_now", lambda: NOW)
+
+
+def _use_case(
+    settings: Config, users: AsyncMock
+) -> tuple[TouchUserUseCase, FakeAsyncSession]:
+    session = FakeAsyncSession()
+    uow = SQLAlchemyUnitOfWork(session)
+    return TouchUserUseCase(uow, users, settings.bot), session
+
+
+async def test_a_fresh_user_is_returned_without_a_write(settings: Config) -> None:
+    users = AsyncMock(spec=UserRepository)
+    users.get_single.return_value = _model(last_seen_at=NOW - timedelta(seconds=10))
+    use_case, session = _use_case(settings, users)
+    profile = await use_case.execute(PROFILE)
+    assert profile == UserProfile.from_model(users.get_single.return_value)
+    users.upsert_from_telegram.assert_not_awaited()
+    session.commit.assert_not_awaited()
+
+
+async def test_a_new_user_is_written_and_committed(settings: Config) -> None:
+    users = AsyncMock(spec=UserRepository)
+    users.get_single.return_value = None
+    users.upsert_from_telegram.return_value = UpsertedUser(user=_model(), created=True)
+    use_case, session = _use_case(settings, users)
+    profile = await use_case.execute(PROFILE)
+    assert profile.id == 1
+    users.upsert_from_telegram.assert_awaited_once_with(session, PROFILE, NOW)
+    session.commit.assert_awaited_once()
+
+
+@pytest.mark.parametrize(
+    "stored",
+    [
+        _model(last_seen_at=NOW - timedelta(hours=1)),
+        _model(username="old"),
+        _model(is_reachable=False, last_seen_at=NOW - timedelta(seconds=10)),
+    ],
+    ids=["stale-last-seen", "changed-profile", "unreachable-user-returns"],
+)
+async def test_an_existing_user_that_needs_a_write_is_upserted(
+    settings: Config, stored: User
+) -> None:
+    users = AsyncMock(spec=UserRepository)
+    users.get_single.return_value = stored
+    refreshed = _model(locale="ru")
+    users.upsert_from_telegram.return_value = UpsertedUser(
+        user=refreshed, created=False
+    )
+    use_case, session = _use_case(settings, users)
+    profile = await use_case.execute(PROFILE)
+    users.upsert_from_telegram.assert_awaited_once_with(session, PROFILE, NOW)
+    session.commit.assert_awaited_once()
+    assert profile == UserProfile.from_model(refreshed)
+
+
+@pytest.mark.parametrize("created", [True, False])
+async def test_only_a_new_user_is_logged(settings: Config, created: bool) -> None:
+    users = AsyncMock(spec=UserRepository)
+    users.get_single.return_value = None
+    users.upsert_from_telegram.return_value = UpsertedUser(
+        user=_model(), created=created
+    )
+    use_case, _ = _use_case(settings, users)
+    with captured_logs(module.__name__) as records:
+        await use_case.execute(PROFILE)
+    messages = [record.getMessage() for record in records]
+    assert messages == (["New user 1"] if created else [])

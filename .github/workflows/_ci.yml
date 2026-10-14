@@ -1,0 +1,497 @@
+# Reusable CI. Every environment runs exactly these jobs; the callers
+# (prod_ci.yml, stage_ci.yml) differ only in trigger, image tag and whether an
+# image is pushed at all.
+name: CI
+
+on:
+  workflow_call:
+    inputs:
+      push_image:
+        description: "Build and push the application image (false on pull requests)"
+        type: boolean
+        required: true
+      moving_tag:
+        description: "Moving tag pushed next to the immutable sha-<12> tag: latest for production, stage for staging"
+        type: string
+        required: true
+    # Declared explicitly rather than `secrets: inherit` in the callers: CI runs
+    # third-party actions against every push and pull request, and only needs the
+    # automatic GITHUB_TOKEN plus this one licensing secret.
+    secrets:
+      GITLEAKS_LICENSE:
+        required: false
+
+permissions:
+  contents: read
+  pull-requests: read
+  # The `changes` gate lists this repository's artifacts to find a passing run
+  # of the same tree.
+  actions: read
+
+jobs:
+  # Runs on every event so the workflow always reports. Skipping a workflow
+  # outright with paths-ignore leaves a required status check waiting forever,
+  # while a job skipped through `if:` closes it as passed.
+  changes:
+    name: Changed paths
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      docs_only: ${{ steps.classify.outputs.docs_only }}
+      tree: ${{ steps.verified.outputs.tree }}
+      verified: ${{ steps.verified.outputs.verified }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The action diffs two commits; shallow history cannot reach the base.
+          fetch-depth: 0
+
+      - name: Classify the changed paths
+        id: classify
+        uses: ./.github/actions/docs-only-change
+        with:
+          base: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+          head: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+
+      # A squash merge lands a new commit whose tree is byte-for-byte the tree the
+      # pull request's merge ref was tested on, as long as the base did not move
+      # in between. `record-pass` leaves an artifact named after every tree that
+      # passed, so a push finding one skips the checks and goes straight to the
+      # image build. A different tree - the base moved, or the push did not come
+      # from a tested pull request - finds nothing and runs everything. Only runs
+      # of this repository's own branches count: a fork's pull request runs its
+      # own copy of this file and could record a pass it never earned.
+      - name: Look for a passing run of the same tree
+        id: verified
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tree="$(git rev-parse 'HEAD^{tree}')"
+          echo "tree=${tree}" >> "$GITHUB_OUTPUT"
+          verified=false
+          if [ "${{ github.event_name }}" = "push" ]; then
+            found="$(gh api "repos/${{ github.repository }}/actions/artifacts?name=ci-passed-${tree}&per_page=100" \
+              --jq '[.artifacts[] | select((.expired | not) and .workflow_run.head_repository_id == .workflow_run.repository_id)] | length')"
+            if [ "${found}" -gt 0 ]; then
+              verified=true
+              echo "::notice::Tree ${tree} already passed CI; checks are skipped."
+            fi
+          fi
+          echo "verified=${verified}" >> "$GITHUB_OUTPUT"
+  # Not gated on docs_only, like gitleaks: `make lint` runs pre-commit over every
+  # file, and end-of-file-fixer, trailing-whitespace and check-yaml all apply to
+  # markdown. Skipping it here would let a documentation PR merge a violation
+  # that then fails the next code PR, on a commit that did not cause it.
+  lint:
+    name: Lint
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.verified != 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Python
+        id: setup-python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.13'
+          cache: 'pip'
+          cache-dependency-path: |
+            infra/requirements/base.txt
+            infra/requirements/dev.txt
+            infra/requirements/prod.txt
+
+      - name: Cache venv
+        id: cache-venv
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .venv
+          key: venv-${{ runner.os }}-py${{ steps.setup-python.outputs.python-version }}-${{ hashFiles('infra/requirements/dev.txt') }}
+
+      - name: Create venv and install deps
+        if: steps.cache-venv.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          python -m venv .venv
+          ./.venv/bin/python -m pip install --upgrade pip
+          ./.venv/bin/pip install -r infra/requirements/dev.txt
+
+      # .env.example ships a placeholder token the settings validator rejects on
+      # purpose; any well-formed one lets the settings load.
+      - name: Create .env file from .env.example
+        run: |
+          cp .env.example .env
+          sed -i 's/^BOT_TOKEN=.*/BOT_TOKEN=123456789:AAci-placeholder-token-0000000000000/' .env
+
+      - name: Cache pre-commit
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/pre-commit
+          key: pre-commit-${{ runner.os }}-${{ hashFiles('.pre-commit-config.yaml') }}
+          restore-keys: pre-commit-${{ runner.os }}-
+
+      - name: Run linter
+        shell: bash
+        run: |
+          export PATH="$PWD/.venv/bin:$PATH"
+          make lint
+
+  migration-heads:
+    name: Migration HEADs
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.docs_only != 'true' && needs.changes.outputs.verified != 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Python
+        id: setup-python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.13'
+          cache: 'pip'
+          cache-dependency-path: |
+            infra/requirements/base.txt
+            infra/requirements/prod.txt
+
+      - name: Cache venv
+        id: cache-venv
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .venv
+          key: venv-${{ runner.os }}-py${{ steps.setup-python.outputs.python-version }}-${{ hashFiles('infra/requirements/prod.txt') }}
+
+      - name: Create venv and install deps
+        if: steps.cache-venv.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          python -m venv .venv
+          ./.venv/bin/python -m pip install --upgrade pip
+          ./.venv/bin/pip install -r infra/requirements/prod.txt
+
+      # .env.example ships a placeholder token the settings validator rejects on
+      # purpose; any well-formed one lets the settings load.
+      - name: Create .env file from .env.example
+        run: |
+          cp .env.example .env
+          sed -i 's/^BOT_TOKEN=.*/BOT_TOKEN=123456789:AAci-placeholder-token-0000000000000/' .env
+
+      - name: Check migration HEADs
+        shell: bash
+        run: |
+          PYTHONPATH=$(pwd)
+          export PYTHONPATH
+          echo "--- Alembic heads ---"
+          ./.venv/bin/alembic heads
+          HEADS_COUNT=$(.venv/bin/alembic heads | wc -l)
+          if [ "$HEADS_COUNT" -gt 1 ]; then
+            echo "ERROR: Multiple Alembic heads detected ($HEADS_COUNT)."
+            exit 1
+          else
+            echo "OK: Only one Alembic head found."
+          fi
+
+  unit-tests:
+    name: Unit tests
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.docs_only != 'true' && needs.changes.outputs.verified != 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Python
+        id: setup-python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.13'
+          cache: 'pip'
+          cache-dependency-path: |
+            infra/requirements/base.txt
+            infra/requirements/dev.txt
+            infra/requirements/prod.txt
+
+      - name: Cache venv
+        id: cache-venv
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .venv
+          key: venv-${{ runner.os }}-py${{ steps.setup-python.outputs.python-version }}-${{ hashFiles('infra/requirements/dev.txt') }}
+
+      - name: Create venv and install deps
+        if: steps.cache-venv.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          python -m venv .venv
+          ./.venv/bin/python -m pip install --upgrade pip
+          ./.venv/bin/pip install -r infra/requirements/dev.txt
+
+      - name: Run unit tests with coverage
+        shell: bash
+        run: |
+          export PATH="$PWD/.venv/bin:$PATH"
+          make test-cov
+
+  integration-tests:
+    name: Integration tests
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.docs_only != 'true' && needs.changes.outputs.verified != 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    # Credentials, database name and port all mirror .env.test, which `TESTING=true`
+    # loads and the suite reads its DSN from - a value changed in one place has to change
+    # in the other. Redis likewise: no password, as .env.test has it. Locally the same
+    # suite runs against the throwaway containers `make test-integration` starts
+    # (infra/docker-compose.test.yml); here service containers are simpler, because
+    # GitHub already health-gates them before the steps run.
+    # Stock image, not infra/postgres/Dockerfile: the custom config it bakes in is not
+    # what the suite tests. Keep the tag in step with that Dockerfile's base image.
+    services:
+      postgres:
+        image: postgres:18-bookworm
+        env:
+          POSTGRES_USER: test
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: test_db
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U test -d test_db"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+      # The deployed Redis image (tests/unit/test_redis_image_pins.py), no password,
+      # as in infra/docker-compose.test.yml.
+      redis:
+        image: 'redis:8.10'
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Python
+        id: setup-python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.13'
+          cache: 'pip'
+          cache-dependency-path: |
+            infra/requirements/base.txt
+            infra/requirements/dev.txt
+            infra/requirements/prod.txt
+
+      - name: Cache venv
+        id: cache-venv
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .venv
+          key: venv-${{ runner.os }}-py${{ steps.setup-python.outputs.python-version }}-${{ hashFiles('infra/requirements/dev.txt') }}
+
+      - name: Create venv and install deps
+        if: steps.cache-venv.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          python -m venv .venv
+          ./.venv/bin/python -m pip install --upgrade pip
+          ./.venv/bin/pip install -r infra/requirements/dev.txt
+
+      # Migrations are not applied in a step of their own: the `migrated_database`
+      # fixture does it, and that is the path developers run locally.
+      - name: Run integration tests
+        shell: bash
+        env:
+          TESTING: 'true'
+          POSTGRES_HOST: 127.0.0.1
+          POSTGRES_PORT: '5432'
+          REDIS_HOST: 127.0.0.1
+          REDIS_PORT: '6379'
+        run: |
+          export PATH="$PWD/.venv/bin:$PATH"
+          pytest tests/integration -m integration -v
+
+  bandit:
+    name: Bandit
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.docs_only != 'true' && needs.changes.outputs.verified != 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.13'
+          cache: 'pip'
+          cache-dependency-path: infra/requirements/security.txt
+
+      - name: Install Bandit
+        shell: bash
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r infra/requirements/security.txt
+
+      - name: Run Bandit
+        shell: bash
+        run: bandit -r src scripts migrations -q
+
+  pip-audit:
+    name: pip-audit
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.docs_only != 'true' && needs.changes.outputs.verified != 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.13'
+          cache: 'pip'
+          cache-dependency-path: |
+            infra/requirements/base.txt
+            infra/requirements/dev.txt
+            infra/requirements/prod.txt
+            infra/requirements/security.txt
+
+      - name: Install pip-audit
+        shell: bash
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r infra/requirements/security.txt
+
+      - name: Audit pinned dependencies
+        shell: bash
+        run: |
+          pip-audit \
+            -r infra/requirements/base.txt \
+            -r infra/requirements/dev.txt \
+            -r infra/requirements/prod.txt
+
+  # Never skipped by the tree gate: it scans commits, not the tree - the pushed
+  # range on a push, the pull request's commits on a pull request - and a push
+  # that adds a secret and removes it again can end on a tree that already
+  # passed while the secret stays reachable in its commits.
+  gitleaks:
+    name: Gitleaks
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Run Gitleaks
+        uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3.0.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # gitleaks-action requires a license for repositories owned by an
+          # organization; without it the action exits before scanning.
+          GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}
+
+  # The artifact's name is the whole record: `changes` only asks whether one
+  # with this tree exists, and a hit skips every check. So every check has to
+  # have run and passed: a documentation-only change skips them, and recording
+  # its tree would let a later push of that same tree - arriving as code, say
+  # a branch fast-forwarded past it - skip checks that never ran on it. One
+  # failure or cancellation and nothing is recorded either.
+  record-pass:
+    name: Record passing tree
+    needs: [changes, lint, migration-heads, unit-tests, integration-tests, bandit, pip-audit, gitleaks]
+    if: ${{ !cancelled() && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') && needs.changes.outputs.verified != 'true' && needs.changes.outputs.docs_only != 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Write the tree id
+        shell: bash
+        run: echo "${{ needs.changes.outputs.tree }}" > "${RUNNER_TEMP}/tree.txt"
+
+      - name: Upload the pass marker
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ci-passed-${{ needs.changes.outputs.tree }}
+          path: ${{ runner.temp }}/tree.txt
+          retention-days: 30
+
+  # Builds the image once, here, so a broken Dockerfile fails in CI instead of
+  # on the box later. The immutable sha-<12> tag is what to pin BOT_IMAGE to.
+  # `latest` only ever moves on the production caller - a staging build must not
+  # become the tag a human reaches for when they mean production.
+  build-and-push:
+    name: Build & push image
+    needs: [changes, lint, migration-heads, unit-tests, integration-tests, bandit, pip-audit, gitleaks]
+    # Branch and event filtering happens in the caller; here the decision arrives
+    # as a single input so stage and prod share one implementation.
+    # Checks skipped by a gate count as passed; the explicit status test is what
+    # lets this job run when they were skipped rather than failed.
+    if: ${{ !cancelled() && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') && needs.changes.outputs.docs_only != 'true' && inputs.push_image }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Compute image and tag
+        id: meta
+        run: |
+          image_lower="$(echo "ghcr.io/${{ github.repository }}" | tr '[:upper:]' '[:lower:]')"
+          short_sha="$(echo "${{ github.sha }}" | cut -c1-12)"
+          echo "image=${image_lower}" >> "$GITHUB_OUTPUT"
+          echo "tag=sha-${short_sha}" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Log in to GHCR
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: infra/docker/Dockerfile
+          push: true
+          platforms: linux/amd64
+          tags: |
+            ${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.tag }}
+            ${{ steps.meta.outputs.image }}:${{ inputs.moving_tag }}
+          # Records which commit an image tag was built from.
+          labels: |
+            org.opencontainers.image.revision=${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

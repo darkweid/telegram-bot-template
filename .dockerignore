@@ -1,0 +1,22 @@
+# Deny by default: the build context is exactly what the images copy, so a new
+# top-level file or directory never reaches a layer unless it is listed here.
+*
+
+!src/
+!loggers/
+!models/
+!migrations/
+!locales/
+!alembic.ini
+# The builder stages install from the lockfiles.
+!infra/requirements/base.txt
+!infra/requirements/prod.txt
+!infra/requirements/dev.txt
+# The Postgres image copies its server settings.
+!infra/postgres/postgresql.conf
+
+# Compiled catalogs come from the image's own build stage, never from a
+# developer's tree.
+**/*.mo
+**/__pycache__
+**/*.py[cod]

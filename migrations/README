@@ -1,0 +1,1 @@
+Create a revision with `make migration m="..."`, apply with `make migrate`.

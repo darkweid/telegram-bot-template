@@ -1,0 +1,14 @@
+aiogram>=3.31
+aiohttp>=3.14.3  # security: CVE-2026-34993/47265/50269/54273-54280, PYSEC-2026-237
+alembic
+alembic-postgresql-enum
+asyncpg
+babel
+dishka>=1.10
+mako>=1.4.1
+pydantic
+pydantic-settings
+redis
+sentry-sdk
+sqlalchemy[asyncio]
+uuid6
