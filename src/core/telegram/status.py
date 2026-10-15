@@ -53,7 +53,10 @@ class ProcessingStatus:
         self._wanted: str | None = None
         self._changed = asyncio.Event()
         self._ticker: asyncio.Task[None] | None = None
-        self._finished = False
+        # Apart: a finish Telegram refused or a cancel cut still owes the
+        # user a text, but may not be called again.
+        self._closed = False
+        self._answered = False
 
     @classmethod
     async def send(
@@ -77,12 +80,14 @@ class ProcessingStatus:
     ) -> None:
         """Edit the status into the answer, with flood control retries; a
         status the user deleted gets the answer as a new message. A second
-        finish raises RuntimeError."""
-        if self._finished:
+        finish raises RuntimeError. When the edit fails or is cancelled the
+        block's exit shows the error or "interrupted" instead."""
+        if self._closed:
             raise RuntimeError("the status is already finished")
-        self._finished = True
+        self._closed = True
         await self._stop_ticker()
         await self._show(text, reply_markup)
+        self._answered = True
 
     async def __aenter__(self) -> Self:
         self._ticker = asyncio.create_task(self._tick())
@@ -95,9 +100,9 @@ class ProcessingStatus:
         tb: TracebackType | None,
     ) -> bool:
         await self._stop_ticker()
-        if self._finished:
+        self._closed = True
+        if self._answered:
             return False
-        self._finished = True
         if isinstance(exc, asyncio.CancelledError):
             # Without flood retries and under a bound: a stopping bot waits.
             with suppress(TelegramAPIError, TimeoutError), without_flood_retry():

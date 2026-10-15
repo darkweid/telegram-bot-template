@@ -207,6 +207,59 @@ async def test_finish_sends_a_new_message_when_the_status_is_gone(
     assert [m.text for m in session.sent(SendMessage)] == ["⏳ Working on it…", "Done."]
 
 
+async def test_a_finish_telegram_refuses_leaves_the_generic_text(
+    i18n: I18n,
+) -> None:
+    """An answer Telegram refuses (too long, broken HTML) must not leave the
+    user watching the status forever."""
+    session = FakeTelegramSession()
+    status = await _send(session, i18n)
+    session.queue(
+        EditMessageText,
+        TelegramBadRequest(
+            EditMessageText(chat_id=CHAT_ID, message_id=1, text="x"),
+            "Bad Request: message is too long",
+        ),
+    )
+    with pytest.raises(TelegramBadRequest):
+        async with status:
+            await status.finish("A very long answer.")
+    assert _edits(session) == ["A very long answer.", GENERIC]
+
+
+async def test_a_cancel_during_the_finish_flood_wait_leaves_interrupted(
+    i18n: I18n,
+) -> None:
+    """A stopping bot cancels a finish that sleeps out flood control; the
+    answer never went out, so the user must not keep the status."""
+    session = FakeTelegramSession()
+    sleeping = asyncio.Event()
+
+    async def sleep(seconds: float) -> None:
+        sleeping.set()
+        await asyncio.Event().wait()
+
+    session.middleware(RetryAfterMiddleware(3, sleep=sleep))
+    with i18n.context():
+        status = await ProcessingStatus.send(make_bot(session), CHAT_ID, i18n=i18n)
+    session.queue(
+        EditMessageText,
+        _flood(EditMessageText(chat_id=CHAT_ID, message_id=1, text="x")),
+    )
+
+    async def work() -> None:
+        async with status:
+            await status.finish("Done.")
+
+    task = asyncio.create_task(work())
+    async with asyncio.timeout(2):
+        await sleeping.wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert _edits(session) == ["Done.", "Interrupted. Please try again."]
+
+
 async def test_a_core_exception_becomes_its_translated_text_with_params_escaped(
     i18n: I18n,
 ) -> None:

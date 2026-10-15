@@ -279,7 +279,9 @@ control and sends the answer as a new message when the user deleted the
 status. Leaving the block with an exception edits the status into the text
 the error handler would have sent; a cancel edits it into "Interrupted.
 Please try again."; leaving without `finish` is a bug and raises
-`RuntimeError`. Texts are HTML: put user values through `html.quote`.
+`RuntimeError`. A `finish` whose edit Telegram refused (an answer too long,
+broken HTML) or a cancel cut (during a flood wait) counts as no answer: the
+block's exit shows the error or "Interrupted" in its place. Texts are HTML: put user values through `html.quote`.
 
 Calls whose result is about to be replaced anyway (the typing action, a
 progress edit) run under `without_flood_retry()`
