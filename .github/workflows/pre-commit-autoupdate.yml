@@ -51,7 +51,7 @@ jobs:
       # A pull request opened with the workflow token starts no workflows, so CI
       # would never run on it. PRECOMMIT_BOT_TOKEN (a fine-grained token with
       # contents and pull-requests write on this repository) makes CI run; without
-      # it the pull request still opens and CI starts on the next push to it.
+      # it the pull request still opens and CI starts on a person's next push to it.
       - name: Create or update pull request
         id: create_pr
         uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8.1.1

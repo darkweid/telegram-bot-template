@@ -2,7 +2,7 @@ name: Release
 
 # Tagging vX.Y.Z publishes a versioned image next to the sha-<12> and latest tags
 # CI pushes, and opens a GitHub Release with generated notes. Nothing deploys
-# from here: CD still follows main.
+# from here: CD follows the branches.
 on:
   push:
     tags:
@@ -28,12 +28,14 @@ jobs:
 
       - name: Compute image and tags
         id: meta
+        env:
+          VERSION: ${{ github.ref_name }}
         run: |
           image_lower="$(echo "ghcr.io/${{ github.repository }}" | tr '[:upper:]' '[:lower:]')"
           short_sha="$(echo "${{ github.sha }}" | cut -c1-12)"
           {
             echo "image=${image_lower}"
-            echo "version=${{ github.ref_name }}"
+            echo "version=${VERSION}"
             echo "sha_tag=sha-${short_sha}"
           } >> "$GITHUB_OUTPUT"
 
@@ -56,7 +58,7 @@ jobs:
           SHA_TAG: ${{ steps.meta.outputs.sha_tag }}
         run: |
           if ! docker buildx imagetools inspect "${IMAGE}:${SHA_TAG}" >/dev/null 2>&1; then
-            echo "::error::No ${IMAGE}:${SHA_TAG} image: the tagged commit never passed CI on main. Tag a commit CI built."
+            echo "::error::No ${IMAGE}:${SHA_TAG} image: the tagged commit was never built and pushed by CI (main or stage). Tag a commit CI built."
             exit 1
           fi
 

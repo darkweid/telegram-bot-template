@@ -3,6 +3,7 @@ from pathlib import Path
 import pytest
 
 from scripts.ops.sync_precommit_deps import (
+    main,
     parse_requirements_versions,
     sync_hook_rev,
     sync_mypy_additional_dependencies,
@@ -112,3 +113,28 @@ def test_additional_dependencies_are_pinned_from_requirements() -> None:
 
     assert "- pydantic==2.13.4" in updated
     assert "- sqlalchemy==2.0.52" in updated
+
+
+def test_the_repository_hooks_match_the_lockfiles(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A dependency bump that skips the sync leaves mypy in pre-commit checking
+    against other package versions than the code runs on, and nothing else
+    would notice."""
+    root = Path(__file__).resolve().parents[4]
+    files = (
+        ".pre-commit-config.yaml",
+        "infra/requirements/dev.txt",
+        "infra/requirements/security.txt",
+    )
+    for name in files:
+        target = tmp_path / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text((root / name).read_text(encoding="utf-8"), encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+
+    main()
+
+    assert (tmp_path / files[0]).read_text(encoding="utf-8") == (
+        root / files[0]
+    ).read_text(encoding="utf-8")
