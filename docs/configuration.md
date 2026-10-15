@@ -143,7 +143,7 @@ a queued task. The three indexes must differ, compared as numbers (`01` is
 
 | Key | Default | What it does |
 |---|---|---|
-| `HTTP_USER_AGENT` | empty | User-Agent of requests to third-party APIs, printable ASCII up to 256 characters. Empty sends `<project-name>/<VERSION>` built from `PROJECT_NAME`; some APIs refuse a request without a recognisable agent. |
+| `HTTP_USER_AGENT` | empty | User-Agent of requests to third-party APIs, printable ASCII up to 256 characters. Empty sends `<project-name>/<VERSION>` built from `PROJECT_NAME`; some APIs refuse a request without a recognizable agent. |
 
 ## LLM
 
@@ -245,9 +245,9 @@ small server has, and a container past its memory cap is killed by the kernel.
 `/status` and `/test_alert`. It is a build argument, never a line in `.env`:
 `env_file` would put it into every container over the image's own value.
 An image built through `make` gets `git rev-parse --short=12 HEAD` (a value
-from the shell or the command line wins), CI passes the same 12 characters it puts
-in the image's `sha-` tag, and an image built without it reports `unknown`, as
-the dev stack does.
+from the shell or the command line wins), CI passes the same 12 characters it
+puts in the image's `sha-` tag, and an image built without it reports
+`unknown`, as the dev stack does.
 
 ## Checking .env before a deploy
 
@@ -273,6 +273,6 @@ crash-loops. Errors (exit 1):
   is off (Sentry, S3 and email keys while their switch is off, the key of a
   provider no `LLM_PROVIDER` names).
 
-A key the template does not read is a warning: a misspelt key leaves the
+A key the template does not read is a warning: a misspelled key leaves the
 default in place. Every message names the key and never the value, since the
 output lands in CI logs.

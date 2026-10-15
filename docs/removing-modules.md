@@ -8,9 +8,6 @@ nothing that names it is left behind. Removing a module is the reverse of
 [adding one](architecture.md#adding-a-module): the same registration points,
 undone.
 
-Both recipes below were carried out on a copy of the template, step by step,
-until `make lint`, `make test` and `make test-integration` passed.
-
 ## Before you start
 
 A module's table came from a migration. What to do with that migration depends
@@ -207,7 +204,7 @@ Then run `make lint`, `make test` and `make test-integration`.
 ## Removing another domain module
 
 Every domain registers itself in the same places, so the two recipes above
-generalise. Search the tree for the package name (`git grep -n -i <module>`)
+generalize. Search the tree for the package name (`git grep -n -i <module>`)
 and work through:
 
 - the package, `tests/unit/src/<module>` and `tests/integration/src/<module>`;
@@ -250,4 +247,4 @@ Their packages stay in the image while they are off: `anthropic`, `openai`,
 features are not domain modules and the recipes above do not cover them: the
 LLM layer, for one, also owns the `llm_usage` table, its purge task and the
 spending block of `/stats`. Leaving a feature switched off costs image size,
-not behaviour.
+not behavior.

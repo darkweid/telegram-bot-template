@@ -52,7 +52,7 @@ make migration m="add notes table"
 ```
 
 The target runs in the dev image as your user, so the revision file belongs
-to you: it starts Postgres, migrates it to head, and autogenerates a revision
+to you: it starts PostgreSQL, migrates it to head, and autogenerates a revision
 from the difference between the models and the database. Read the revision
 before committing it. Autogenerate misses renames (it sees a drop and an
 add) and some type and server-default changes.
@@ -122,6 +122,6 @@ Updates arrive as pull requests:
   [reporting a vulnerability](../SECURITY.md#reporting-a-vulnerability).
 - **A change to a setting** updates its section in `src/main/config.py`,
   `.env.example` and [the configuration reference](configuration.md) in the
-  same commit, and to `KNOWN_KEYS` in `scripts/ops/check_env.py`, which
-  reports a key it does not know; `check-docs` fails while the reference
-  misses one.
+  same commit, and adds the key to `KNOWN_KEYS` in
+  `scripts/ops/check_env.py`, which reports a key it does not know;
+  `check-docs` fails while the reference misses one.

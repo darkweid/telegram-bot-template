@@ -8,8 +8,8 @@
 A template for Telegram bots on aiogram 3. One codebase runs in polling or
 webhook mode, chosen by a single setting. PostgreSQL stores the users and Redis
 keeps the dialog (FSM) state. Dependencies are wired with dishka, from the
-database session down to the use case a handler calls. English and Russian work
-out of the box, and adding a language is a catalog and three lines of code.
+database session down to the use case a handler calls. English and Russian ship
+with the template, and adding a language is a catalog and three lines of code.
 Unit tests run against a fake Bot API, integration tests against a real
 PostgreSQL and Redis, and GitHub Actions runs both on pull requests. Ansible
 prepares a fresh Ubuntu server, and CD deploys every push that passes CI once
@@ -110,8 +110,8 @@ from [@BotFather](https://t.me/BotFather).
 
 ```bash
 # "Use this template" on GitHub, then:
-git clone https://github.com/<you>/<your-bot>.git && cd <your-bot>
-make init-project NAME=your-bot      # renames the project, writes .env with generated secrets
+git clone https://github.com/<you>/my-bot.git && cd my-bot
+make init-project NAME=my-bot        # renames the project, writes .env with generated secrets
 python3.13 -m venv .venv && source .venv/bin/activate
 pip install -r infra/requirements/dev.txt
 # put the token from @BotFather into BOT_TOKEN in .env
@@ -128,8 +128,10 @@ make logs s=bot
 - it sets `PROJECT_NAME` in `.env.example` and writes `.env` from it with
   freshly generated `POSTGRES_PASSWORD`, `REDIS_PASSWORD` and
   `WEBHOOK_SECRET`; in an existing `.env` a secret is generated only where
-  the value is empty or still a placeholder;
-- `LOCALE=ru` (any supported locale) sets `DEFAULT_LOCALE` in both files;
+  the value is empty or still a placeholder, while `PROJECT_NAME` is set to
+  `NAME` there too, since the rename is the point of the run;
+- `LOCALE=ru` (any supported locale) sets `DEFAULT_LOCALE` in both files, an
+  existing `.env` included;
 - it replaces this README with a short one for the bot, removes its own make
   target, and deletes itself and its test.
 

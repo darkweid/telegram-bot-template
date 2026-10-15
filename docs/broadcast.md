@@ -29,9 +29,9 @@ one or as a single message instead.
 
 The progress message carries a Stop button and the counters: sent,
 unreachable, failed, and how many recipients were processed out of the total.
-When the broadcast ends, the progress message turns
-into the final report ("finished", "stopped" or "failed"), and the bot sends
-the report again as a new message, which notifies the admin.
+When the broadcast ends, the progress message turns into the final report
+("finished", "stopped" or "failed"), and the bot sends the report again as a
+new message, which notifies the admin.
 
 Only one broadcast exists at a time. `StartBroadcastUseCase` takes an advisory
 lock and checks for an active broadcast in the same transaction, so two admins
@@ -112,7 +112,7 @@ A larger `BROADCAST_CHECKPOINT_EVERY` means fewer writes, but more duplicate
 copies after a worker restart and a slower Stop.
 
 Flood control still happens: other traffic of the bot shares the same limit.
-The session middleware retries a `RetryAfter` within its budget (see
+The session middleware retries a `TelegramRetryAfter` within its budget (see
 [the middleware chain](bot-layer.md#middleware-chain)); a longer wait is sat
 out by the run itself, which keeps checkpointing during the wait, so the lease
 stays alive and a Stop still lands. With 25 copies a second, 10,000 users take

@@ -26,7 +26,7 @@ a test never depends on the values of your local bot.
 - `filterwarnings = error`: a warning fails the test that raised it.
 
 `pytest-randomly` (in `infra/requirements/dev.in`) shuffles the order on
-every run. A test that fails on some seed leaks state into its neighbours:
+every run. A test that fails on some seed leaks state into its neighbors:
 fix the leak, never pin the order.
 
 Tests never depend on the calendar or the shell. No absolute dates and no
@@ -38,7 +38,7 @@ itself.
 
 `tests/unit` mirrors the source tree: the tests of `src/user/handlers.py` live
 in `tests/unit/src/user/test_handlers.py`. A test docstring says why the
-behaviour matters, not what the test does.
+behavior matters, not what the test does.
 
 ## Handler tests
 
@@ -64,8 +64,8 @@ prompt, saved = running.session.sent(SendMessage)
   of one method; `session.queue(Method, result)` sets the next answer,
   an exception included; `await session.wait_for(Method, count)` waits for a
   call made in the background and fails after 2 seconds. A method that
-  returns neither a bool nor a message must be queued, so a test never passes
-  on an answer it did not ask for.
+  returns neither a bool, a message nor a `MessageId` must be queued, so a
+  test never passes on an answer it did not ask for.
 - **Alerts** leave through a bot of their own. Pass `alert_session=` a second
   `FakeTelegramSession` and assert on it, never on `running.session`.
 - **Overrides.** `running_bot` always adds `TestOverrides`
@@ -118,7 +118,7 @@ touches the dev stack.
 | `ScriptedLLMServer` | `tests/helpers/llm_server.py` | The provider's HTTP API, as an `httpx2` mock transport for the adapter tests (`tests/unit/src/core/llm/test_anthropic.py`, `test_openrouter.py`). |
 | `InMemoryS3Client` | `tests/fakes/s3.py` | The `S3Client` protocol over in-memory buckets. |
 | `FakeMailer` | `tests/fakes/email.py` | The SMTP mailer; records every send, or raises the `error` you set. |
-| `FakeHttpClient` | `tests/fakes/http.py` | `HttpClient` for an integration's tests; records requests and answers from a queue, repeating the last. |
+| `FakeHttpClient` | `tests/fakes/http.py` | `HttpRequester`, the protocol `HttpClient` implements, for an integration's tests (type the dependency as `HttpRequester`); records requests and answers from a queue, repeating the last. |
 | `FakeAsyncSession` | `tests/fakes/db.py` | An `AsyncSession` for use cases whose repositories are mocks. |
 | `full_redis` | `tests/helpers/redis.py` | Turns the throwaway Redis full under `noeviction`, for out-of-memory paths. |
 | `with_llm` | `tests/helpers/llm.py` | `settings` with an LLM section built from keyword values alone. |
@@ -142,8 +142,13 @@ on catalogs compiled from the working tree.
 Uploading the report to Coveralls is off until the repository variable
 `COVERALLS_ENABLED` is `true`; a public repository needs no token, the
 workflow token is enough. With it on, every push gets a Coveralls build,
-including a squash merge whose tests CI skips because the same tree already
-passed: the report of that tree is carried over. A report that cannot be
-carried (expired, or an API error) leaves the commit without a Coveralls
-build and fails nothing. When there is no report to carry, the unit tests run
-again on that push, and a failure there fails CI like any other failed test.
+including a push whose tests CI skips because the tree already passed or the
+change touches documentation only.
+
+A push that skips the unit tests carries over the coverage report of the
+nearest commit whose tree was tested: its own tree, or an earlier commit's
+when only documentation changed in between. When that lookup finds no report
+(none was kept, it expired, or the API call failed), the unit tests run again
+on that push, and a failure there fails CI like any other failed test. A
+report that was found but cannot be downloaded afterwards leaves the commit
+without a Coveralls build and fails nothing.

@@ -109,8 +109,8 @@ response = await self._llm.structured(request, NoteSummary)
 
 `structured()` holds the provider to the output model's JSON schema:
 Anthropic receives it as `output_config.format`, OpenRouter as a strict
-`response_format` (and only providers that honour it are routed to). The
-answer is then validated with the pydantic model.
+`response_format`, and OpenRouter routes the call only to providers that
+support it. The answer is then validated with the pydantic model.
 
 Keep the output model next to its prompt: its field descriptions reach the
 model as part of the schema, so they are prompt text too. Put length and

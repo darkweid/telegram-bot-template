@@ -9,7 +9,7 @@ is in [the bot layer](bot-layer.md), the worker and the scheduler in
 
 ## Layers
 
-Every request goes Handler -> UseCase -> Service -> Repository.
+Every update goes Handler -> UseCase -> Service -> Repository.
 
 - **Handlers** parse the update, call a use case obtained through
   `FromDishka[...]` and answer. They never touch a session or a repository.
@@ -62,7 +62,7 @@ and `src/main` binds the implementation: `UnreachableUserRecorder`
 (`src/core/i18n/middleware.py`), `TaskPublisher` (`src/core/outbox/interface.py`)
 and `DegradationNotifier` (`src/core/redis/degradation.py`).
 
-### Project layout
+## Project layout
 
 Top level:
 

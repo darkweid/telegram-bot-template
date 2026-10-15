@@ -4,13 +4,13 @@ How the bot gets onto a server and stays up to date there: webhook mode
 behind nginx, provisioning a fresh server, what `infra/deploy/deploy.sh` does
 step by step, the CI that builds the image, continuous deployment from GitHub
 Actions, and releases. Open it before the first deploy, and again when a
-deploy fails and you need to know what state it left behind. Every key named here is described in
-[the configuration reference](configuration.md).
+deploy fails and you need to know what state it left behind. Every key named
+here is described in [the configuration reference](configuration.md).
 
 ## Webhook mode
 
 Polling, the default, needs nothing but outbound access to Telegram. Webhook
-mode needs a public HTTPS origin. Set in `.env`:
+mode needs a public `https` origin. Set in `.env`:
 
 - `BOT_MODE=webhook`;
 - `WEBHOOK_BASE_URL`, the public `https` origin Telegram calls, on port 443
@@ -30,9 +30,10 @@ the migrations baked into the image before the bot starts, and the bot waits
 for it; `make migrate` runs the same service by hand. With `BOT_IMAGE` set in
 `.env` to an image CI pushed (`ghcr.io/<owner>/<repo>:sha-<12>`), `make run`
 pulls and runs that image instead of building one from the checkout. No target
-builds the checkout under that name: `make build` then builds Postgres only,
-and `make up` starts the stack without building, so it needs the images an
-earlier `make run` left: the pulled bot image and the built Postgres. With
+builds the checkout under that name: `make build` then builds only the
+PostgreSQL image, and `make up` starts the stack without building, so it needs
+the images an earlier `make run` left: the pulled bot image and the built
+PostgreSQL image. With
 `COMPOSE_PROFILES=webhook`, `make run`, `up`, `down`, `logs` and `restart`
 handle nginx and certbot with the rest of the stack. The dev stack
 (`make run-dev`) always polls and leaves them out.
@@ -129,7 +130,7 @@ registry. The steps:
    stops the deploy before anything changes.
 3. The image id of the serving bot is recorded as the previous image (none on
    a first deploy).
-4. The Postgres image is built (`build --pull postgres`); it stays local to
+4. The PostgreSQL image is built (`build --pull postgres`); it stays local to
    the server.
 5. With `BUILD=1`, `bot-builder` builds the bot image with `COMMIT_SHA` from
    the checkout; with `BUILD=0`, the bot image is pulled.
@@ -222,9 +223,16 @@ Two paths skip work:
   same tree, the push skips every check but Gitleaks and goes straight to the
   image build.
 
-On a push down either path, with Coveralls on, the unit tests still run when
-no coverage report of that tree can be carried over, so every commit gets one
+With Coveralls on, every push gets a Coveralls build
 ([coverage](testing.md#coverage)).
+
+A push that skips the unit tests carries over the coverage report of the
+nearest commit whose tree was tested: its own tree, or an earlier commit's
+when only documentation changed in between. When that lookup finds no report
+(none was kept, it expired, or the API call failed), the unit tests run again
+on that push, and a failure there fails CI like any other failed test. A
+report that was found but cannot be downloaded afterwards leaves the commit
+without a Coveralls build and fails nothing.
 
 ## Continuous deployment
 
