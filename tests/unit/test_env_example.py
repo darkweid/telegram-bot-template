@@ -41,3 +41,21 @@ def test_build_time_settings_are_only_mentioned(name: str) -> None:
     """A copied .env must not override what the image build set."""
     assert not _is_assigned(name)
     assert re.search(rf"^#.*\b{name}\b", ENV_EXAMPLE, re.MULTILINE)
+
+
+# A setting whose name ends like this holds a credential.
+SECRET_NAME = re.compile(
+    r"(_TOKEN|_DSN|_API_KEY|_PASSWORD|_SECRET|_SECRET_ACCESS_KEY)$"
+)
+
+
+@pytest.mark.parametrize(
+    "name", [name for name in _setting_names() if SECRET_NAME.search(name)]
+)
+def test_secret_placeholders_are_marked_not_real(name: str) -> None:
+    """A placeholder that looks real gets committed or pasted into a deploy
+    by mistake; "not-real" makes it obvious. Empty means "off" and is fine."""
+    match = re.search(rf"^(# )?{name}=(.*)$", ENV_EXAMPLE, re.MULTILINE)
+    assert match is not None
+    value = match.group(2)
+    assert not value or "not-real" in value, f"{name}={value} lacks not-real"
