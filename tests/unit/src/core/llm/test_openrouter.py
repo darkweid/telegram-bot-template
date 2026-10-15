@@ -17,7 +17,8 @@ from src.core.llm.errors import (
     LLMUnavailable,
 )
 from src.core.llm.openrouter import OpenRouterLLMClient
-from src.core.llm.types import LLMMessage, LLMRequest
+from src.core.llm.structured import combine_usage
+from src.core.llm.types import LLMMessage, LLMRequest, LLMUsage
 from tests.helpers.llm_server import ScriptedLLMServer
 from tests.helpers.logs import captured_logs
 
@@ -448,3 +449,158 @@ async def test_aclose_closes_the_http_client(server: ScriptedLLMServer) -> None:
     await client.aclose()
 
     assert http_client.is_closed
+
+
+@pytest.mark.parametrize(
+    ("content", "content_type"),
+    [
+        (b"<html>bad gateway</html>", "text/html"),
+        (b'{"id": "gen-1", "choices": [{"mess', "application/json"),
+        (b"", "application/json"),
+    ],
+)
+async def test_a_200_that_is_not_a_chat_completion_is_unavailable(
+    server: ScriptedLLMServer, content: bytes, content_type: str
+) -> None:
+    """A proxy or an overloaded upstream can answer 200 with garbage; it must
+    switch the fallback like any outage, not escape as a stdlib exception."""
+    server.reply_raw(content, content_type=content_type)
+    client = make_client(server)
+
+    with captured_logs("src.core.llm.reporting") as records:
+        with pytest.raises(LLMUnavailable) as raised:
+            await client.complete(request())
+
+    assert raised.value.__cause__ is None
+    assert raised.value.__suppress_context__
+    assert "bad gateway" not in str(raised.value)
+    [record] = records
+    assert "outcome=LLMUnavailable" in record.getMessage()
+    await client.aclose()
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        {"error": {"message": "upstream failed", "code": 502}},
+        {**completion(), "choices": []},
+    ],
+)
+async def test_a_200_without_choices_is_unavailable(
+    server: ScriptedLLMServer, answer: dict[str, Any]
+) -> None:
+    """OpenRouter reports an upstream failure as a 200 with an error body; shown
+    as an empty answer it would look like the model had nothing to say."""
+    server.reply(answer)
+    client = make_client(server)
+
+    with pytest.raises(LLMUnavailable):
+        await client.complete(request())
+    await client.aclose()
+
+
+async def test_finish_reason_error_is_unavailable(server: ScriptedLLMServer) -> None:
+    """An upstream failure after the answer began must fail over, not be shown
+    as the partial text."""
+    server.reply(completion("partial", finish_reason="error"))
+    client = make_client(server)
+
+    with pytest.raises(LLMUnavailable):
+        await client.complete(request())
+    await client.aclose()
+
+
+async def test_an_answer_without_usage_is_recorded_without_cost(
+    server: ScriptedLLMServer,
+) -> None:
+    """A missing usage block must not fail the call; the log line says the
+    cost is unknown rather than reporting zero."""
+    answer = completion()
+    del answer["usage"]
+    server.reply(answer)
+    client = make_client(server)
+
+    with captured_logs("src.core.llm.reporting") as records:
+        response = await client.complete(request())
+
+    assert response.usage.input_tokens == 0
+    assert response.usage.output_tokens == 0
+    assert response.usage.cost_usd is None
+    [record] = records
+    assert "cost_usd=unknown" in record.getMessage()
+    await client.aclose()
+
+
+async def test_a_failed_structured_call_logs_what_its_answers_cost(
+    server: ScriptedLLMServer,
+) -> None:
+    """Both answers were billed; the WARNING line is where the spend of a call
+    that gave the user nothing stays visible."""
+    server.reply(completion(summary_json([])))
+    server.reply(completion("not json"))
+    client = make_client(server)
+
+    with captured_logs("src.core.llm.reporting") as records:
+        with pytest.raises(LLMOutputError):
+            await client.structured(request(), Summary)
+
+    [record] = records
+    line = record.getMessage()
+    assert record.levelno == logging.WARNING
+    assert "outcome=LLMOutputError" in line
+    assert "input_tokens=200" in line
+    assert "output_tokens=60" in line
+    assert "cache_read_tokens=40" in line
+    assert "cost_usd=0.000246" in line
+    await client.aclose()
+
+
+async def test_a_network_failure_on_the_repair_request_is_logged_without_tokens(
+    server: ScriptedLLMServer,
+) -> None:
+    """The first answer's tokens are not carried by a transport error, so the
+    line has none; it must still be written and name the failure."""
+    server.reply(completion(summary_json([])))
+    server.fail(httpx2.ConnectError)
+    client = make_client(server)
+
+    with captured_logs("src.core.llm.reporting") as records:
+        with pytest.raises(LLMUnavailable):
+            await client.structured(request(), Summary)
+
+    [record] = records
+    line = record.getMessage()
+    assert record.levelno == logging.WARNING
+    assert "outcome=LLMUnavailable" in line
+    assert "input_tokens=0" in line
+    assert "output_tokens=0" in line
+    assert "cost_usd=unknown" in line
+    await client.aclose()
+
+
+@pytest.mark.parametrize(
+    ("first", "second"),
+    [(None, Decimal("0.1")), (Decimal("0.1"), None), (None, None)],
+)
+def test_combined_usage_with_an_unknown_cost_stays_unknown(
+    first: Decimal | None, second: Decimal | None
+) -> None:
+    """Reporting half of a bill as the whole would understate spend."""
+    combined = combine_usage(
+        LLMUsage(input_tokens=1, output_tokens=2, cost_usd=first),
+        LLMUsage(input_tokens=3, output_tokens=4, cost_usd=second),
+    )
+
+    assert combined.cost_usd is None
+    assert combined.input_tokens == 4
+    assert combined.output_tokens == 6
+
+
+def test_combined_usage_adds_known_costs() -> None:
+    """The repair round's price is added to the first answer's, not replacing it."""
+    combined = combine_usage(
+        LLMUsage(input_tokens=1, output_tokens=2, cost_usd=Decimal("0.1")),
+        LLMUsage(input_tokens=3, output_tokens=4, cost_usd=Decimal("0.2")),
+    )
+
+    assert combined.cost_usd == Decimal("0.3")

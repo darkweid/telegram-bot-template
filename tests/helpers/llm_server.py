@@ -26,6 +26,16 @@ class ScriptedLLMServer:
     ) -> None:
         self._script.append(httpx2.Response(status, json=json_body, headers=headers))
 
+    def reply_raw(
+        self, content: bytes, *, content_type: str = "application/json"
+    ) -> None:
+        """Answer 200 with a body that is not (valid) JSON, as a broken proxy would."""
+        self._script.append(
+            httpx2.Response(
+                200, content=content, headers={"content-type": content_type}
+            )
+        )
+
     def fail(self, error: type[httpx2.TransportError]) -> None:
         self._script.append(error)
 

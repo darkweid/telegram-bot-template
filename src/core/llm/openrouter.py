@@ -146,6 +146,18 @@ class OpenRouterLLMClient:
             # Chained from None: an SDK error's message carries the response
             # body, which can echo the request.
             raise LLMUnavailable(_describe(error), provider=_PROVIDER) from None
+        except ValueError:
+            # A 200 whose body is cut or empty: the JSON decoder's error holds
+            # the whole body, which can quote the answer, so nothing is kept.
+            raise LLMUnavailable(
+                "OpenRouter returned an unreadable body", provider=_PROVIDER
+            ) from None
+        if not isinstance(completion, ChatCompletion):
+            # The SDK hands back a non-JSON 200 body (an HTML error page from
+            # a proxy) as a plain string.
+            raise LLMUnavailable(
+                "OpenRouter returned a body that is not JSON", provider=_PROVIDER
+            ) from None
         latency_ms = int((time.perf_counter() - started) * 1000)
         return _response(completion, structured=structured, latency_ms=latency_ms)
 
