@@ -5,7 +5,7 @@ from typing import Any
 import yaml
 
 from src.core.tasks.heartbeat import HEARTBEAT_INTERVAL_SECONDS
-from src.main.config import BotConfig
+from src.main.config import BotConfig, WebhookConfig, WebServerConfig
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
@@ -194,6 +194,14 @@ def test_the_makefile_pulls_every_service_of_the_bot_image() -> None:
     assert "pull migrate bot worker scheduler" in makefile
 
 
+def test_the_dev_stack_never_takes_the_webhook_profile() -> None:
+    """The dev stack forces polling; nginx started by COMPOSE_PROFILES=webhook
+    in the shared .env would bind 80 and 443 and proxy to a bot with no webhook
+    route."""
+    makefile = (PROJECT_ROOT / "Makefile").read_text(encoding="utf-8")
+    assert "\nDOCKER_COMPOSE_DEV = COMPOSE_PROFILES= docker compose " in makefile
+
+
 def test_the_image_build_receives_the_commit() -> None:
     """/status and /health name the commit; the value exists only at build
     time, since .git never enters the image."""
@@ -223,8 +231,9 @@ def test_env_example_documents_every_limit_with_its_default() -> None:
     """The commented line is how a developer learns the knob exists; a default
     there that differs from compose's would describe a limit nobody runs."""
     env_example = (PROJECT_ROOT / ".env.example").read_text(encoding="utf-8")
+    services = _services()
     for service in LIMIT_PREFIXES:
-        limits = _services()[service]["deploy"]["resources"]["limits"]
+        limits = services[service]["deploy"]["resources"]["limits"]
         for value in (limits["cpus"], limits["memory"]):
             name, default = _limit_default(value)
             assert f"\n# {name}={default}\n" in env_example, name
@@ -274,7 +283,23 @@ def test_nginx_gets_its_four_settings_and_no_secret() -> None:
         "WEB_SERVER_PORT",
         "TELEGRAM_ALLOWED_SUBNETS",
     }
-    assert nginx["environment"]["WEB_SERVER_PORT"] == "${WEB_SERVER_PORT:-8080}"
+    web_server_port = WebServerConfig.model_fields["WEB_SERVER_PORT"].default
+    webhook_path = WebhookConfig.model_fields["WEBHOOK_PATH"].default
+    assert (
+        nginx["environment"]["WEB_SERVER_PORT"]
+        == f"${{WEB_SERVER_PORT:-{web_server_port}}}"
+    )
+    assert nginx["environment"]["WEBHOOK_PATH"] == f"${{WEBHOOK_PATH:-{webhook_path}}}"
+
+
+def test_env_example_carries_the_subnets_nginx_defaults_to() -> None:
+    """The commented line is the documentation of the default; one that differs
+    from compose's would describe subnets nobody allows."""
+    _, default = _limit_default(
+        _services()["nginx"]["environment"]["TELEGRAM_ALLOWED_SUBNETS"]
+    )
+    env_example = (PROJECT_ROOT / ".env.example").read_text(encoding="utf-8")
+    assert f"\n# TELEGRAM_ALLOWED_SUBNETS={default}\n" in env_example
 
 
 def test_nginx_mounts_its_configuration_directory_whole() -> None:
@@ -301,12 +326,12 @@ def test_certbot_renews_twice_a_day_and_stops_on_sigterm() -> None:
     SIGTERM would hold every `docker compose down` for the grace period."""
     script = " ".join(_services()["certbot"]["entrypoint"])
     assert "certbot renew" in script
-    assert "sleep 12h" in script
+    assert "sleep 12h & wait" in script
     assert "trap exit TERM" in script
 
 
 def test_nginx_waits_for_a_healthy_bot() -> None:
-    """Started before the bot answers, nginx would resolve an upstream that is
-    not there yet and fail its first requests."""
+    """The upstream is resolved at run time, so nginx starts without the bot;
+    started early it would answer 502 to every webhook until the bot is up."""
     depends = _services()["nginx"]["depends_on"]
     assert depends["bot"] == {"condition": "service_healthy"}

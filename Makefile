@@ -1,7 +1,9 @@
 COMPOSE_BASE = infra/docker-compose.yml
 COMPOSE_DEV = infra/docker-compose.override.yml
 DOCKER_COMPOSE = docker compose --env-file .env -f $(COMPOSE_BASE)
-DOCKER_COMPOSE_DEV = docker compose --env-file .env -f $(COMPOSE_BASE) -f $(COMPOSE_DEV)
+# The dev stack always polls, so it never takes the webhook profile from .env:
+# a variable set in the shell wins over --env-file.
+DOCKER_COMPOSE_DEV = COMPOSE_PROFILES= docker compose --env-file .env -f $(COMPOSE_BASE) -f $(COMPOSE_DEV)
 DOCKER_COMPOSE_EXEC = $(DOCKER_COMPOSE) exec
 
 # Throwaway PostgreSQL and Redis for the integration suite. Every invocation gets its own compose
