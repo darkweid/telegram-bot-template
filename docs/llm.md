@@ -121,6 +121,24 @@ response = await self._llm.structured(request, NoteSummary)
   user needs other words: `SummarizeNotesUseCase` raises
   `NoteSummaryFailedError` for `LLMOutputError`.
 
+## Model tiers
+
+A request names the kind of work with `tier`, not a model id.
+`ModelTier.STRONG` is the default and uses `LLM_MODEL`; `ModelTier.FAST`
+uses `LLM_MODEL_FAST` and suits cheap, frequent calls such as routing or
+short parsing. An empty `LLM_MODEL_FAST` means the strong model of the same
+provider. The usage table records the model that answered, so `/stats`
+spending can be read per tier.
+
+## Effort
+
+`effort` (`low`, `medium`, `high`) sets how hard the model reasons before it
+answers; None sends nothing and leaves the model's default. Anthropic gets it
+as `output_config.effort`, OpenRouter as `reasoning.effort`. A higher effort
+costs output tokens, so raise `max_tokens` with it. The provider's cache is
+keyed by the request prefix, so keep the value fixed across the calls of one
+conversation.
+
 ## Structured output
 
 `structured()` holds the provider to the output model's JSON schema:
@@ -158,6 +176,10 @@ request: the history gains `response.assistant_turn` unchanged and a user
 message of `ToolResultBlock`s, one per call, with `is_error=True` for a call
 that failed, so the model can correct itself. `tool_choice="none"` keeps the
 tools in the prompt and forbids calls.
+
+`run` below is the domain's tool dispatcher: it finds the tool by
+`call.name`, validates `call.input` with `tool.args.model_validate` and
+returns the result text.
 
 ```python
 response = await llm.complete(request)

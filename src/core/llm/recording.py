@@ -210,4 +210,5 @@ def _rendered_block(block: ContentBlock) -> str:
         case ToolResultBlock(tool_use_id=call_id, content=text, is_error=is_error):
             return f"<tool_result {call_id}{' error' if is_error else ''} {text}>"
         case ProviderBlock(provider=provider, data=data):
+            # The size is that of the block's JSON dump.
             return f"<provider {provider} {len(json.dumps(data))} bytes>"

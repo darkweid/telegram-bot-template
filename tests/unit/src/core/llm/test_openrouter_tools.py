@@ -401,3 +401,16 @@ async def test_an_empty_assistant_turn_is_not_sent(server: ScriptedLLMServer) ->
 
     roles = [message["role"] for message in server.bodies()[0]["messages"]]
     assert roles == ["user", "user"]
+
+
+async def test_structured_output_takes_no_tools(server: ScriptedLLMServer) -> None:
+    """Neither API combines a response schema with tools the same way; the
+    caller's mistake is refused before anything is sent or billed."""
+
+    class Answer(BaseModel):
+        summary: str
+
+    with pytest.raises(ValueError, match="tools"):
+        await make_client(server).structured(request(), Answer)
+
+    assert server.requests == []
