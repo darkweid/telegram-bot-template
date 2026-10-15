@@ -324,33 +324,46 @@ async def test_a_hung_record_of_a_cancelled_call_gives_up_after_its_bound(
     ]
 
 
-def _hang_first_record(recorder: AsyncMock) -> asyncio.Event:
-    entered = asyncio.Event()
+class SlowRecord:
+    """A record that waits for `release`; `finished` tells it completed."""
 
-    async def record(*args: object, **kwargs: object) -> None:
-        if not entered.is_set():
-            entered.set()
-            await asyncio.Event().wait()
+    def __init__(self, recorder: AsyncMock) -> None:
+        self.entered = asyncio.Event()
+        self.release = asyncio.Event()
+        self.finished = False
+        recorder.record.side_effect = self.record
 
-    recorder.record.side_effect = record
-    return entered
+    async def record(self, *args: object, **kwargs: object) -> None:
+        self.entered.set()
+        await self.release.wait()
+        self.finished = True
+
+
+async def _cancel_during_the_record(
+    client: RecordingLLMClient, slow: SlowRecord
+) -> None:
+    task = asyncio.create_task(client.complete(REQUEST))
+    async with asyncio.timeout(2):
+        await slow.entered.wait()
+        task.cancel()
+        await asyncio.sleep(0)
+        slow.release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await task
 
 
 async def test_a_cancel_during_the_success_record_still_records_the_answer() -> None:
     """The provider answered and billed: a deadline or a shutdown landing
-    while the row is written must not leave the paid call unaccounted."""
+    while the row is written must not leave the paid call unaccounted, and
+    the write is not repeated: it may have committed already."""
     inner = FakeLLMClient()
     response = llm_response("hi", model="claude-sonnet-5-5", latency_ms=640)
     inner.queue(response)
     client, recorder = _client(inner)
-    entered = _hang_first_record(recorder)
-    task = asyncio.create_task(client.complete(REQUEST))
-    async with asyncio.timeout(2):
-        await entered.wait()
-        task.cancel()
-        with pytest.raises(asyncio.CancelledError):
-            await task
-    assert recorder.record.await_count == 2
+    slow = SlowRecord(recorder)
+    await _cancel_during_the_record(client, slow)
+    assert slow.finished
+    recorder.record.assert_awaited_once()
     args, kwargs = recorder.record.await_args
     assert args == (REQUEST, response, None)
     assert kwargs["model"] == "claude-sonnet-5-5"
@@ -362,14 +375,10 @@ async def test_a_cancel_during_the_failure_record_still_records_the_error() -> N
     error = LLMUnavailable("overloaded", provider=LLMProviderName.ANTHROPIC)
     inner.queue(error)
     client, recorder = _client(inner)
-    entered = _hang_first_record(recorder)
-    task = asyncio.create_task(client.complete(REQUEST))
-    async with asyncio.timeout(2):
-        await entered.wait()
-        task.cancel()
-        with pytest.raises(asyncio.CancelledError):
-            await task
-    assert recorder.record.await_count == 2
+    slow = SlowRecord(recorder)
+    await _cancel_during_the_record(client, slow)
+    assert slow.finished
+    recorder.record.assert_awaited_once()
     args, _ = recorder.record.await_args
     assert args == (REQUEST, None, error)
 
@@ -377,26 +386,22 @@ async def test_a_cancel_during_the_failure_record_still_records_the_error() -> N
 async def test_a_hung_record_cut_by_a_cancel_gives_up_after_its_bound(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The second write runs inside the shutdown budget like a cancelled
-    call's own row."""
+    """The write runs on inside the shutdown budget like a cancelled call's
+    own row, and no longer."""
     monkeypatch.setattr(recording_module, "CANCELLED_RECORD_SECONDS", 0.05)
     inner = FakeLLMClient()
     inner.queue(llm_response("hi"))
     client, recorder = _client(inner)
-    entered = asyncio.Event()
-
-    async def hang(*args: object, **kwargs: object) -> None:
-        entered.set()
-        await asyncio.Event().wait()
-
-    recorder.record.side_effect = hang
+    slow = SlowRecord(recorder)
     task = asyncio.create_task(client.complete(REQUEST))
     with captured_logs("src.core.llm.recording") as records:
         async with asyncio.timeout(2):
-            await entered.wait()
+            await slow.entered.wait()
             task.cancel()
             with pytest.raises(asyncio.CancelledError):
                 await task
+    assert not slow.finished
+    recorder.record.assert_awaited_once()
     assert [r.getMessage() for r in records] == [
         "LLM call cut while recorded, not recorded: TimeoutError"
     ]

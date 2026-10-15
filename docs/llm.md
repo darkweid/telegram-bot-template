@@ -335,9 +335,9 @@ stopping bot) is a row too: status error, error class `Cancelled`, no tokens
 and no cost, whatever the provider billed; its log line reads `Cancelled`.
 The row gets 2 seconds to be written and is dropped after that, so a
 stopping bot is not held up. A call that had already ended keeps its own
-row when the cancel lands while that row is being written: the write is
-retried under the same 2 seconds, with the tokens and cost the call
-reported.
+row when the cancel lands while that row is being written: the write gets
+the same 2 seconds to finish, with the tokens and cost the call reported.
+It is never repeated, since it may have committed already.
 
 **Prices.** OpenRouter reports the cost of each call. For Anthropic the cost
 comes from the price table in `src/core/llm/pricing.py` (US dollars per
