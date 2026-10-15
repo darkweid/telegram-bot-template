@@ -44,6 +44,13 @@ BOOTSTRAP_USER ?= root
 
 .DEFAULT_GOAL := help
 
+##@ Project
+
+.PHONY: init-project
+init-project: ## Turn the template into your bot: make init-project NAME=my-bot [LOCALE=ru]
+	@test -n "$(NAME)" || { echo "NAME is required: make init-project NAME=my-bot"; exit 1; }
+	python3 scripts/init_project.py "$(NAME)" $(if $(LOCALE),--locale "$(LOCALE)")
+
 ##@ Stack
 
 # BOT_IMAGE (in .env or the shell) pins the image CI pushed: it is pulled and run
