@@ -122,7 +122,7 @@ KNOWN_KEYS = frozenset(
 
 # src/main/config.py: _BOT_TOKEN_PATTERN, _WEBHOOK_SECRET_PATTERN and
 # WebhookConfig.validate_path.
-BOT_TOKEN_PATTERN = re.compile(r"\d{5,}:[A-Za-z0-9_-]{30,}")
+BOT_TOKEN_PATTERN = re.compile(r"[0-9]{5,}:[A-Za-z0-9_-]{30,}")
 WEBHOOK_SECRET_PATTERN = re.compile(r"[A-Za-z0-9_-]{32,256}")
 WEBHOOK_PATH_SEGMENT = re.compile(r"[A-Za-z0-9_-]+")
 WEBHOOK_PATH_MAX_LENGTH = 256
