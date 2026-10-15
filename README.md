@@ -181,6 +181,40 @@ previous stack still running.
 - At the end it removes images and build cache unused for a week, on Linux
   only; `PRUNE=0` keeps them.
 
+## Continuous deployment
+
+CD is off until you turn it on. After CI passes on a push, `CD (prod)` deploys
+`main` and `CD (stage)` deploys `stage`: each pulls the image that CI run pushed
+to GHCR (`sha-<12>`) on the server and runs `infra/deploy/deploy.sh` with
+`BUILD=0`, so the server never builds. A push of documentation only builds no
+image and deploys nothing. Deploys to one environment queue; they never run
+side by side or get cancelled.
+
+To turn it on for an environment:
+
+1. Provision the server (`infra/ansible/README.md`): it ends with the values
+   below printed.
+2. Settings -> Environments -> `production` (or `staging`):
+   - secrets `SSH_PRIVATE_KEY` (the CD key whose public half is in the
+     inventory), `SSH_KNOWN_HOSTS`, `SSH_USER` (`deploy`), `SERVER_IP`;
+   - variables `APP_DIR` (`/srv/<app_name>`) and `SSH_PORT` (when not 22);
+   - optionally secrets `ALERT_BOT_TOKEN` and `ALERT_CHAT_ID`: a Telegram bot
+     and chat that get one message per deploy. Without them the deploy runs and
+     its log says no alert was sent.
+
+   Set them on the environment or the repository, not the organization: an
+   organization on the Free plan does not pass its secrets to a private
+   repository, and they arrive empty.
+3. Deployment branches of the environment: `main` for `production`; **both
+   `main` and `stage`** for `staging`. The deploy is triggered by
+   `workflow_run`, which GitHub always runs on the default branch, so an
+   environment limited to `stage` rejects it.
+4. Settings -> Secrets and variables -> Actions -> Variables: set
+   `PROD_DEPLOY_ENABLED` (or `STAGE_DEPLOY_ENABLED`) to `true`.
+
+To redeploy an earlier build, run the CD workflow by hand (Actions -> CD (prod)
+-> Run workflow) with `image_tag` set to its `sha-<12>` tag.
+
 ## Roles
 
 Two optional roles, set in `.env` as comma-separated Telegram user ids:
