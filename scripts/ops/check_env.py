@@ -145,9 +145,10 @@ FEATURE_SWITCHES = {
 # after is LLM_PROVIDER or LLM_FALLBACK_PROVIDER.
 PROVIDER_KEY = re.compile(r"([A-Z][A-Z0-9]*)_API_KEY")
 LLM_PROVIDER_KEYS = ("LLM_PROVIDER", "LLM_FALLBACK_PROVIDER")
-CPUS_PATTERN = re.compile(r"\d+(\.\d+)?")
+ASCII_DIGITS = re.compile(r"[0-9]+")
+CPUS_PATTERN = re.compile(r"[0-9]+(\.[0-9]+)?")
 # compose's byte units: 512M, 1g, 1.5GB, 1048576.
-MEMORY_PATTERN = re.compile(r"\d+(\.\d+)?([bkmgBKMG][bB]?)?")
+MEMORY_PATTERN = re.compile(r"[0-9]+(\.[0-9]+)?([bkmgBKMG][bB]?)?")
 HOST_PORT_KEYS = ("POSTGRES_HOST_PORT", "REDIS_HOST_PORT")
 _LINE = re.compile(r"(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)")
 
@@ -167,13 +168,21 @@ def _unquote(raw: str) -> str:
         closing = raw.find(raw[0], 1)
         if closing == -1:
             raise ValueError
+        if raw[0] == '"' and "\\" in raw[1:closing]:
+            # compose unescapes inside double quotes; this parser would not.
+            raise ValueError
         return raw[1:closing]
     # Unquoted: a " #" starts a comment, as in compose's env files.
     return re.split(r"\s+#", raw, maxsplit=1)[0].strip()
 
 
 def parse_env(text: str) -> dict[str, str]:
-    """KEY=VALUE lines as compose reads them; a later line wins."""
+    """The subset of compose's env-file syntax the template's files use:
+    KEY=VALUE lines, an optional `export`, '...' and "..." quotes without
+    escapes, a ` #` comment after an unquoted value; a later line wins.
+    It does not interpolate `$VAR`, which compose does in unquoted and
+    double-quoted values (single quotes keep a literal `$`), and it refuses a
+    backslash inside double quotes, which compose would unescape."""
     values: dict[str, str] = {}
     for number, line in enumerate(text.splitlines(), start=1):
         stripped = line.strip()
@@ -185,7 +194,9 @@ def parse_env(text: str) -> dict[str, str]:
         try:
             values[match.group(1)] = _unquote(match.group(2).strip())
         except ValueError:
-            raise EnvFileError(f"line {number} has an unclosed quote") from None
+            raise EnvFileError(
+                f"line {number} has an unclosed quote or a backslash in double quotes"
+            ) from None
     return values
 
 
@@ -196,7 +207,7 @@ def _is_true(value: str) -> bool:
 def _check_ids(env: dict[str, str], key: str, report: Report) -> None:
     for raw_id in env.get(key, "").split(","):
         user_id = raw_id.strip()
-        if user_id and not (user_id.isdigit() and int(user_id) > 0):
+        if user_id and not (ASCII_DIGITS.fullmatch(user_id) and int(user_id) > 0):
             report.errors.append(
                 f"{key} must be comma-separated positive Telegram user ids"
             )
@@ -278,8 +289,9 @@ def check(env: dict[str, str]) -> Report:
             "nginx and certbot run only in webhook mode"
         )
 
-    subnets = env.get("TELEGRAM_ALLOWED_SUBNETS")
-    if subnets is not None:
+    # Empty falls back to compose's default, like an empty limit or port.
+    subnets = env.get("TELEGRAM_ALLOWED_SUBNETS", "").strip()
+    if subnets:
         try:
             parsed = [
                 ipaddress.ip_network(item.strip(), strict=True)
@@ -296,7 +308,7 @@ def check(env: dict[str, str]) -> Report:
     _check_ids(env, "ADMIN_IDS", report)
     _check_ids(env, "DEVELOPER_IDS", report)
     chat_id = env.get("DEV_ALERT_CHAT_ID", "").strip()
-    if chat_id and (not re.fullmatch(r"-?\d+", chat_id) or int(chat_id) == 0):
+    if chat_id and (not re.fullmatch(r"-?[0-9]+", chat_id) or int(chat_id) == 0):
         report.errors.append("DEV_ALERT_CHAT_ID must be a non-zero chat id or empty")
 
     if env.get("LLM_LOG_CONTENT", "").strip().lower() not in FALSE_VALUES:
@@ -308,12 +320,14 @@ def check(env: dict[str, str]) -> Report:
     if "COMMIT_SHA" in env:
         report.errors.append(
             "COMMIT_SHA is stamped into the image at build time; remove it from "
-            ".env, or every image is labelled with the same commit"
+            ".env: env_file would put it into every container over the image's "
+            "own value, and /health and /status would report that commit "
+            "whatever image runs"
         )
 
     for key in HOST_PORT_KEYS:
         port = env.get(key, "")
-        if port and not (port.isdigit() and 0 < int(port) < 65536):
+        if port and not (ASCII_DIGITS.fullmatch(port) and 0 < int(port) < 65536):
             report.errors.append(f"{key} must be a port number")
 
     _check_limits(env, report)
@@ -341,6 +355,12 @@ def main(argv: list[str] | None = None) -> int:
         env = parse_env(args.path.read_text(encoding="utf-8"))
     except FileNotFoundError:
         print(f"{args.path}: error: no such file", file=sys.stderr)
+        return 1
+    except (OSError, UnicodeDecodeError):
+        # The class only: the file's content and the OS message stay out.
+        print(
+            f"{args.path}: error: cannot read the file as UTF-8 text", file=sys.stderr
+        )
         return 1
     except EnvFileError as malformed:
         print(f"{args.path}: error: {malformed}", file=sys.stderr)

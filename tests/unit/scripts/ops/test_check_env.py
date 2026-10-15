@@ -170,14 +170,20 @@ def test_webhook_settings_are_not_checked_in_polling_mode() -> None:
 
 
 @pytest.mark.parametrize(
-    "subnets", ["", "149.154.160.1/20", "149.154.160.0/20,nonsense", "1.2.3.4/33"]
+    "subnets", ["149.154.160.1/20", "149.154.160.0/20,nonsense", "1.2.3.4/33"]
 )
 def test_the_telegram_subnets_must_be_networks(subnets: str) -> None:
     """nginx would refuse a host address with a mask, or worse, allow a range
-    nobody meant; an empty list drops every update."""
+    nobody meant."""
     errors = _errors(TELEGRAM_ALLOWED_SUBNETS=subnets)
     assert len(errors) == 1
     assert errors[0].startswith("TELEGRAM_ALLOWED_SUBNETS must be")
+
+
+def test_empty_subnets_fall_back_to_the_default() -> None:
+    """compose substitutes its default for an empty value, so nothing is
+    wrong with the file."""
+    assert _errors(TELEGRAM_ALLOWED_SUBNETS="") == []
 
 
 def test_the_default_subnets_pass() -> None:
@@ -185,7 +191,7 @@ def test_the_default_subnets_pass() -> None:
 
 
 @pytest.mark.parametrize("key", ["ADMIN_IDS", "DEVELOPER_IDS"])
-@pytest.mark.parametrize("value", ["-100123", "12,abc", "0"])
+@pytest.mark.parametrize("value", ["-100123", "12,abc", "0", "1\u00b2"])
 def test_role_ids_are_positive_user_ids(key: str, value: str) -> None:
     assert _errors(**{key: value}) == [
         f"{key} must be comma-separated positive Telegram user ids"
@@ -269,8 +275,8 @@ def test_a_placeholder_of_an_enabled_feature_is_refused(
 
 
 def test_the_commit_is_not_set_in_env() -> None:
-    """compose reads it from .env before the shell's build-time value, and
-    every image built afterwards would carry that one commit."""
+    """env_file puts it into every container over the image's own ENV, so
+    /health and /status would report the .env commit whatever image runs."""
     errors = _errors(COMMIT_SHA="abc")
     assert len(errors) == 1
     assert errors[0].startswith("COMMIT_SHA is stamped into the image")
@@ -285,6 +291,8 @@ def test_the_commit_is_not_set_in_env() -> None:
         ("REDIS_MEMORY", "-1G"),
         ("POSTGRES_HOST_PORT", "65536"),
         ("REDIS_HOST_PORT", "port"),
+        ("REDIS_HOST_PORT", "1\u00b2"),
+        ("BOT_CPUS", "1\u00b2"),
     ],
 )
 def test_limits_and_ports_must_parse(key: str, value: str) -> None:
@@ -330,7 +338,8 @@ def test_messages_never_echo_a_value() -> None:
 
 
 def test_parse_reads_the_mode_line_as_the_ansible_guard_does() -> None:
-    """The firewall role compares bot_mode with BOT_MODE read by its own regex;
+    """The provisioning guard (infra/ansible/playbooks/tasks/bot_mode_guard.yml)
+    compares bot_mode with BOT_MODE read by its own regex;
     both must see the same value in every spelling the guard documents."""
     text = "  export BOT_MODE = 'polling'\nBOT_MODE =\"webhook\" # why\n"
     assert parse_env(text)["BOT_MODE"] == "webhook"
@@ -421,3 +430,47 @@ def test_the_script_needs_nothing_but_the_standard_library() -> None:
             imported.add(node.module.split(".")[0])
     assert imported
     assert sorted(imported - sys.stdlib_module_names) == []
+
+
+def test_a_backslash_in_double_quotes_is_refused() -> None:
+    """compose unescapes it and this parser would not, so the two would read
+    different values; the error names the line, never the value."""
+    with pytest.raises(EnvFileError) as raised:
+        parse_env('A=1\nB="leaked\\nvalue"\n')
+    assert str(raised.value).startswith("line 2 ")
+    assert "leaked" not in str(raised.value)
+
+
+def test_a_backslash_in_single_quotes_is_literal() -> None:
+    assert parse_env("A='a\\nb'\n") == {"A": "a\\nb"}
+
+
+def test_main_refuses_a_file_it_cannot_read(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A directory, a permission error or a non-UTF-8 file must end in one
+    line, not a traceback that could quote the content."""
+    binary = tmp_path / "binary.env"
+    binary.write_bytes(b"A=\xff\xfe leaked\n")
+    for path in (tmp_path, binary):
+        assert main([str(path)]) == 1
+        err = capsys.readouterr().err
+        assert err == f"{path}: error: cannot read the file as UTF-8 text\n"
+
+
+def test_main_refuses_a_file_the_user_may_not_read(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A permission error ends in the same one line; the OS message may name
+    paths and is left out."""
+
+    def refuse(self: Path, encoding: str | None = None) -> str:
+        raise PermissionError(13, "denied for leaked-reason", str(self))
+
+    monkeypatch.setattr(Path, "read_text", refuse)
+    env_file = tmp_path / ".env"
+    assert main([str(env_file)]) == 1
+    err = capsys.readouterr().err
+    assert err == f"{env_file}: error: cannot read the file as UTF-8 text\n"
