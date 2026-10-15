@@ -1,7 +1,11 @@
+import os
 from pathlib import Path
 import re
+import shutil
+import subprocess
 from typing import Any
 
+import pytest
 import yaml
 
 from src.core.tasks.heartbeat import HEARTBEAT_INTERVAL_SECONDS
@@ -107,6 +111,64 @@ def test_make_run_knows_the_local_bot_image_name() -> None:
     for service in ("bot-builder", "migrate", "bot", "worker", "scheduler"):
         image = _services()[service]["image"]
         assert image == f"${{BOT_IMAGE:-{match.group(1)}}}"
+
+
+# Answers `config --images` with STUB_IMAGES and records every other call.
+MAKE_DOCKER_STUB = """#!/bin/sh
+case "$*" in
+  *"config --images") printf '%s\\n' $STUB_IMAGES ;;
+  *) printf '%s\\n' "$*" >>"$STUB_LOG" ;;
+esac
+"""
+PINNED_IMAGE = "ghcr.io/owner/repo:sha-0123456789ab"
+
+
+def _make(tmp_path: Path, target: str, bot_image: str) -> list[str]:
+    stubs = tmp_path / "bin"
+    stubs.mkdir()
+    (stubs / "docker").write_text(MAKE_DOCKER_STUB, encoding="utf-8")
+    (stubs / "docker").chmod(0o755)
+    log = tmp_path / "docker.log"
+    log.touch()
+    make = shutil.which("make")
+    assert make is not None
+    subprocess.run(
+        [make, "--no-print-directory", target],
+        cwd=PROJECT_ROOT,
+        # Built from scratch: BOT_IMAGE exported in the developer's shell must
+        # not decide which branch of the recipe runs.
+        env={
+            "PATH": f"{stubs}{os.pathsep}{os.environ['PATH']}",
+            "STUB_LOG": str(log),
+            "STUB_IMAGES": f"{bot_image} tg-bot-template-postgres:18 redis:8.10",
+        },
+        capture_output=True,
+        check=True,
+        timeout=60,
+    )
+    prefix = "compose --env-file .env -f infra/docker-compose.yml "
+    return [call.removeprefix(prefix) for call in log.read_text().splitlines()]
+
+
+@pytest.mark.parametrize(
+    ("target", "local", "pinned"),
+    [
+        ("build", ["build"], ["build postgres"]),
+        ("up", ["up -d"], ["up -d --no-build"]),
+    ],
+)
+def test_make_never_builds_the_checkout_under_a_pinned_image(
+    tmp_path: Path, target: str, local: list[str], pinned: list[str]
+) -> None:
+    """A build would put the checkout's code under the tag CI pushed, and the
+    next pull of that tag would replace it without a word; `make run` and
+    deploy.sh refuse it, so `make build` and `make up` must too."""
+    local_dir = tmp_path / "local"
+    pinned_dir = tmp_path / "pinned"
+    local_dir.mkdir()
+    pinned_dir.mkdir()
+    assert _make(local_dir, target, "tg-bot-template-bot:latest") == local
+    assert _make(pinned_dir, target, PINNED_IMAGE) == pinned
 
 
 def test_the_bot_waits_for_the_migrations() -> None:

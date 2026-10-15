@@ -46,19 +46,32 @@ BOOTSTRAP_USER ?= root
 
 ##@ Stack
 
-.PHONY: build
-build: ## Build the images
-	$(DOCKER_COMPOSE) build
-
-.PHONY: up
-up: ## Start the containers
-	$(DOCKER_COMPOSE) up -d
-
 # BOT_IMAGE (in .env or the shell) pins the image CI pushed: it is pulled and run
 # as is, because a build would put the checkout's code under the pinned tag.
+# `build`, `up` and `run` build the bot image only while the resolved name is
+# the local one.
+BOT_IMAGE_IS_LOCAL = $(DOCKER_COMPOSE) config --images | grep -qxF '$(LOCAL_BOT_IMAGE)'
+
+.PHONY: build
+build: ## Build the images; with BOT_IMAGE set, Postgres only
+	@if $(BOT_IMAGE_IS_LOCAL); then \
+		$(DOCKER_COMPOSE) build; \
+	else \
+		echo "BOT_IMAGE is pinned: building Postgres only; make run pulls the bot image"; \
+		$(DOCKER_COMPOSE) build postgres; \
+	fi
+
+.PHONY: up
+up: ## Start the containers; with BOT_IMAGE set, never build the bot image
+	@if $(BOT_IMAGE_IS_LOCAL); then \
+		$(DOCKER_COMPOSE) up -d; \
+	else \
+		$(DOCKER_COMPOSE) up -d --no-build; \
+	fi
+
 .PHONY: run
 run: ## Build and start the prod-like stack; with BOT_IMAGE set, pull it instead
-	@if $(DOCKER_COMPOSE) config --images | grep -qxF '$(LOCAL_BOT_IMAGE)'; then \
+	@if $(BOT_IMAGE_IS_LOCAL); then \
 		$(DOCKER_COMPOSE) up --build -d; \
 	else \
 		$(DOCKER_COMPOSE) pull migrate bot worker scheduler && \
