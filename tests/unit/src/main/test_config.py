@@ -15,6 +15,7 @@ from src.main.config import (
     HttpConfig,
     PostgresConfig,
     RedisConfig,
+    S3Config,
     WebhookConfig,
     WebServerConfig,
     get_settings,
@@ -539,3 +540,42 @@ def test_broadcast_defaults_stay_under_the_bot_api_limit() -> None:
 def test_broadcast_settings_out_of_range_are_refused(values: dict[str, float]) -> None:
     with pytest.raises(ValidationError):
         BroadcastConfig(**values)
+
+
+def test_s3_is_off_and_needs_no_keys_by_default() -> None:
+    """A bot without file storage must start with no S3_* keys in its .env."""
+    config = S3Config()
+    assert config.S3_ENABLED is False
+    assert config.S3_BUCKET_NAME == ""
+
+
+def test_enabled_s3_names_every_missing_key() -> None:
+    """One startup error listing all missing keys beats fixing them one restart
+    at a time."""
+    with pytest.raises(ValidationError) as raised:
+        S3Config(S3_ENABLED=True, S3_BUCKET_NAME="bucket")
+    message = str(raised.value)
+    assert "S3_ACCESS_KEY_ID" in message
+    assert "S3_SECRET_ACCESS_KEY" in message
+    assert "S3_REGION_NAME" in message
+    assert "S3_BUCKET_NAME" not in message
+
+
+def test_blank_optional_s3_values_mean_unset() -> None:
+    """`.env.example` leaves them blank; botocore would read an empty endpoint
+    as a URL and an empty CA bundle as a path."""
+    config = S3Config(S3_ENDPOINT_URL="", S3_ADDRESSING_STYLE=" ", S3_CA_BUNDLE="")
+    assert config.S3_ENDPOINT_URL is None
+    assert config.S3_ADDRESSING_STYLE is None
+    assert config.S3_CA_BUNDLE is None
+
+
+def test_an_unknown_retry_mode_fails_at_startup() -> None:
+    """botocore would refuse it on the first request, long after the deploy."""
+    with pytest.raises(ValidationError):
+        S3Config(S3_RETRY_MODE="fast")
+
+
+def test_the_s3_secret_stays_out_of_the_config_repr() -> None:
+    config = S3Config(S3_SECRET_ACCESS_KEY="example-secret-not-real")
+    assert "example-secret-not-real" not in repr(config)

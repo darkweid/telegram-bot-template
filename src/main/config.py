@@ -1,7 +1,7 @@
 from functools import lru_cache
 import os
 import re
-from typing import Annotated, Literal, Self, assert_never
+from typing import Annotated, Any, Literal, Self, assert_never
 from urllib.parse import quote, urlsplit
 
 from pydantic import (
@@ -452,6 +452,55 @@ class LLMConfig(BaseSettings):
             )
 
 
+class S3Config(BaseSettings):
+    # Off: the container holds a client that refuses every call with a clear
+    # error, so a bot that stores no files needs none of the keys below.
+    S3_ENABLED: bool = False
+    S3_BUCKET_NAME: str = ""
+    S3_ACCESS_KEY_ID: str = ""
+    S3_SECRET_ACCESS_KEY: SecretStr = SecretStr("")
+    S3_REGION_NAME: str = ""
+    S3_PRE_SIGNED_URL_SECONDS: int = Field(300, gt=0)
+    S3_ENDPOINT_URL: str | None = None
+    S3_ADDRESSING_STYLE: Literal["auto", "path", "virtual"] | None = None
+    S3_SIGNATURE_VERSION: str = Field("s3v4", min_length=1)
+    S3_VERIFY_SSL: bool = True
+    S3_CA_BUNDLE: str | None = None
+    S3_TREAT_ACCESS_DENIED_AS_MISSING: bool = False
+    S3_CONNECT_TIMEOUT_SECONDS: int = Field(5, gt=0)
+    S3_READ_TIMEOUT_SECONDS: int = Field(120, gt=0)
+    S3_RETRY_MAX_ATTEMPTS: int = Field(3, gt=0)
+    S3_RETRY_MODE: Literal["legacy", "standard", "adaptive"] = "standard"
+    # 20 MiB: the most the Bot API lets a bot download with getFile.
+    S3_MAX_UPLOAD_SIZE_BYTES: int = Field(20 * 1024 * 1024, gt=0)
+
+    model_config = SettingsConfigDict(extra="ignore", hide_input_in_errors=True)
+
+    @field_validator(
+        "S3_ENDPOINT_URL", "S3_ADDRESSING_STYLE", "S3_CA_BUNDLE", mode="before"
+    )
+    @classmethod
+    def blank_means_unset(cls, value: Any) -> Any:
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
+
+    @model_validator(mode="after")
+    def require_credentials_when_enabled(self) -> Self:
+        if not self.S3_ENABLED:
+            return self
+        values = {
+            "S3_BUCKET_NAME": self.S3_BUCKET_NAME,
+            "S3_ACCESS_KEY_ID": self.S3_ACCESS_KEY_ID,
+            "S3_SECRET_ACCESS_KEY": self.S3_SECRET_ACCESS_KEY.get_secret_value(),
+            "S3_REGION_NAME": self.S3_REGION_NAME,
+        }
+        missing = [name for name, value in values.items() if not value]
+        if missing:
+            raise ValueError(f"S3_ENABLED=true requires: {', '.join(missing)}")
+        return self
+
+
 class Config(BaseModel):
     app: AppConfig
     bot: BotConfig
@@ -465,6 +514,7 @@ class Config(BaseModel):
     sentry: SentryConfig
     http: HttpConfig
     llm: LLMConfig
+    s3: S3Config
 
     model_config = ConfigDict(extra="ignore")
 
@@ -523,4 +573,5 @@ def get_settings() -> Config:
         sentry=SentryConfig(_env_file=env_file),
         http=HttpConfig(_env_file=env_file),
         llm=LLMConfig(_env_file=env_file),
+        s3=S3Config(_env_file=env_file),
     )

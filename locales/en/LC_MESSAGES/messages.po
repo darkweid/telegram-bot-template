@@ -193,6 +193,9 @@ msgstr ""
 msgid "The broadcast was not started."
 msgstr ""
 
+msgid "The file is too large to store."
+msgstr ""
+
 msgid "The language model could not answer. Please try again later."
 msgstr ""
 

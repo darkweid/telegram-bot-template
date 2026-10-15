@@ -40,6 +40,9 @@ from src.core.outbox.interface import TaskPublisher
 from src.core.outbox.publisher import OutboxPublisher
 from src.core.redis.core import create_redis_client
 from src.core.redis.degradation import DegradationNotifier, RedisDegradationReporter
+from src.core.storage.s3.adapter import S3Adapter
+from src.core.storage.s3.disabled import DisabledS3Client
+from src.core.storage.s3.interface import S3Client
 from src.core.tasks.broker import TasksRedis
 from src.core.telegram.alerts import (
     AlertBot,
@@ -69,6 +72,7 @@ from src.main.config import (
     HttpConfig,
     PostgresConfig,
     RedisConfig,
+    S3Config,
     ThrottlingConfig,
     WebhookConfig,
     WebServerConfig,
@@ -128,6 +132,10 @@ class ConfigProvider(Provider):
     @provide
     def cache(self, config: Config) -> CacheConfig:
         return config.cache
+
+    @provide
+    def s3(self, config: Config) -> S3Config:
+        return config.s3
 
 
 class DatabaseProvider(Provider):
@@ -358,6 +366,42 @@ class HttpProvider(Provider):
         )
 
 
+def build_s3_adapter(s3: S3Config) -> S3Adapter:
+    """The adapter, not yet entered; S3Config has checked the credentials."""
+    return S3Adapter(
+        bucket=s3.S3_BUCKET_NAME,
+        region=s3.S3_REGION_NAME,
+        access_key=s3.S3_ACCESS_KEY_ID,
+        secret_key=s3.S3_SECRET_ACCESS_KEY.get_secret_value(),
+        default_presign_ttl=s3.S3_PRE_SIGNED_URL_SECONDS,
+        endpoint_url=s3.S3_ENDPOINT_URL,
+        addressing_style=s3.S3_ADDRESSING_STYLE,
+        signature_version=s3.S3_SIGNATURE_VERSION,
+        verify_ssl=s3.S3_VERIFY_SSL,
+        ca_bundle=s3.S3_CA_BUNDLE,
+        treat_access_denied_as_missing=s3.S3_TREAT_ACCESS_DENIED_AS_MISSING,
+        connect_timeout_seconds=s3.S3_CONNECT_TIMEOUT_SECONDS,
+        read_timeout_seconds=s3.S3_READ_TIMEOUT_SECONDS,
+        retry_max_attempts=s3.S3_RETRY_MAX_ATTEMPTS,
+        retry_mode=s3.S3_RETRY_MODE,
+        max_upload_size_bytes=s3.S3_MAX_UPLOAD_SIZE_BYTES,
+    )
+
+
+class S3Provider(Provider):
+    scope = Scope.APP
+
+    @provide
+    async def client(self, s3: S3Config) -> AsyncIterator[S3Client]:
+        if not s3.S3_ENABLED:
+            yield DisabledS3Client()
+            return
+        # Opened on the first request for it and closed with the container:
+        # at the end of bot_runtime in the bot, on worker shutdown in the worker.
+        async with build_s3_adapter(s3) as adapter:
+            yield adapter
+
+
 class BrokerProvider(Provider):
     """The bot's side of the task queue: it only sends.
 
@@ -408,6 +452,7 @@ def build_container(
         AlertProvider(),
         I18nProvider(),
         HttpProvider(),
+        S3Provider(),
         BrokerProvider(),
         UserProvider(),
         BroadcastProvider(),

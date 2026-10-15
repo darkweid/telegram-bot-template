@@ -207,6 +207,9 @@ msgstr "Останавливаю рассылку."
 msgid "The broadcast was not started."
 msgstr "Рассылка не запущена."
 
+msgid "The file is too large to store."
+msgstr "Файл слишком большой, сохранить его не получится."
+
 msgid "The language model could not answer. Please try again later."
 msgstr "Языковая модель не смогла ответить. Попробуйте ещё раз чуть позже."
 
