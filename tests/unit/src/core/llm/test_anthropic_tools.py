@@ -1,14 +1,15 @@
 import base64
-from typing import Any
+from typing import Any, get_args
 
 from pydantic import BaseModel, field_validator
 import pytest
 
-from src.core.llm.anthropic import AnthropicLLMClient
+from src.core.llm.anthropic import AnthropicLLMClient, ImageMediaType
 from src.core.llm.enums import LLMProviderName, ModelTier
 from src.core.llm.errors import LLMOutputError, LLMUnavailable
 from src.core.llm.pricing import PricingTable
 from src.core.llm.types import (
+    IMAGE_MEDIA_TYPES,
     ImageBlock,
     LLMMessage,
     LLMRequest,
@@ -322,3 +323,67 @@ async def test_a_tool_call_whose_input_is_not_an_object_is_unavailable(
 
     with pytest.raises(LLMUnavailable):
         await make_client(server).complete(request())
+
+
+async def test_an_empty_assistant_turn_is_dropped(server: ScriptedLLMServer) -> None:
+    """An answer with no blocks becomes an empty string turn; the API refuses
+    an empty assistant message that is not the last."""
+    server.reply(anthropic_message(anthropic_text("ok")))
+
+    await make_client(server).complete(
+        request(
+            messages=[
+                ASK,
+                LLMMessage(role="assistant", content=""),
+                LLMMessage(role="user", content="and?"),
+            ]
+        )
+    )
+
+    sent = server.bodies()[0]["messages"]
+    assert [message["role"] for message in sent] == ["user", "user"]
+
+
+async def test_a_cut_tool_call_with_a_malformed_input_is_an_output_error(
+    server: ScriptedLLMServer,
+) -> None:
+    """Unavailable carries no usage and switches to the fallback; the cut
+    answer was billed and is not an outage."""
+    body = anthropic_message(stop_reason="max_tokens")
+    body["content"] = [
+        {"type": "tool_use", "id": "toolu_1", "name": "lookup", "input": ["ri"]}
+    ]
+    server.reply(body)
+
+    with pytest.raises(LLMOutputError) as caught:
+        await make_client(server).complete(request())
+
+    assert caught.value.usage is not None
+
+
+async def test_redacted_thinking_goes_back_byte_for_byte(
+    server: ScriptedLLMServer,
+) -> None:
+    redacted = {"type": "redacted_thinking", "data": "opaque-1"}
+    server.reply(
+        anthropic_message(
+            redacted,
+            anthropic_tool_use("lookup", {"query": "rice", "limit": None}),
+            stop_reason="tool_use",
+        )
+    )
+    server.reply(anthropic_message(anthropic_text("ok")))
+    client = make_client(server)
+    first = await client.complete(request())
+
+    assert first.content[0] == ProviderBlock(
+        provider=LLMProviderName.ANTHROPIC, data=redacted
+    )
+    await client.complete(request(messages=[ASK, first.assistant_turn]))
+
+    assert server.bodies()[1]["messages"][1]["content"][0] == redacted
+
+
+def test_the_image_types_match_what_the_request_type_admits() -> None:
+    """The cast to the SDK's literal is only safe while both lists agree."""
+    assert set(get_args(ImageMediaType.__value__)) == IMAGE_MEDIA_TYPES

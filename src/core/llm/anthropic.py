@@ -63,6 +63,9 @@ ANTHROPIC_BASE_URL = "https://api.anthropic.com"
 
 _PROVIDER = LLMProviderName.ANTHROPIC
 
+# Must list what IMAGE_MEDIA_TYPES does (test_the_image_types_match_...).
+type ImageMediaType = Literal["image/jpeg", "image/png", "image/gif", "image/webp"]
+
 _STOPS: Mapping[str, LLMStop] = {
     "tool_use": "tool_use",
     "max_tokens": "max_tokens",
@@ -239,13 +242,10 @@ class AnthropicLLMClient:
                 usage=usage,
             )
         stop = _stop(message.stop_reason)
-        content = [
-            block
-            for block in (_answer_block(item) for item in message.content)
-            if block is not None
-        ]
+        # Decided from the raw blocks, before they are parsed: the arguments
+        # of a cut call may not even be an object.
         cut_call = stop == "max_tokens" and any(
-            isinstance(block, ToolUseBlock) for block in content
+            item.type == "tool_use" for item in message.content
         )
         if stop == "max_tokens" and (structured or cut_call):
             # Truncated JSON fails validation again on a repair attempt that
@@ -260,6 +260,11 @@ class AnthropicLLMClient:
                 provider=_PROVIDER,
                 usage=usage,
             )
+        content = [
+            block
+            for block in (_answer_block(item) for item in message.content)
+            if block is not None
+        ]
         return LLMResponse(
             content=content,
             usage=usage,
@@ -316,7 +321,12 @@ def _messages(request: LLMRequest) -> list[MessageParam]:
     rendered: list[MessageParam] = []
     for message in request.messages:
         if isinstance(message.content, str):
-            rendered.append(MessageParam(role=message.role, content=message.content))
+            # An answer with no blocks is an empty string turn, and the API
+            # refuses an empty assistant message that is not the last.
+            if message.content or message.role == "user":
+                rendered.append(
+                    MessageParam(role=message.role, content=message.content)
+                )
             continue
         blocks = [
             block
@@ -339,11 +349,7 @@ def _block(block: ContentBlock) -> ContentBlockParam | None:
                 type="image",
                 source=Base64ImageSourceParam(
                     type="base64",
-                    # ImageBlock admits only the four types the API names.
-                    media_type=cast(
-                        Literal["image/jpeg", "image/png", "image/gif", "image/webp"],
-                        media_type,
-                    ),
+                    media_type=cast(ImageMediaType, media_type),
                     data=base64.b64encode(data).decode("ascii"),
                 ),
             )
