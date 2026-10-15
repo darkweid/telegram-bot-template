@@ -1,6 +1,7 @@
 from pathlib import Path
 import re
 
+import pytest
 import yaml
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -50,12 +51,21 @@ def _grants(permissions: dict[str, str] | None) -> dict[str, str]:
     return permissions or {}
 
 
-def test_callers_grant_every_permission_the_reusable_workflow_requests() -> None:
+@pytest.mark.parametrize(
+    ("reusable_name", "callers"),
+    [
+        ("_ci.yml", ("prod_ci.yml", "stage_ci.yml")),
+        ("_deploy.yml", ("prod_deploy.yml", "stage_deploy.yml")),
+    ],
+)
+def test_callers_grant_every_permission_the_reusable_workflow_requests(
+    reusable_name: str, callers: tuple[str, ...]
+) -> None:
     """A called workflow can never hold more than the job that calls it, so a
-    permission _ci.yml asks for and a caller omits fails the whole run at
-    startup, before a single step."""
+    permission the reusable workflow asks for and a caller omits fails the whole
+    run at startup, before a single step."""
     workflows = PROJECT_ROOT / ".github/workflows"
-    reusable = yaml.safe_load((workflows / "_ci.yml").read_text(encoding="utf-8"))
+    reusable = yaml.safe_load((workflows / reusable_name).read_text(encoding="utf-8"))
     requested = [
         (where, _grants(block.get("permissions")))
         for where, block in [
@@ -65,7 +75,7 @@ def test_callers_grant_every_permission_the_reusable_workflow_requests() -> None
     ]
 
     found = 0
-    for caller in ("prod_ci.yml", "stage_ci.yml"):
+    for caller in callers:
         workflow = yaml.safe_load((workflows / caller).read_text(encoding="utf-8"))
         calling = [job for job in workflow["jobs"].values() if "uses" in job]
         assert calling, caller
@@ -77,4 +87,29 @@ def test_callers_grant_every_permission_the_reusable_workflow_requests() -> None
                     assert (
                         _RANK[granted.get(scope, "none")] >= _RANK[level]
                     ), f"{caller}: {where} requests {scope}: {level}"
+    assert found
+
+
+def test_no_workflow_grants_write_to_every_job() -> None:
+    """A write permission at workflow level reaches every job, including ones
+    added later that run third-party code and need none; the job that writes
+    asks for it."""
+    for path in (PROJECT_ROOT / ".github/workflows").glob("*.yml"):
+        workflow = yaml.safe_load(path.read_text(encoding="utf-8"))
+        granted = _grants(workflow.get("permissions"))
+        assert "write" not in granted.values(), path.name
+
+
+def test_github_script_never_splices_an_expression_into_its_source() -> None:
+    """An expression in `script` is pasted into the JavaScript before it runs,
+    so a value with a quote in it rewrites the code; the environment hands it
+    over as data."""
+    found = 0
+    for path in (PROJECT_ROOT / ".github/workflows").glob("*.yml"):
+        workflow = yaml.safe_load(path.read_text(encoding="utf-8"))
+        for name, job in workflow["jobs"].items():
+            for step in job.get("steps", []):
+                if step.get("uses", "").startswith("actions/github-script@"):
+                    found += 1
+                    assert "${{" not in step["with"]["script"], f"{path.name}: {name}"
     assert found

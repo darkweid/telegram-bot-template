@@ -1,4 +1,4 @@
-from src.core.i18n import SUPPORTED_LOCALES
+from src.core.locales import SUPPORTED_LOCALES
 from src.user.callbacks import LanguageCallback
 from src.user.keyboards import LANGUAGE_NAMES, language_keyboard
 

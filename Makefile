@@ -1,7 +1,9 @@
 COMPOSE_BASE = infra/docker-compose.yml
 COMPOSE_DEV = infra/docker-compose.override.yml
 DOCKER_COMPOSE = docker compose --env-file .env -f $(COMPOSE_BASE)
-DOCKER_COMPOSE_DEV = docker compose --env-file .env -f $(COMPOSE_BASE) -f $(COMPOSE_DEV)
+# The dev stack always polls, so it never takes the webhook profile from .env:
+# a variable set in the shell wins over --env-file.
+DOCKER_COMPOSE_DEV = COMPOSE_PROFILES= docker compose --env-file .env -f $(COMPOSE_BASE) -f $(COMPOSE_DEV)
 DOCKER_COMPOSE_EXEC = $(DOCKER_COMPOSE) exec
 
 # Throwaway PostgreSQL and Redis for the integration suite. Every invocation gets its own compose
@@ -25,30 +27,51 @@ export COMMIT_SHA
 
 # Requirements management
 REQ_DIR = infra/requirements
-REQ_NAMES = base dev prod security
+REQ_NAMES = base dev prod security ansible
 REQ_DEV_TXT = $(REQ_DIR)/dev.txt
 REQ_PROD_TXT = $(REQ_DIR)/prod.txt
 REQ_COMPILE_IMAGE ?= python:3.13-slim-bookworm
 REQ_COMPILE_PLATFORM ?= linux/amd64
 REQ_COMPILE_FLAGS ?=
 
+# Server provisioning (infra/ansible). Its own virtualenv: `make req-sync-dev`
+# would uninstall Ansible from the dev environment.
+ANSIBLE_DIR = infra/ansible
+ANSIBLE_VENV = $(ANSIBLE_DIR)/.venv
+ANSIBLE_BIN = $(ANSIBLE_VENV)/bin
+ANSIBLE_PLAYBOOK = ANSIBLE_CONFIG=$(ANSIBLE_DIR)/ansible.cfg $(ANSIBLE_BIN)/ansible-playbook -i $(ANSIBLE_DIR)/inventory/$(ENV)
+BOOTSTRAP_USER ?= root
+
 .DEFAULT_GOAL := help
 
 ##@ Stack
 
-.PHONY: build
-build: ## Build the images
-	$(DOCKER_COMPOSE) build
-
-.PHONY: up
-up: ## Start the containers
-	$(DOCKER_COMPOSE) up -d
-
 # BOT_IMAGE (in .env or the shell) pins the image CI pushed: it is pulled and run
 # as is, because a build would put the checkout's code under the pinned tag.
+# `build`, `up` and `run` build the bot image only while the resolved name is
+# the local one.
+BOT_IMAGE_IS_LOCAL = $(DOCKER_COMPOSE) config --images | grep -qxF '$(LOCAL_BOT_IMAGE)'
+
+.PHONY: build
+build: ## Build the images; with BOT_IMAGE set, Postgres only
+	@if $(BOT_IMAGE_IS_LOCAL); then \
+		$(DOCKER_COMPOSE) build; \
+	else \
+		echo "BOT_IMAGE is pinned: building Postgres only; make run pulls the bot image"; \
+		$(DOCKER_COMPOSE) build postgres; \
+	fi
+
+.PHONY: up
+up: ## Start the containers; with BOT_IMAGE set, never build the bot image
+	@if $(BOT_IMAGE_IS_LOCAL); then \
+		$(DOCKER_COMPOSE) up -d; \
+	else \
+		$(DOCKER_COMPOSE) up -d --no-build; \
+	fi
+
 .PHONY: run
 run: ## Build and start the prod-like stack; with BOT_IMAGE set, pull it instead
-	@if $(DOCKER_COMPOSE) config --images | grep -qxF '$(LOCAL_BOT_IMAGE)'; then \
+	@if $(BOT_IMAGE_IS_LOCAL); then \
 		$(DOCKER_COMPOSE) up --build -d; \
 	else \
 		$(DOCKER_COMPOSE) pull migrate bot worker scheduler && \
@@ -70,9 +93,21 @@ shell: ## Open a bash shell inside the bot container
 
 ##@ Cleanup
 
+# Let's Encrypt issues a certificate for the same host at most five times a
+# week, so the certificate volume outlives `make clean`; remove it by hand
+# (`docker volume rm tg-bot-template-certbot-certs`) to start over. compose
+# labels every volume it creates with the project name, which selects the rest.
+# `rm --volumes` first removes the anonymous volumes images declare (certbot's
+# /var/lib/letsencrypt), which `down` without -v would leave behind.
+# The project name is fixed in compose, so every checkout and worktree of this
+# repository shares these volumes: `make clean` from any of them empties all.
+CERTIFICATE_VOLUME = tg-bot-template-certbot-certs
 .PHONY: clean
-clean: ## Remove the stack together with its volumes, local images and orphans
-	$(DOCKER_COMPOSE) down -v --rmi local --remove-orphans
+clean: ## Remove the stack with its volumes (the certificate kept), local images and orphans
+	$(DOCKER_COMPOSE) --profile webhook rm --stop --force --volumes
+	$(DOCKER_COMPOSE) --profile webhook down --rmi local --remove-orphans
+	docker volume ls -q --filter label=com.docker.compose.project=tg-bot-template \
+		| grep -vxF '$(CERTIFICATE_VOLUME)' | xargs -r docker volume rm
 
 .PHONY: clean-resources
 clean-resources: ## Remove unused Docker resources, keeping build cache and reusable images
@@ -118,6 +153,32 @@ psql: ## Open psql inside the postgres container
 .PHONY: redis-cli
 redis-cli: ## Open redis-cli inside the redis container
 	$(DOCKER_COMPOSE_EXEC) redis redis-cli
+
+##@ Deployment
+
+DOCKER_COMPOSE_WEBHOOK = $(DOCKER_COMPOSE) --profile webhook
+
+# The first certificate for the webhook host; the certbot service renews it
+# from then on. Let's Encrypt fetches the challenge from port 80 of DOMAIN, so
+# DNS must already point at this box and port 80 must be open. DOMAIN is the
+# host of WEBHOOK_BASE_URL: nginx looks for the certificate under that name,
+# and the last command fails when the two differ.
+.PHONY: cert-issue
+cert-issue: ## Issue the webhook's certificate: make cert-issue DOMAIN=bot.example.com [EMAIL=you@example.com]
+	@test -n "$(DOMAIN)" || { echo "Usage: make cert-issue DOMAIN=bot.example.com [EMAIL=you@example.com]"; exit 1; }
+	$(DOCKER_COMPOSE_WEBHOOK) up -d --no-deps nginx
+	$(DOCKER_COMPOSE_WEBHOOK) run --rm --no-deps --entrypoint certbot certbot certonly \
+		--webroot -w /var/www/certbot -d '$(DOMAIN)' --cert-name '$(DOMAIN)' \
+		--non-interactive --agree-tos \
+		$(if $(EMAIL),--email '$(EMAIL)',--register-unsafely-without-email)
+	$(DOCKER_COMPOSE_WEBHOOK) restart nginx
+	$(DOCKER_COMPOSE_WEBHOOK) run --rm --no-deps -e NGINX_REQUIRE_TLS=1 nginx nginx -t
+
+# The system python3, not the virtualenv's: the script needs the standard
+# library only and runs the same way on the box, as deploy.sh's first step.
+.PHONY: check-env
+check-env: ## Check .env before a deploy (formats, compose profile, placeholders left in)
+	python3 scripts/ops/check_env.py .env
 
 ##@ Logs
 
@@ -217,7 +278,7 @@ i18n-init: ## Start a catalog for a new language: make i18n-init LOCALE=de
 	rm -f $(I18N_POT); \
 	if [ $$status -eq 0 ]; then $(I18N_NORMALIZE) $(I18N_DIR) --project $(I18N_PROJECT) || status=$$?; fi; \
 	if [ $$status -eq 0 ]; then \
-		echo "Add \"$(LOCALE)\" to SUPPORTED_LOCALES in src/core/i18n/__init__.py, then translate and run make i18n-compile"; \
+		echo "Add \"$(LOCALE)\" to SUPPORTED_LOCALES in src/core/locales.py, then translate and run make i18n-compile"; \
 	fi; \
 	exit $$status
 
@@ -244,6 +305,46 @@ req-sync-dev: ## Install the dev lockfile into the active environment
 .PHONY: req-sync-prod
 req-sync-prod: ## Install the prod lockfile into the active environment
 	python -m piptools sync $(REQ_PROD_TXT)
+
+##@ Server
+
+.PHONY: ansible-deps
+ansible-deps: ## Create the Ansible virtualenv and install the pinned collections
+	python3 -m venv $(ANSIBLE_VENV)
+	$(ANSIBLE_BIN)/python -m pip install --quiet --upgrade pip
+	$(ANSIBLE_BIN)/python -m pip install --quiet -r $(REQ_DIR)/ansible.txt
+	@# Galaxy drops connections now and then; three tries before giving up.
+	cd $(ANSIBLE_DIR) && for attempt in 1 2 3; do \
+		.venv/bin/ansible-galaxy collection install -r requirements.yml && exit 0; sleep 10; \
+	done; exit 1
+
+.PHONY: ansible-lint
+ansible-lint: ## Lint the playbooks and roles (profile: production)
+	cd $(ANSIBLE_DIR) && PATH="$$PWD/.venv/bin:$$PATH" ansible-lint
+
+.PHONY: server-bootstrap
+server-bootstrap: ## Prepare a fresh server: make server-bootstrap ENV=production [BOOTSTRAP_USER=root] [BOOTSTRAP_PORT=22022] [ASK_PASS=1] [ASK_BECOME=1]
+	@test -n "$(ENV)" || { echo "ENV is required: make server-bootstrap ENV=production"; exit 1; }
+	@test -d $(ANSIBLE_DIR)/inventory/$(ENV) || { echo "No inventory at $(ANSIBLE_DIR)/inventory/$(ENV)"; exit 1; }
+	$(ANSIBLE_PLAYBOOK) $(ANSIBLE_DIR)/playbooks/bootstrap.yml \
+		-e bootstrap_user=$(BOOTSTRAP_USER) \
+		$(if $(BOOTSTRAP_PORT),-e bootstrap_port=$(BOOTSTRAP_PORT)) \
+		$(if $(ASK_PASS),--ask-pass) \
+		$(if $(ASK_BECOME),--ask-become-pass)
+
+.PHONY: server-provision
+server-provision: ## Converge a server: make server-provision ENV=production [CURRENT_SSH_PORT=22022] [CHECK=1]
+	@test -n "$(ENV)" || { echo "ENV is required: make server-provision ENV=production"; exit 1; }
+	@test -d $(ANSIBLE_DIR)/inventory/$(ENV) || { echo "No inventory at $(ANSIBLE_DIR)/inventory/$(ENV)"; exit 1; }
+	$(ANSIBLE_PLAYBOOK) $(ANSIBLE_DIR)/playbooks/site.yml \
+		$(if $(CURRENT_SSH_PORT),-e bootstrap_port=$(CURRENT_SSH_PORT)) \
+		$(if $(CHECK),--check --diff)
+
+.PHONY: server-reboot
+server-reboot: ## Reboot a server and wait for the stack: make server-reboot ENV=production
+	@test -n "$(ENV)" || { echo "ENV is required: make server-reboot ENV=production"; exit 1; }
+	@test -d $(ANSIBLE_DIR)/inventory/$(ENV) || { echo "No inventory at $(ANSIBLE_DIR)/inventory/$(ENV)"; exit 1; }
+	$(ANSIBLE_PLAYBOOK) $(ANSIBLE_DIR)/playbooks/reboot.yml
 
 ##@ Help
 

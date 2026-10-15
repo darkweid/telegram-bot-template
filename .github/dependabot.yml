@@ -1,0 +1,42 @@
+# Monthly, one grouped pull request per ecosystem. Container images are not here:
+# they move by hand, pinned by tests of their own (tests/unit/test_redis_image_pins.py,
+# tests/unit/test_docker_compose_config.py); tests/unit/test_dependabot_config.py
+# keeps them out of this file.
+version: 2
+updates:
+  - package-ecosystem: "pip"
+    # Every *.txt lockfile here; `make req-compile` regenerates them, so a
+    # Dependabot change to one lockfile is checked by CI like any other.
+    directory: "/infra/requirements"
+    schedule:
+      interval: "monthly"
+      time: "06:00"
+      timezone: "UTC"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+    commit-message:
+      # Dependabot appends the colon: "chore(deps): ...".
+      prefix: "chore"
+      prefix-development: "chore"
+      include: "scope"
+    groups:
+      python-dependencies:
+        patterns:
+          - "*"
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+      time: "06:00"
+      timezone: "UTC"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+    commit-message:
+      prefix: "chore"
+      include: "scope"
+    groups:
+      github-actions:
+        patterns:
+          - "*"

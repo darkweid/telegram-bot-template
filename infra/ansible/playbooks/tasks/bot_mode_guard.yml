@@ -1,0 +1,46 @@
+---
+# The firewall opens web ports by bot_mode, the bot listens by BOT_MODE in .env.
+# They must agree: a webhook bot behind closed ports never gets an update, a
+# polling bot behind open ones exposes whatever else publishes a port. Before the
+# first deploy there is no .env and nothing to compare.
+- name: Check for the bot's .env
+  ansible.builtin.stat:
+    path: "{{ bot_mode_guard_env_file }}"
+  register: bot_mode_guard_env
+
+# Only the BOT_MODE lines leave the server: the rest of .env holds the bot token
+# and other secrets, which must not reach Ansible's output (-v prints results).
+# grep exits 1 on no match, which is a valid answer.
+- name: Read the BOT_MODE lines of the bot's .env
+  ansible.builtin.command:
+    argv:
+      - grep
+      - -E
+      - '^[[:space:]]*(export[[:space:]]+)?BOT_MODE[[:space:]]*='
+      - "{{ bot_mode_guard_env_file }}"
+  register: bot_mode_guard_env_content
+  changed_when: false
+  failed_when: bot_mode_guard_env_content.rc > 1
+  check_mode: false
+  when: bot_mode_guard_env.stat.exists
+
+# Read as docker compose and scripts/ops/check_env.py read it: an optional
+# `export`, blanks around the name and the `=`, the last BOT_MODE line wins, a
+# ` #` comment after an unquoted value is dropped, quotes are stripped. No line
+# means the bot's own default, polling.
+- name: Refuse a bot_mode that differs from BOT_MODE in .env
+  ansible.builtin.assert:
+    that:
+      - (bot_mode | default('polling')) == bot_mode_guard_env_mode
+    fail_msg: >-
+      bot_mode/BOT_MODE mismatch: the inventory says {{ bot_mode | default('polling') }},
+      {{ bot_mode_guard_env_file }} says {{ bot_mode_guard_env_mode }}. Set both to the
+      same mode, then run make server-provision again.
+    quiet: true
+  vars:
+    bot_mode_guard_env_mode: >-
+      {{ (['polling'] + (bot_mode_guard_env_content.stdout
+          | regex_findall('(?m)^[ \t]*(?:export[ \t]+)?BOT_MODE[ \t]*=[ \t]*(.*)$')))
+         | last | regex_replace('[ \t]+#.*$', '') | trim
+         | regex_replace("^['\"]|['\"]$", "") }}
+  when: bot_mode_guard_env.stat.exists

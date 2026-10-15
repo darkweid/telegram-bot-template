@@ -3,7 +3,7 @@ import re
 from pydantic import ValidationError
 import pytest
 
-from src.core.i18n import SUPPORTED_LOCALES
+from src.core.locales import SUPPORTED_LOCALES
 from src.note.prompts import (
     MAX_THEMES,
     RESPONSE_LANGUAGES,

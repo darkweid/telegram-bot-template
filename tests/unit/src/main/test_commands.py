@@ -4,7 +4,7 @@ from aiogram.types import BotCommandScopeAllPrivateChats, BotCommandScopeChat
 from aiogram.utils.i18n import I18n
 import pytest
 
-from src.core.i18n import SUPPORTED_LOCALES
+from src.core.locales import SUPPORTED_LOCALES
 from src.core.telegram.commands import BotCommandSpec
 from src.core.telegram.roles import Roles
 from src.main import commands as commands_module

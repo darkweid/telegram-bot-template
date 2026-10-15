@@ -40,6 +40,8 @@ jobs:
       docs_only: ${{ steps.classify.outputs.docs_only }}
       tree: ${{ steps.verified.outputs.tree }}
       verified: ${{ steps.verified.outputs.verified }}
+      coverage_run: ${{ steps.coverage.outputs.run }}
+      coverage_tree: ${{ steps.coverage.outputs.tree }}
 
     steps:
       - name: Checkout code
@@ -81,6 +83,42 @@ jobs:
             fi
           fi
           echo "verified=${verified}" >> "$GITHUB_OUTPUT"
+
+      # Coveralls compares a pull request with the build of its base commit, so
+      # every pushed commit needs one, including a push whose tests this gate
+      # skips. The report of the nearest first-parent commit whose tree was
+      # tested is this commit's coverage while every commit walked past is
+      # documentation-only (the classifier above, same diff flags). A miss of
+      # any kind - a code commit without a report, an expired report, a walk
+      # past the cap, an API error - leaves `run` empty, and `unit-tests` then
+      # runs on this push to produce the report itself. Off with Coveralls.
+      - name: Look for a coverage report this push can carry
+        id: coverage
+        if: ${{ vars.COVERALLS_ENABLED == 'true' && github.event_name == 'push' && (steps.verified.outputs.verified == 'true' || steps.classify.outputs.docs_only == 'true') }}
+        continue-on-error: true
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          for commit in $(git rev-list --first-parent -n 50 HEAD); do
+            tree="$(git rev-parse "${commit}^{tree}")"
+            # Only this repository's own runs, as in the lookup above.
+            run_id="$(gh api "repos/${{ github.repository }}/actions/artifacts?name=coverage-${tree}&per_page=100" \
+              --jq '[.artifacts[] | select((.expired | not) and .workflow_run.head_repository_id == .workflow_run.repository_id)] | sort_by(.created_at) | last | .workflow_run.id // empty')"
+            if [ -n "${run_id}" ]; then
+              echo "run=${run_id}" >> "$GITHUB_OUTPUT"
+              echo "tree=${tree}" >> "$GITHUB_OUTPUT"
+              echo "::notice::Coverage of tree ${tree} (run ${run_id}) is carried to this commit."
+              exit 0
+            fi
+            git cat-file -e "${commit}^" 2>/dev/null || break
+            verdict="$(git -c core.quotePath=false diff --no-renames --name-only "${commit}^" "${commit}" \
+              | python3 scripts/ops/docs_only_change.py)"
+            [ "${verdict}" = "true" ] || break
+          done
+          echo "::notice::No coverage report to carry; unit tests run on this push."
+
   # Not gated on docs_only, like gitleaks: `make lint` runs pre-commit over every
   # file, and end-of-file-fixer, trailing-whitespace and check-yaml all apply to
   # markdown. Skipping it here would let a documentation PR merge a violation
@@ -203,9 +241,21 @@ jobs:
   unit-tests:
     name: Unit tests
     needs: changes
-    if: ${{ !cancelled() && needs.changes.outputs.docs_only != 'true' && needs.changes.outputs.verified != 'true' }}
+    # With Coveralls on, also on a skipped push with no coverage report to carry,
+    # so that commit still gets a Coveralls build (the lookup in `changes`).
+    if: ${{ !cancelled() && ((needs.changes.outputs.docs_only != 'true' && needs.changes.outputs.verified != 'true') || (vars.COVERALLS_ENABLED == 'true' && github.event_name == 'push' && needs.changes.outputs.coverage_run == '')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
+
+    # The only job that writes anything back to the pull request. The Coveralls
+    # action does not post the comment itself - it hands this token to
+    # coveralls.io and the service posts with it, so a read-only token uploads
+    # the report and silently leaves no comment. Granted here rather than at the
+    # workflow level so the jobs running third-party scanners keep a read-only
+    # token.
+    permissions:
+      contents: read
+      pull-requests: write
 
     steps:
       - name: Checkout code
@@ -242,6 +292,77 @@ jobs:
         run: |
           export PATH="$PWD/.venv/bin:$PATH"
           make test-cov
+
+      # A pull request from a fork gets a read-only token whatever this asks
+      # for, so the report lands on coveralls.io and the comment does not.
+      - name: Upload coverage to Coveralls
+        if: ${{ vars.COVERALLS_ENABLED == 'true' }}
+        continue-on-error: true
+        uses: coverallsapp/github-action@8d6379e14d29928660c4ba802d8e85393440b329 # v2.3.8
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          format: cobertura
+          file: coverage.xml
+
+      # Kept under the tree's name for `carry-coverage`: the push that lands this
+      # tree on the branch skips the tests, and Coveralls still needs a build
+      # for that commit to compare the next pull request against.
+      - name: Keep the coverage report for this tree
+        if: ${{ vars.COVERALLS_ENABLED == 'true' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: coverage-${{ needs.changes.outputs.tree }}
+          path: coverage.xml
+          retention-days: 30
+
+  # Uploads the report `changes` found for a push whose tests were skipped, as
+  # this commit's Coveralls build.
+  carry-coverage:
+    name: Carry coverage
+    needs: changes
+    if: ${{ !cancelled() && vars.COVERALLS_ENABLED == 'true' && needs.changes.outputs.coverage_run != '' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # A carried report is a convenience: an expired artifact or an API error
+      # must not fail CI, which would skip the deploy of an image already pushed.
+      # Without the report this commit has no Coveralls build.
+      - name: Download the carried report
+        id: download
+        continue-on-error: true
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh run download "${{ needs.changes.outputs.coverage_run }}" --repo "${{ github.repository }}" \
+            --name "coverage-${{ needs.changes.outputs.coverage_tree }}" --dir "${RUNNER_TEMP}/coverage"
+
+      # Saved again under this commit's tree, so the next push finds it one step
+      # back instead of walking the whole run of documentation commits.
+      - name: Keep the carried report for this tree
+        if: steps.download.outcome == 'success'
+        continue-on-error: true
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: coverage-${{ needs.changes.outputs.tree }}
+          path: ${{ runner.temp }}/coverage/coverage.xml
+          retention-days: 30
+
+      - name: Upload coverage to Coveralls
+        if: steps.download.outcome == 'success'
+        continue-on-error: true
+        uses: coverallsapp/github-action@8d6379e14d29928660c4ba802d8e85393440b329 # v2.3.8
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          format: cobertura
+          file: ${{ runner.temp }}/coverage/coverage.xml
 
   integration-tests:
     name: Integration tests
@@ -377,6 +498,7 @@ jobs:
             infra/requirements/dev.txt
             infra/requirements/prod.txt
             infra/requirements/security.txt
+            infra/requirements/ansible.txt
 
       - name: Install pip-audit
         shell: bash
@@ -386,11 +508,15 @@ jobs:
 
       - name: Audit pinned dependencies
         shell: bash
+        # ansible.txt is audited too, since the operator runs it with root on the
+        # server, and on its own: it installs into a separate virtualenv and pins
+        # its own versions of packages dev.txt also carries.
         run: |
           pip-audit \
             -r infra/requirements/base.txt \
             -r infra/requirements/dev.txt \
             -r infra/requirements/prod.txt
+          pip-audit -r infra/requirements/ansible.txt
 
   # Never skipped by the tree gate: it scans commits, not the tree - the pushed
   # range on a push, the pull request's commits on a pull request - and a push
@@ -415,6 +541,97 @@ jobs:
           # organization; without it the action exits before scanning.
           GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}
 
+  # The webhook profile's nginx, started the way the box starts it: the
+  # configuration must load with a certificate in place, and requests from
+  # outside Telegram's subnets and the private networks must be dropped.
+  nginx:
+    name: nginx
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.docs_only != 'true' && needs.changes.outputs.verified != 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      WEBHOOK_HOST: bot.example.com
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Create a webhook-mode .env from .env.example
+        shell: bash
+        run: |
+          cp .env.example .env
+          printf 'BOT_MODE=webhook\nCOMPOSE_PROFILES=webhook\nWEBHOOK_BASE_URL=https://%s\n' "$WEBHOOK_HOST" >> .env
+
+      # Where certbot keeps a real one, so the TLS server is rendered and tested
+      # too; without a certificate nginx serves port 80 only.
+      - name: Put a self-signed certificate in the certbot volume
+        shell: bash
+        run: |
+          # shellcheck disable=SC2016  # expanded by the shell inside the container
+          docker compose --env-file .env -f infra/docker-compose.yml run --rm --no-deps \
+            -e WEBHOOK_HOST --entrypoint sh certbot -c '
+              live="/etc/letsencrypt/live/$WEBHOOK_HOST"
+              mkdir -p "$live"
+              openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj "/CN=$WEBHOOK_HOST" \
+                -keyout "$live/privkey.pem" -out "$live/fullchain.pem"'
+
+      - name: Test the configuration
+        shell: bash
+        run: |
+          docker compose --env-file .env -f infra/docker-compose.yml run --rm --no-deps \
+            -e NGINX_REQUIRE_TLS=1 nginx nginx -t
+
+      - name: Drop what does not come from Telegram or a private network
+        shell: bash
+        run: |
+          compose=(docker compose --env-file .env -f infra/docker-compose.yml)
+          "${compose[@]}" up -d --no-deps nginx
+          for _ in $(seq 30); do
+            "${compose[@]}" exec -T nginx test -s /run/nginx.pid && break
+            sleep 1
+          done
+          # The runner reaches the published ports through Docker, from the
+          # bridge gateway: an address outside both allow-lists. curl exits 52
+          # when the connection closes without a response, which is nginx's 444.
+          expect_dropped() {
+            local status=0
+            curl -sk --max-time 5 -o /dev/null \
+              --resolve "${WEBHOOK_HOST}:443:127.0.0.1" --resolve "${WEBHOOK_HOST}:80:127.0.0.1" \
+              "$@" || status=$?
+            if [ "$status" -ne 52 ]; then
+              echo "::error::$* got an answer (curl exit ${status}); nginx must drop it"
+              exit 1
+            fi
+          }
+          expect_dropped -X POST "https://${WEBHOOK_HOST}/webhook/telegram"
+          expect_dropped "https://${WEBHOOK_HOST}/live"
+          expect_dropped "https://${WEBHOOK_HOST}/"
+          expect_dropped -X POST "http://${WEBHOOK_HOST}/webhook/telegram"
+          # A container on the compose network is a private address: the probe
+          # passes the guard and reaches the upstream, absent here, so 502.
+          code="$("${compose[@]}" run --rm --no-deps --entrypoint curl nginx \
+            -sk -o /dev/null -w '%{http_code}' \
+            --connect-to "${WEBHOOK_HOST}:443:nginx:443" "https://${WEBHOOK_HOST}/live")"
+          if [ "$code" != "502" ]; then
+            echo "::error::/live from the compose network answered ${code}, expected 502"
+            exit 1
+          fi
+          # The webhook route itself, from inside Telegram's subnets: a second
+          # nginx that counts its own loopback as Telegram renders the same
+          # templates, and a POST to it passes both guards and reaches the
+          # upstream, absent here, so 502.
+          # shellcheck disable=SC2016  # expanded by the shell inside the container
+          code="$("${compose[@]}" run --rm --no-deps -e WEBHOOK_HOST \
+            -e TELEGRAM_ALLOWED_SUBNETS=127.0.0.1/32 --entrypoint sh nginx -c '
+              sh /etc/nginx/bot/entrypoint.sh nginx >&2
+              curl -sk -o /dev/null -w "%{http_code}" -X POST \
+                --resolve "$WEBHOOK_HOST:443:127.0.0.1" "https://$WEBHOOK_HOST$WEBHOOK_PATH"')"
+          if [ "$code" != "502" ]; then
+            echo "::error::a webhook POST from Telegram's subnets answered ${code}, expected 502"
+            exit 1
+          fi
+
   # The artifact's name is the whole record: `changes` only asks whether one
   # with this tree exists, and a hit skips every check. So every check has to
   # have run and passed: a documentation-only change skips them, and recording
@@ -423,7 +640,7 @@ jobs:
   # failure or cancellation and nothing is recorded either.
   record-pass:
     name: Record passing tree
-    needs: [changes, lint, migration-heads, unit-tests, integration-tests, bandit, pip-audit, gitleaks]
+    needs: [changes, lint, migration-heads, unit-tests, integration-tests, bandit, pip-audit, gitleaks, nginx]
     if: ${{ !cancelled() && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') && needs.changes.outputs.verified != 'true' && needs.changes.outputs.docs_only != 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -446,7 +663,7 @@ jobs:
   # become the tag a human reaches for when they mean production.
   build-and-push:
     name: Build & push image
-    needs: [changes, lint, migration-heads, unit-tests, integration-tests, bandit, pip-audit, gitleaks]
+    needs: [changes, lint, migration-heads, unit-tests, integration-tests, bandit, pip-audit, gitleaks, nginx]
     # Branch and event filtering happens in the caller; here the decision arrives
     # as a single input so stage and prod share one implementation.
     # Checks skipped by a gate count as passed; the explicit status test is what

@@ -1,0 +1,104 @@
+name: Release
+
+# Tagging vX.Y.Z publishes a versioned image next to the sha-<12> and latest tags
+# CI pushes, and opens a GitHub Release with generated notes. Nothing deploys
+# from here: CD follows the branches.
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    name: Publish image and release
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+      packages: write
+
+    # No checkout: every step works on the registry and the GitHub API.
+    steps:
+      # The trigger's glob also matches `v1`, `vnext` or `v1.2.3-rc`; any of them
+      # would publish an image tag no one can tell from a release.
+      - name: Check the version tag
+        env:
+          VERSION: ${{ github.ref_name }}
+        run: |
+          if ! printf '%s' "$VERSION" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::Release tags look like vX.Y.Z (v1.2.3); got '$VERSION'. Delete it and push one of that shape."
+            exit 1
+          fi
+
+      - name: Compute image and tags
+        id: meta
+        env:
+          VERSION: ${{ github.ref_name }}
+        run: |
+          image_lower="$(echo "ghcr.io/${{ github.repository }}" | tr '[:upper:]' '[:lower:]')"
+          short_sha="$(echo "${{ github.sha }}" | cut -c1-12)"
+          {
+            echo "image=${image_lower}"
+            echo "version=${VERSION}"
+            echo "sha_tag=sha-${short_sha}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Log in to GHCR
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Only an image CI built - after the checks passed - is ever released. A
+      # tag on a commit that never went through CI on main has no such image,
+      # and building one here would publish code no check ran on.
+      - name: Look for the image CI built for this commit
+        env:
+          IMAGE: ${{ steps.meta.outputs.image }}
+          SHA_TAG: ${{ steps.meta.outputs.sha_tag }}
+        run: |
+          if ! docker buildx imagetools inspect "${IMAGE}:${SHA_TAG}" >/dev/null 2>&1; then
+            echo "::error::No ${IMAGE}:${SHA_TAG} image: the tagged commit was never built and pushed by CI (main or stage). Tag a commit CI built."
+            exit 1
+          fi
+
+      # Build once, promote many: the release tag points at the exact image CI
+      # built and CD deployed. A rebuild would run the same code on newer base
+      # layers, so v1.2.0 would not be the artifact that was tested.
+      # `imagetools create` copies the manifest by digest inside the registry,
+      # so no layer is pulled or pushed. The version therefore lives in the tag
+      # and the release, not in an image label - changing a label would change
+      # the config blob, and with it the digest.
+      - name: Promote the CI-built image to the release tag
+        env:
+          IMAGE: ${{ steps.meta.outputs.image }}
+          SHA_TAG: ${{ steps.meta.outputs.sha_tag }}
+          VERSION: ${{ steps.meta.outputs.version }}
+        run: docker buildx imagetools create -t "${IMAGE}:${VERSION}" "${IMAGE}:${SHA_TAG}"
+
+      - name: Create the GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # gh finds the repository from a checkout otherwise.
+          GH_REPO: ${{ github.repository }}
+          IMAGE: ${{ steps.meta.outputs.image }}
+          VERSION: ${{ steps.meta.outputs.version }}
+        run: |
+          set -euo pipefail
+          digest="$(docker buildx imagetools inspect "${IMAGE}:${VERSION}" --format '{{.Manifest.Digest}}')"
+          notes="$(gh api "repos/${{ github.repository }}/releases/generate-notes" \
+            -f tag_name="$VERSION" --jq .body)"
+          # shellcheck disable=SC2016  # the backticks are markdown, not a subshell
+          printf '%s\n\nImage: `%s:%s`\nDigest: `%s` (promoted from the image CI built for this commit)\n' \
+            "$notes" "$IMAGE" "$VERSION" "$digest" > release-notes.md
+          gh release create "$VERSION" \
+            --title "$VERSION" \
+            --verify-tag \
+            --notes-file release-notes.md

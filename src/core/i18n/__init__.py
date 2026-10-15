@@ -9,7 +9,8 @@ from pathlib import Path
 
 from aiogram.utils.i18n import I18n
 
-SUPPORTED_LOCALES: tuple[str, ...] = ("en", "ru")
+from src.core.locales import SUPPORTED_LOCALES
+
 DOMAIN = "messages"
 # src/core/i18n/__init__.py -> the repository root, which holds locales/.
 LOCALES_DIR = Path(__file__).resolve().parents[3] / "locales"

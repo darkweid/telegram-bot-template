@@ -7,7 +7,7 @@ from aiogram.methods import SetMyCommands
 from aiogram.utils.i18n import I18n
 import pytest
 
-from src.core.i18n import SUPPORTED_LOCALES
+from src.core.locales import SUPPORTED_LOCALES
 from src.main import runtime as runtime_module
 from src.main.config import Config
 from src.main.runtime import (

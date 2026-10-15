@@ -12,7 +12,7 @@ from aiogram.utils.i18n import I18n
 
 from loggers import get_logger
 from src.admin.commands import ADMIN_COMMANDS
-from src.core.i18n import SUPPORTED_LOCALES
+from src.core.locales import SUPPORTED_LOCALES
 from src.core.telegram.commands import BotCommandSpec
 from src.core.telegram.roles import Roles
 from src.developer.commands import DEVELOPER_COMMANDS

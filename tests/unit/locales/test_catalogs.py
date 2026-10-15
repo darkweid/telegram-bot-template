@@ -9,7 +9,8 @@ from babel.messages.catalog import Catalog
 from babel.messages.pofile import read_po
 import pytest
 
-from src.core.i18n import DOMAIN, LOCALES_DIR, SUPPORTED_LOCALES
+from src.core.i18n import DOMAIN, LOCALES_DIR
+from src.core.locales import SUPPORTED_LOCALES
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 _PLACEHOLDER = re.compile(r"{(\w*)[^{}]*}")

@@ -1,0 +1,317 @@
+# Reusable CD. Deploys the image CI already built and pushed to GHCR - the box
+# never builds on this path. The caller picks the environment, the branch its
+# workflow_run trigger accepts, and optionally an existing image tag to redeploy.
+name: CD
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        description: "GitHub Environment holding this deployment's secrets: production or staging"
+        type: string
+        required: true
+      branch:
+        description: "Branch a workflow_run trigger is accepted from, and the only one a manual dispatch deploys from"
+        type: string
+        required: true
+      image_tag:
+        description: "Existing sha-<12> image tag to redeploy (blank = the tip of the branch)"
+        type: string
+        required: false
+        default: ""
+
+# The job reaches the box over SSH from secrets. The workflow token checks the
+# code out, reads the triggering CI run's jobs and pulls the image: the package
+# belongs to this repository, and the token dies with the job, so the box never
+# holds a long-lived registry credential and there is no PAT to rotate. Without
+# this block the job would inherit whatever the repository grants by default,
+# which on a job holding deploy credentials is more than it needs.
+permissions:
+  contents: read
+  actions: read
+  packages: read
+
+jobs:
+  # Decides what to deploy, outside the concurrency group below. GitHub keeps
+  # one waiting job per group, so a run that turns out to have nothing to deploy
+  # must never enter it: it would replace a code deploy that was waiting there.
+  check:
+    name: Check
+    # A manual dispatch always carries intent, so it skips the workflow_run
+    # conclusion/event/branch checks that exist only to filter the automatic
+    # trigger down to "CI passed on this environment's branch".
+    if: >-
+      ${{ github.event_name == 'workflow_dispatch' ||
+          (github.event.workflow_run.conclusion == 'success' &&
+           github.event.workflow_run.event == 'push' &&
+           github.event.workflow_run.head_branch == inputs.branch) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      sha: ${{ steps.ref.outputs.sha }}
+      image: ${{ steps.built.outputs.image }}
+
+    steps:
+      # A manual dispatch resolves its commit against the environment's branch,
+      # so it needs that branch's full history; workflow_run carries the exact
+      # commit CI validated and needs no checkout.
+      - name: Checkout repository
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      # image_tag is dispatcher-controlled input, so it is read from `env:` here -
+      # never interpolated into the script - and only a bare sha-<12 lowercase hex>
+      # shape is accepted, since that is the only shape CI ever produces, on either
+      # contour. The commit it names must be on the environment's branch: a
+      # commit only `stage` ever held must not reach production by hand. A blank
+      # tag deploys the tip of that branch, whichever ref the dispatch ran from.
+      - name: Resolve the commit to deploy
+        id: ref
+        env:
+          INPUT_TAG: ${{ inputs.image_tag }}
+          BRANCH: ${{ inputs.branch }}
+          RUN_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          if [ "${{ github.event_name }}" != "workflow_dispatch" ]; then
+            echo "sha=${RUN_SHA}" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ -z "$INPUT_TAG" ]; then
+            sha="$(git rev-parse --verify "origin/${BRANCH}^{commit}")"
+          else
+            if ! printf '%s' "$INPUT_TAG" | grep -qE '^sha-[0-9a-f]{12}$'; then
+              echo "::error::image_tag must be blank or match sha-<12 lowercase hex chars> (the only shape CI produces). Got '$INPUT_TAG'."
+              exit 1
+            fi
+            prefix="${INPUT_TAG#sha-}"
+            if ! sha="$(git rev-parse --verify "${prefix}^{commit}" 2>/dev/null)"; then
+              echo "::error::No commit in this repository's history matches image_tag prefix '$prefix'."
+              exit 1
+            fi
+            if ! git merge-base --is-ancestor "$sha" "origin/${BRANCH}"; then
+              echo "::error::Commit ${sha} is not on ${BRANCH}; only a commit of ${BRANCH} deploys to this environment."
+              exit 1
+            fi
+          fi
+          echo "sha=${sha}" >> "$GITHUB_OUTPUT"
+
+      # CI skips the image build for a push made up entirely of documentation,
+      # so there is not always a sha- tag to pull. The triggering run itself
+      # says whether it built one: CI classifies the whole push, and a commit
+      # range judged again here could disagree - a push whose last commit is
+      # documentation and whose earlier ones are code would skip a deploy that
+      # was due. The attempt, not the run: a re-run of a failed build is what
+      # triggered this job.
+      #
+      # A manual dispatch is explicit intent and is never gated.
+      - name: Check that CI built the image
+        id: built
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+          RUN_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "image=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          conclusion="$(gh api --paginate \
+            "repos/${{ github.repository }}/actions/runs/${RUN_ID}/attempts/${RUN_ATTEMPT}/jobs?per_page=100" \
+            --jq '.jobs[] | select(.name | endswith("Build & push image")) | .conclusion')"
+          if [ "$conclusion" = "success" ]; then
+            echo "image=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::CI run ${RUN_ID} built no image (build job: ${conclusion:-absent}); nothing to deploy."
+            echo "image=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  deploy:
+    name: Deploy
+    needs: check
+    if: needs.check.outputs.image == 'true'
+    # The DEPLOY_ENABLED gate lives in the caller: environment variables are not
+    # readable in a job-level `if`, because the environment is only resolved once
+    # the job starts. Here the environment is where the server secrets and
+    # APP_DIR come from.
+    environment: ${{ inputs.environment }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # Never parallel within one environment: two merges must not run two
+    # migrations against the same database at once. A running deploy is never
+    # cancelled; GitHub keeps one waiting job per group, so of several waiting
+    # deploys only the newest runs. Environments are separate machines with
+    # separate databases, so they queue independently.
+    concurrency:
+      group: deploy-${{ inputs.environment }}
+      cancel-in-progress: false
+
+    steps:
+      - name: Capture job start time
+        run: echo "JOB_START_TS=$(date +%s)" >> "$GITHUB_ENV"
+
+      # The commit `check` resolved, so the runner's checkout, the image tag
+      # pulled from GHCR and the remote box all agree on it.
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.check.outputs.sha }}
+
+      - name: Compute image and tag
+        id: meta
+        run: |
+          image_lower="$(echo "ghcr.io/${{ github.repository }}" | tr '[:upper:]' '[:lower:]')"
+          short_sha="$(echo "${{ needs.check.outputs.sha }}" | cut -c1-12)"
+          echo "image=${image_lower}" >> "$GITHUB_OUTPUT"
+          echo "tag=sha-${short_sha}" >> "$GITHUB_OUTPUT"
+
+      # known_hosts comes from a secret: the SSH_KNOWN_HOSTS lines `make
+      # server-provision` prints, read from the box over a verified connection.
+      # Keyscanning inside the job would trust whatever answers, which is the
+      # same hole as StrictHostKeyChecking=no.
+      - name: Set up SSH
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.SSH_KNOWN_HOSTS }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+          SERVER_IP: ${{ secrets.SERVER_IP }}
+        run: |
+          # An unset value here would otherwise surface as an opaque ssh failure
+          # further down; check emptiness only, never print the value itself.
+          missing=""
+          [ -z "$SSH_PRIVATE_KEY" ] && missing="${missing}SSH_PRIVATE_KEY "
+          [ -z "$SSH_KNOWN_HOSTS" ] && missing="${missing}SSH_KNOWN_HOSTS "
+          [ -z "$SSH_USER" ] && missing="${missing}SSH_USER "
+          [ -z "$SERVER_IP" ] && missing="${missing}SERVER_IP "
+          if [ -n "$missing" ]; then
+            echo "::error::Missing secret(s) for the ${{ inputs.environment }} environment: ${missing}(Settings -> Environments)."
+            exit 1
+          fi
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          # Read from the env copies above rather than interpolated again: a key
+          # whose first line began with a backslash would otherwise reach echo as
+          # an escape sequence on the shells that honour them.
+          printf '%s\n' "$SSH_PRIVATE_KEY" | tr -d '\r' > ~/.ssh/id_deploy_key
+          chmod 600 ~/.ssh/id_deploy_key
+          printf '%s\n' "$SSH_KNOWN_HOSTS" | tr -d '\r' > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+
+      - name: Deploy over SSH
+        id: deploy
+        env:
+          IMAGE: ${{ steps.meta.outputs.image }}
+          TAG: ${{ steps.meta.outputs.tag }}
+          # An environment variable, so an operator sets it per environment. It is
+          # read through env rather than interpolated into the heredoc below: the
+          # heredoc is unquoted, so an interpolated `$(...)` in the value would be
+          # executed on the runner, while an expanded variable's contents are not
+          # re-evaluated there. The expanded text is still parsed by `bash -s` on
+          # the server, so the value must be one the operator sets and trusts.
+          APP_DIR: ${{ vars.APP_DIR }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+          SERVER_IP: ${{ secrets.SERVER_IP }}
+          # Some providers hand a server over on a port other than 22.
+          # Read through env and validated below, like APP_DIR.
+          SSH_PORT: ${{ vars.SSH_PORT }}
+        run: |
+          if [ -z "$APP_DIR" ]; then
+            echo "::error::APP_DIR is not set for the ${{ inputs.environment }} environment (Settings -> Environments -> Variables)."
+            exit 1
+          fi
+          ssh_port="${SSH_PORT:-22}"
+          case "$ssh_port" in
+            ''|*[!0-9]*)
+              echo "::error::SSH_PORT must be a port number, got '$ssh_port' (Settings -> Environments -> Variables)."
+              exit 1
+              ;;
+          esac
+          if [ "$ssh_port" -lt 1 ] || [ "$ssh_port" -gt 65535 ]; then
+            echo "::error::SSH_PORT must be between 1 and 65535, got '$ssh_port'."
+            exit 1
+          fi
+          # shellcheck disable=SC2087  # the heredoc expands here on purpose: the
+          # image tag and the secrets come from this runner, not from the server.
+          ssh -p "$ssh_port" -i ~/.ssh/id_deploy_key -o UserKnownHostsFile=~/.ssh/known_hosts \
+            "${SSH_USER}@${SERVER_IP}" bash -s <<EOF
+          set -euo pipefail
+          cd "$APP_DIR"
+          git fetch --quiet origin
+          git checkout --quiet ${{ needs.check.outputs.sha }}
+          echo "${{ github.token }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          # The token would otherwise sit base64-encoded in ~/.docker/config.json
+          # on the box until the next deploy overwrites it.
+          trap 'docker logout ghcr.io >/dev/null 2>&1 || true' EXIT
+          BUILD=0 BOT_IMAGE="${IMAGE}:${TAG}" bash infra/deploy/deploy.sh
+          EOF
+
+      # Never fails the job: the run's colour is the deploy's outcome, and an alert
+      # channel that is down or not configured must not turn a good deploy red.
+      # Empty secrets - none set, or an organization secret a Free plan does not
+      # pass to a private repository - skip the alert with a warning. always()
+      # keeps it alive after a failed step, the case it exists for: a deploy
+      # skipped by an earlier failure reports FAILED. A run with nothing to
+      # deploy never starts this job, so it sends nothing.
+      - name: Telegram notification
+        if: always()
+        continue-on-error: true
+        env:
+          ALERT_BOT_TOKEN: ${{ secrets.ALERT_BOT_TOKEN }}
+          ALERT_CHAT_ID: ${{ secrets.ALERT_CHAT_ID }}
+          DEPLOY_OUTCOME: ${{ steps.deploy.outcome }}
+          ENVIRONMENT_NAME: ${{ inputs.environment }}
+          DEPLOYED_SHA: ${{ needs.check.outputs.sha }}
+        run: |
+          if [ -z "$ALERT_BOT_TOKEN" ] || [ -z "$ALERT_CHAT_ID" ]; then
+            echo "::warning::ALERT_BOT_TOKEN or ALERT_CHAT_ID is empty for the ${ENVIRONMENT_NAME} environment; no deploy alert sent (Settings -> Environments)."
+            exit 0
+          fi
+
+          sanitize_html() {
+            echo "$1" \
+              | sed 's/&/\&amp;/g' \
+              | sed 's/</\&lt;/g' \
+              | sed 's/>/\&gt;/g' \
+              | sed 's/"/\&quot;/g' \
+              | sed "s/'/\&#39;/g"
+          }
+
+          # The chat is shared by every environment, so the environment has to be
+          # visible in the first line, not only in the body.
+          ENVIRONMENT_LABEL=$(echo "$ENVIRONMENT_NAME" | tr '[:lower:]' '[:upper:]')
+          if [ "$DEPLOY_OUTCOME" = "success" ]; then
+            STATUS="<b>SUCCESS</b> · ${ENVIRONMENT_LABEL}"
+          else
+            STATUS="<b>FAILED</b> · ${ENVIRONMENT_LABEL}"
+          fi
+
+          END_TS=$(date +%s)
+          DURATION=$((END_TS - ${JOB_START_TS:-END_TS}))
+          if [ "$DURATION" -gt 60 ]; then
+            DURATION_HUMAN="$((DURATION / 60)) min $((DURATION % 60)) sec"
+          else
+            DURATION_HUMAN="${DURATION} sec"
+          fi
+
+          # Commit subject and author are free-form and can contain <, > or &;
+          # unescaped, Telegram rejects the whole HTML message with 400.
+          COMMIT_MSG=$(sanitize_html "$(git log -1 --pretty=format:'%s' 2>/dev/null || echo 'unknown')")
+          AUTHOR=$(sanitize_html "$(git log -1 --pretty=format:'%an' 2>/dev/null || echo 'unknown')")
+          PROJECT=$(sanitize_html "${GITHUB_REPOSITORY}")
+          PIPELINE_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+
+          MESSAGE="${STATUS}
+          <b>Project</b>: ${PROJECT}
+          <b>Version</b>: <code>${DEPLOYED_SHA}</code>
+          <b>Author</b>: ${AUTHOR}
+          <b>Duration</b>: ${DURATION_HUMAN}
+          <b>Attempt</b>: ${GITHUB_RUN_ATTEMPT}
+          <b>Pipeline</b>: <a href=\"${PIPELINE_URL}\">Open</a>
+          <b>Commit</b>: ${COMMIT_MSG}"
+
+          # --fail-with-body: a rejected message shows Telegram's reason in the log
+          # (the step still cannot fail the job).
+          curl -s --fail-with-body -X POST "https://api.telegram.org/bot${ALERT_BOT_TOKEN}/sendMessage" \
+            --data-urlencode "chat_id=${ALERT_CHAT_ID}" \
+            --data-urlencode "parse_mode=HTML" \
+            --data-urlencode "text=${MESSAGE}"
