@@ -12,6 +12,7 @@ from src.core.tasks.heartbeat import HEARTBEAT_INTERVAL_SECONDS
 from src.main.config import BotConfig, WebhookConfig, WebServerConfig
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
+PROJECT = "telegram-bot-template"
 
 
 def _load(relative_path: str) -> dict[str, Any]:
@@ -140,7 +141,7 @@ def _make(tmp_path: Path, target: str, bot_image: str) -> list[str]:
         env={
             "PATH": f"{stubs}{os.pathsep}{os.environ['PATH']}",
             "STUB_LOG": str(log),
-            "STUB_IMAGES": f"{bot_image} telegram-bot-template-postgres:18 redis:8.10",
+            "STUB_IMAGES": f"{bot_image} {PROJECT}-postgres:18 redis:8.10",
         },
         capture_output=True,
         check=True,
@@ -167,7 +168,7 @@ def test_make_never_builds_the_checkout_under_a_pinned_image(
     pinned_dir = tmp_path / "pinned"
     local_dir.mkdir()
     pinned_dir.mkdir()
-    assert _make(local_dir, target, "telegram-bot-template-bot:latest") == local
+    assert _make(local_dir, target, f"{PROJECT}-bot:latest") == local
     assert _make(pinned_dir, target, PINNED_IMAGE) == pinned
 
 
@@ -194,7 +195,7 @@ def test_dev_override_keeps_the_production_image_out_of_the_dev_stack() -> None:
     """The dev bot migrates itself from the mounted tree; the one-shot service
     must neither pull BOT_IMAGE nor run the baked-in migrations."""
     migrate = _load("infra/docker-compose.override.yml")["services"]["migrate"]
-    assert migrate["image"] == "telegram-bot-template-bot-dev:latest"
+    assert migrate["image"] == f"{PROJECT}-bot-dev:latest"
     assert migrate["command"] == ["true"]
 
 

@@ -12,6 +12,7 @@ from scripts import init_project
 from scripts.init_project import (
     GENERATED_SECRETS,
     MAKEFILE_BLOCK,
+    MAX_NAME_LENGTH,
     SELF_FILES,
     InitError,
     main,
@@ -234,3 +235,21 @@ def test_the_script_runs_on_python_3_9() -> None:
         if isinstance(node, ast.ImportFrom) and node.module
     }
     assert imported <= sys.stdlib_module_names | {"__future__"}
+
+
+def test_the_rename_changes_only_the_project_constants_in_python(copy: Path) -> None:
+    """A renamed copy has to pass `make lint` untouched: black wraps a line by its
+    length, so a Python line that carries the name is reflowed for some names and
+    not for others. The name lives in one single-line constant per module, which
+    no name up to the longest one can make black rewrap."""
+    run(copy, "a" * MAX_NAME_LENGTH, None)
+    diff = _git(
+        copy, "diff", "-U0", "--", "*.py", *(f":!{path}" for path in SELF_FILES)
+    ).splitlines()
+    changed = [
+        line[1:]
+        for line in diff
+        if line[:1] in "+-" and not line.startswith(("+++", "---"))
+    ]
+    assert changed
+    assert all(re.fullmatch(r'PROJECT = "[a-z0-9-]+"', line) for line in changed)
