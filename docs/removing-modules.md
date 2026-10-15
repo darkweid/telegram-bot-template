@@ -83,14 +83,19 @@ layer; `src/core/llm` stays and has no caller until your own domain adds one.
 13. The documentation. `README.md` uses `src/note` as the reference domain and
     `/summarize` as the LLM example. In `docs/`: `architecture.md` (examples
     throughout, and the reference domain in `## Adding a module`),
-    `bot-layer.md` (the `CallbackData` example), `i18n.md` (the command
-    description example, and the step that adds a language to
-    `RESPONSE_LANGUAGES`, which lived in the note prompts) and `llm.md` (the
-    worked example). Point each example at a module you keep, or cut it.
+    `background-jobs.md` (the `NOTE_TASKS` snippet under
+    `## Declaring a task`), `bot-layer.md` (the `CallbackData` example, and
+    "note" in the router order), `i18n.md` (the command description example,
+    and the step that adds a language to `RESPONSE_LANGUAGES`, which lived in
+    the note prompts) and `llm.md` (the worked example). Point each example at
+    a module you keep, or cut it.
+14. `git grep -n -i note -- README.md docs` and rewrite or cut every hit that
+    describes the module. The documentation check catches a stale path, not a
+    stale sentence.
 
 Some matches of "note" stay and are correct: the test models `Note` in
 `tests/unit/src/core/database/`, the `note_summary` purpose strings in the LLM
-tests (fixture data, not an import), and `add_note` on exceptions in the S3
+and `/stats` tests (fixture data, not an import), and `add_note` on exceptions in the S3
 adapter.
 
 Then run `make lint`, `make test` and `make test-integration`.
@@ -121,8 +126,8 @@ migrations before it replaces the worker.
    under `# BroadcastConfig` in `KNOWN_KEYS` (`scripts/ops/check_env.py`), and
    the `## Broadcast` section of `docs/configuration.md`. Delete the keys from
    every `.env` as well: `make check-env` warns about a key the template no
-   longer reads. `/broadcast` is also listed in the `ADMIN_IDS` comment of
-   `.env.example` and its row in `docs/configuration.md`.
+   longer reads. Remove `/broadcast` from the `ADMIN_IDS` comment of
+   `.env.example` and from its row in `docs/configuration.md`.
 10. Tests outside the package:
     - `tests/unit/src/main/test_config.py`: remove
       `test_broadcast_defaults_stay_under_the_bot_api_limit`,
@@ -148,13 +153,25 @@ migrations before it replaces the worker.
       The revision drops the table `broadcasts` and the enum type
       `broadcaststatus`.
 12. `make i18n-update`, then `make i18n-compile`.
-13. The documentation. `README.md` has a `## Broadcast` section and lists
-    broadcasts among the features and in the layout. In `docs/`, the links to
-    `broadcast.md` in `background-jobs.md` and `bot-layer.md` break with the
-    file; `background-jobs.md` and `i18n.md` use `RunBroadcastUseCase` as the
-    example of translating inside a task (point them at
-    `src/user/usecases/notify_admins.py`), and `architecture.md` lists the
-    package and the advisory-lock example.
+13. The documentation. `README.md` has a `## Broadcast` section, lists
+    broadcasts among the features, the admin role's powers and the layout, and
+    names them where it explains what a role does not bypass. In `docs/`:
+    - the links to `broadcast.md` in `background-jobs.md` and `bot-layer.md`
+      break with the file;
+    - `background-jobs.md` names `RunBroadcastUseCase` as the task that wraps
+      its rendering in `i18n.use_locale`: cut that half of the sentence and
+      keep the `NotifyAdminsOfNewUserUseCase` half;
+    - `i18n.md` names the titles in `src/broadcast/texts.py` as an `N_`
+      example, and ends its section on text outside an update with the
+      `i18n.use_locale` pattern of the broadcast report: cut that sentence,
+      since no other task renders that way;
+    - `bot-layer.md` has "broadcast" in the router order, and names
+      broadcasts under reachability and roles;
+    - `architecture.md` lists the package and uses `StartBroadcastUseCase` as
+      the advisory-lock example.
+14. `git grep -n -i broadcast -- README.md docs` and rewrite or cut every hit
+    that describes the module. The documentation check catches a stale path,
+    not a stale sentence.
 
 What stays:
 
@@ -165,9 +182,15 @@ What stays:
   `722c7847da4b_add_user_bans`, not from a broadcast migration, so neither
   path touches it, and
   `test_broadcast_recipients_have_a_partial_index_on_id` keeps passing. A bot
-  that will never message its users in bulk can drop the index with a
-  migration of its own and remove the two methods with their tests in
-  `tests/integration/src/user/test_user_repository.py`.
+  that will never message its users in bulk can drop all of it: remove the
+  `Index("ix_users_recipients", ...)` from `__table_args__` in
+  `src/user/models.py` and run `make migration m="drop recipients index"`
+  (autogenerate writes the drop only once the model no longer declares the
+  index), then remove `_recipient_filter` and the two methods from
+  `src/user/repositories.py`, their tests in
+  `tests/integration/src/user/test_user_repository.py`, and
+  `test_broadcast_recipients_have_a_partial_index_on_id` from
+  `tests/integration/src/core/database/test_migrations.py`.
 - **`Pacer`** in `src/core/limiter/pacer.py`, a local pace for any loop of Bot
   API calls; nothing provides it once `BroadcastProvider` is gone.
 - Comments that give broadcasts as the reason for a rule: in
