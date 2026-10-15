@@ -8,15 +8,26 @@
     path: "{{ bot_mode_guard_env_file }}"
   register: bot_mode_guard_env
 
-- name: Read the bot's .env
-  ansible.builtin.slurp:
-    src: "{{ bot_mode_guard_env_file }}"
+# Only the BOT_MODE lines leave the server: the rest of .env holds the bot token
+# and other secrets, which must not reach Ansible's output (-v prints results).
+# grep exits 1 on no match, which is a valid answer.
+- name: Read the BOT_MODE lines of the bot's .env
+  ansible.builtin.command:
+    argv:
+      - grep
+      - -E
+      - '^[[:space:]]*(export[[:space:]]+)?BOT_MODE[[:space:]]*='
+      - "{{ bot_mode_guard_env_file }}"
   register: bot_mode_guard_env_content
+  changed_when: false
+  failed_when: bot_mode_guard_env_content.rc > 1
+  check_mode: false
   when: bot_mode_guard_env.stat.exists
 
 # Read as docker compose and scripts/ops/check_env.py read it: an optional
-# `export `, the last BOT_MODE line wins, a ` #` comment after an unquoted value
-# is dropped, quotes are stripped. No line means the bot's own default, polling.
+# `export`, blanks around the name and the `=`, the last BOT_MODE line wins, a
+# ` #` comment after an unquoted value is dropped, quotes are stripped. No line
+# means the bot's own default, polling.
 - name: Refuse a bot_mode that differs from BOT_MODE in .env
   ansible.builtin.assert:
     that:
@@ -28,8 +39,8 @@
     quiet: true
   vars:
     bot_mode_guard_env_mode: >-
-      {{ (['polling'] + (bot_mode_guard_env_content.content | b64decode
-          | regex_findall('(?m)^(?:export +)?BOT_MODE=(.*)$')))
-         | last | regex_replace(' +#.*$', '') | trim
+      {{ (['polling'] + (bot_mode_guard_env_content.stdout
+          | regex_findall('(?m)^[ \t]*(?:export[ \t]+)?BOT_MODE[ \t]*=[ \t]*(.*)$')))
+         | last | regex_replace('[ \t]+#.*$', '') | trim
          | regex_replace("^['\"]|['\"]$", "") }}
   when: bot_mode_guard_env.stat.exists

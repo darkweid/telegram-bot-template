@@ -35,7 +35,8 @@ webhook="$(preview webhook)"
 grep -qx '+PUBLIC_TCP_PORTS=80,443' <<<"$webhook" || fail "the webhook preview does not open 80 and 443"
 
 echo "== a preview whose bot_mode differs from BOT_MODE in .env" >&2
-printf 'BOT_MODE=webhook\n' > "$env_file"
+# Last line wins; leading blanks, export, quotes and a comment must all be read.
+printf 'BOT_MODE=polling\n  export BOT_MODE="webhook"  # comment\n' > "$env_file"
 if mismatch="$(.venv/bin/ansible-playbook -i tests/ci/inventory playbooks/site.yml --check -e bot_mode=polling 2>&1)"; then
     fail "a bot_mode that differs from .env passed"
 fi

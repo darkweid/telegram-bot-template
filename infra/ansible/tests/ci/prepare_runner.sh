@@ -16,6 +16,10 @@ sudo apt-get update -q
 # python3-apt: the apt module runs under the system interpreter.
 sudo apt-get install -yq openssh-server ufw python3-apt
 
+# The sshd -t check of the sshd role needs it; ssh.socket creates it only on the
+# first connection, which a runner may never have had.
+sudo install -d -m 0755 /run/sshd
+
 for name in ops deploy; do
     ssh-keygen -q -t ed25519 -N '' -C "ci-$name" -f "$keys/$name"
 done

@@ -40,6 +40,8 @@ What a provisioned server has:
   provider's console shows. Host key checking stays on; when a run moves sshd to
   another port, it adds the same keys under that port to your `known_hosts`
   itself, read over the connection you verified.
+- On macOS with python.org's Python, run its `Install Certificates.command` once,
+  or `ansible-galaxy` fails with `CERTIFICATE_VERIFY_FAILED`.
 - If the provider has a firewall or security group of its own, it allows
   `sshd_port`, plus 80 and 443 for a webhook bot.
 
@@ -58,7 +60,7 @@ Edit `inventory/production/hosts.yml` (the address) and
 | `users_ops_authorized_keys` | Your public key(s). Each one grants root. |
 | `users_deploy_authorized_keys` | The public half of the `SSH_PRIVATE_KEY` CD uses: `ssh-keygen -t ed25519 -N '' -C cd-deploy -f cd_deploy_key`, the contents of `cd_deploy_key` go into that secret. |
 | `app_name` | The checkout lands in `/srv/<app_name>`. |
-| `bot_mode` | `BOT_MODE` of the server's `.env`: `webhook` opens 80 and 443, `polling` opens no web port. A run stops before touching anything when the two differ; after changing the mode, run `make server-provision` before the deploy. |
+| `bot_mode` | `BOT_MODE` of the server's `.env`: `webhook` opens 80 and 443, `polling` opens no web port. A run stops before touching anything when the two differ. To change the mode, set `BOT_MODE` (and `COMPOSE_PROFILES`) in the server's `.env` and `bot_mode` in the inventory together, then run `make server-provision`, then deploy. |
 | `bot_mode_env_file` | Only when `app_checkout_dir` is not `/srv/<app_name>`: the `.env` the `bot_mode` check reads. |
 | `app_checkout_repo_url` | The repository's SSH URL. |
 | `app_checkout_repo_host_keys` | The git server's host keys; the example holds GitHub's. |
