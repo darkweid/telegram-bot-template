@@ -26,6 +26,16 @@ def _step(name: str) -> dict:
     return steps[0]
 
 
+def _ci_step(name: str) -> dict:
+    steps = [
+        step
+        for step in _load("_ci.yml")["jobs"]["build-and-push"]["steps"]
+        if step.get("name") == name
+    ]
+    assert len(steps) == 1, name
+    return steps[0]
+
+
 @pytest.mark.parametrize("caller", sorted(CALLERS))
 def test_each_deploy_follows_the_ci_of_its_branch(caller: str) -> None:
     """workflow_run matches the triggering workflow by its display name: a CI
@@ -95,3 +105,28 @@ def test_the_alert_never_fails_the_deploy() -> None:
     assert step["env"]["ALERT_CHAT_ID"] == "${{ secrets.ALERT_CHAT_ID }}"
     assert "secrets." not in step["run"]
     assert "::warning::" in step["run"]
+
+
+def test_the_build_check_names_the_job_ci_runs() -> None:
+    """The deploy finds CI's image by the build job's display name. A renamed
+    job makes every CD run end green with nothing deployed."""
+    build_name = _load("_ci.yml")["jobs"]["build-and-push"]["name"]
+    script = _step("Check that CI built the image")["run"]
+
+    assert f'endswith("{build_name}")' in script
+
+
+def test_the_deploy_computes_the_image_the_way_ci_pushes_it() -> None:
+    """A different path or tag recipe on either side deploys an image that was
+    never pushed, and the pull fails halfway through a deploy."""
+    ci_script = _ci_step("Compute image and tag")["run"]
+    cd_script = _step("Compute image and tag")["run"]
+
+    for recipe in (
+        "tr '[:upper:]' '[:lower:]'",
+        'echo "ghcr.io/${{ github.repository }}"',
+        "cut -c1-12",
+        'echo "tag=sha-${short_sha}"',
+    ):
+        assert recipe in ci_script, recipe
+        assert recipe in cd_script, recipe

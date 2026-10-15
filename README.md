@@ -56,6 +56,8 @@ pull requests.
   passes them builds the image and pushes it to GHCR, tagged `latest` and
   `sha-` plus the first 12 characters of the commit. A change that touches
   only documentation runs the lint and Gitleaks jobs alone.
+- Continuous deployment to a server over SSH after CI, one workflow per
+  environment, off until a repository variable turns it on.
 
 ## Architecture
 
@@ -187,8 +189,8 @@ CD is off until you turn it on. After CI passes on a push, `CD (prod)` deploys
 `main` and `CD (stage)` deploys `stage`: each pulls the image that CI run pushed
 to GHCR (`sha-<12>`) on the server and runs `infra/deploy/deploy.sh` with
 `BUILD=0`, so the server never builds. A push of documentation only builds no
-image and deploys nothing. Deploys to one environment queue; they never run
-side by side or get cancelled.
+image and deploys nothing. A deploy waits for the one already running; of
+several waiting, only the newest runs. A running deploy is never cancelled.
 
 To turn it on for an environment:
 
@@ -456,8 +458,8 @@ you do).
 ## Project layout
 
 ```text
-.github/            CI, release and update workflows, the Dependabot config,
-                    the docs-only change action
+.github/            CI, deploy, release, Ansible and update workflows, the
+                    Dependabot config, the docs-only change action
 infra/              Dockerfiles, compose files, Postgres and Redis config, requirements
 locales/            gettext catalogs, one directory per language
 loggers/            logging setup: plain-text or JSON lines on stdout

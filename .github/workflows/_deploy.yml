@@ -49,9 +49,11 @@ jobs:
            github.event.workflow_run.head_branch == inputs.branch) }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    # Never cancelled and never parallel within one environment: two merges must
-    # not run two migrations against the same database at once. Environments are
-    # separate machines with separate databases, so they queue independently.
+    # Never parallel within one environment: two merges must not run two
+    # migrations against the same database at once. A running deploy is never
+    # cancelled; GitHub keeps one waiting job per group, so of several waiting
+    # deploys only the newest runs. Environments are separate machines with
+    # separate databases, so they queue independently.
     concurrency:
       group: deploy-${{ inputs.environment }}
       cancel-in-progress: false
@@ -87,12 +89,8 @@ jobs:
             if [ -z "$INPUT_TAG" ]; then
               sha="${{ github.sha }}"
             else
-              if ! printf '%s' "$INPUT_TAG" | grep -qE '^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$'; then
-                echo "::error::image_tag '$INPUT_TAG' has an invalid shape."
-                exit 1
-              fi
               if ! printf '%s' "$INPUT_TAG" | grep -qE '^sha-[0-9a-f]{12}$'; then
-                echo "::error::image_tag must be blank or match sha-<12 lowercase hex chars> - CI never produces any other shape. Got '$INPUT_TAG'."
+                echo "::error::image_tag must be blank or match sha-<12 lowercase hex chars> (the only shape CI produces). Got '$INPUT_TAG'."
                 exit 1
               fi
               prefix="${INPUT_TAG#sha-}"
@@ -184,8 +182,11 @@ jobs:
           # read through env rather than interpolated into the heredoc below: the
           # heredoc is unquoted, so an interpolated `$(...)` in the value would be
           # executed on the runner, while an expanded variable's contents are not
-          # re-evaluated.
+          # re-evaluated there. The expanded text is still parsed by `bash -s` on
+          # the server, so the value must be one the operator sets and trusts.
           APP_DIR: ${{ vars.APP_DIR }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+          SERVER_IP: ${{ secrets.SERVER_IP }}
           # Some providers hand a server over on a port other than 22.
           # Read through env and validated below, like APP_DIR.
           SSH_PORT: ${{ vars.SSH_PORT }}
@@ -208,7 +209,7 @@ jobs:
           # shellcheck disable=SC2087  # the heredoc expands here on purpose: the
           # image tag and the secrets come from this runner, not from the server.
           ssh -p "$ssh_port" -i ~/.ssh/id_deploy_key -o UserKnownHostsFile=~/.ssh/known_hosts \
-            "${{ secrets.SSH_USER }}@${{ secrets.SERVER_IP }}" bash -s <<EOF
+            "${SSH_USER}@${SERVER_IP}" bash -s <<EOF
           set -euo pipefail
           cd "$APP_DIR"
           git fetch --quiet origin
