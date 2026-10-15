@@ -147,19 +147,22 @@ def test_the_env_gets_generated_secrets(copy: Path) -> None:
 
 def test_an_existing_env_keeps_its_values(copy: Path) -> None:
     """A developer who ran the stack before init keeps the token and the
-    passwords their volumes were created with."""
+    passwords their volumes were created with; the bot's name and locale are
+    what the run is for, so those change."""
     (copy / ".env").write_text(
+        'PROJECT_NAME="Old name"\nDEFAULT_LOCALE=en\n'
         "BOT_TOKEN=123:kept\nPOSTGRES_PASSWORD=mine\n"
         "REDIS_PASSWORD=example-redis-password-not-real\nWEBHOOK_SECRET=\n",
         encoding="utf-8",
     )
-    run(copy, "demo", None)
+    run(copy, "demo", "ru")
     env = _env(copy)
     assert env["BOT_TOKEN"] == "123:kept"
     assert env["POSTGRES_PASSWORD"] == "mine"
     assert SECRET_PATTERN.fullmatch(env["REDIS_PASSWORD"])
     assert SECRET_PATTERN.fullmatch(env["WEBHOOK_SECRET"])
     assert env["PROJECT_NAME"] == '"demo"'
+    assert env["DEFAULT_LOCALE"] == "ru"
 
 
 def test_secrets_never_reach_the_output(
@@ -201,11 +204,14 @@ def test_the_docs_still_check_out_after_init(copy: Path) -> None:
 
 def test_a_dirty_tree_is_refused_untouched(copy: Path) -> None:
     """The rename has to be one diff the developer can review or drop."""
+    kept = {path: (copy / path).read_bytes() for path in (*SELF_FILES, "README.md")}
     (copy / "src/main/config.py").write_text("changed\n", encoding="utf-8")
     with pytest.raises(InitError, match="commit or stash"):
         run(copy, "demo", None)
-    compose = (copy / "infra/docker-compose.yml").read_text(encoding="utf-8")
-    assert "name: telegram-bot-template" in compose
+    assert _git(copy, "status", "--porcelain") == " M src/main/config.py\n"
+    assert not (copy / ".env").exists()
+    for path, content in kept.items():
+        assert (copy / path).read_bytes() == content
 
 
 def test_a_second_run_is_refused(copy: Path) -> None:
@@ -214,7 +220,7 @@ def test_a_second_run_is_refused(copy: Path) -> None:
     run(copy, "demo", None)
     _git(copy, "add", "-A")
     _git(copy, "commit", "-qm", "init")
-    with pytest.raises(InitError, match="already initialised"):
+    with pytest.raises(InitError, match="already initialized"):
         run(copy, "other", None)
 
 

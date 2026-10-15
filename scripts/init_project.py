@@ -1,6 +1,10 @@
 """Turn a fresh copy of the template into a bot of its own: rename the project,
 fill .env with generated secrets, set the default locale and replace the README.
 
+PROJECT_NAME, and DEFAULT_LOCALE when a locale is given, are set in .env.example
+and in .env, an existing .env included: the rename is the point of the run.
+Secrets already in an existing .env are kept.
+
 It runs once, before the virtualenv exists, on whatever `python3` the machine
 has, so it uses the standard library only and nothing newer than Python 3.9.
 pyupgrade may rewrite its annotations, which `from __future__ import
@@ -35,8 +39,8 @@ MAKEFILE = "Makefile"
 README = "README.md"
 SELF_FILES = ("scripts/init_project.py", "tests/unit/scripts/test_init_project.py")
 
-# Shared placeholders would otherwise start the dev stack; `make check-env`
-# refuses them before a deploy anyway.
+# Otherwise the dev stack would start with the published `not-real` placeholders
+# as its passwords; `make check-env` refuses them only at deploy time.
 GENERATED_SECRETS = ("POSTGRES_PASSWORD", "REDIS_PASSWORD", "WEBHOOK_SECRET")
 PLACEHOLDER_MARK = "not-real"
 
@@ -69,7 +73,7 @@ make run-dev                  # put the token from @BotFather into BOT_TOKEN in 
 make logs s=bot
 ```
 
-`make` lists every target. How the code is organised, how to deploy it and how
+`make` lists every target. How the code is organized, how to deploy it and how
 to remove the modules this bot does not need: [docs/](docs/).
 """
 
@@ -125,7 +129,7 @@ def _check_can_run(root: Path, name: str, locale: str | None) -> list[str]:
     if f"\nname: {TEMPLATE_SLUG}\n" not in (root / COMPOSE_FILE).read_text(
         encoding="utf-8"
     ):
-        raise InitError("this copy is already initialised")
+        raise InitError("this copy is already initialized")
     if _git(root, "status", "--porcelain"):
         raise InitError(
             "commit or stash your changes first: the rename is meant to be one diff"
@@ -188,6 +192,8 @@ def configure_env(root: Path, name: str, locale: str | None) -> list[str]:
         if not current or PLACEHOLDER_MARK in current:
             text = _set_key(text, key, secrets.token_urlsafe(48))
             generated.append(key)
+    # Created private before any secret is written; chmod also tightens an .env
+    # that existed with wider rights.
     env.touch(mode=0o600, exist_ok=True)
     env.chmod(0o600)
     env.write_text(text, encoding="utf-8")
