@@ -161,6 +161,12 @@ cert-issue: ## Issue the webhook's certificate: make cert-issue DOMAIN=bot.examp
 	$(DOCKER_COMPOSE_WEBHOOK) restart nginx
 	$(DOCKER_COMPOSE_WEBHOOK) run --rm --no-deps -e NGINX_REQUIRE_TLS=1 nginx nginx -t
 
+# The system python3, not the virtualenv's: the script needs the standard
+# library only and runs the same way on the box, as deploy.sh's first step.
+.PHONY: check-env
+check-env: ## Check .env before a deploy (formats, compose profile, placeholders left in)
+	python3 scripts/ops/check_env.py .env
+
 ##@ Logs
 
 .PHONY: logs

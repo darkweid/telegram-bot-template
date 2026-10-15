@@ -141,6 +141,12 @@ serves `/live`, `/ready` and `/health` to private addresses only, and closes
 every other connection without an answer. Port 80 serves certbot's challenge
 and nothing else.
 
+`make check-env` checks `.env` before anything starts from it: the token and
+webhook formats, `COMPOSE_PROFILES` against `BOT_MODE`, the subnets, the
+container limits, and placeholders from `.env.example` left in a password or
+in the key of an enabled feature. It names the key at fault and never prints a
+value. The deploy script runs it first.
+
 Issue the first certificate once DNS for the webhook host points at the box
 and port 80 is open; `DOMAIN` is the host of `WEBHOOK_BASE_URL`:
 
