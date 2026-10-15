@@ -157,13 +157,6 @@ class AnthropicLLMClient:
     def _response(
         self, message: Message, *, model: str, structured: bool, latency_ms: int
     ) -> LLMResponse:
-        if message.stop_reason == "refusal":
-            category = (
-                None if message.stop_details is None else message.stop_details.category
-            )
-            raise LLMRefused(
-                f"Anthropic refusal category={category}", provider=_PROVIDER
-            )
         tokens = LLMUsage(
             input_tokens=message.usage.input_tokens,
             output_tokens=message.usage.output_tokens,
@@ -172,6 +165,16 @@ class AnthropicLLMClient:
         )
         # Priced by the requested id: the price table and the config use it.
         usage = dataclasses.replace(tokens, cost_usd=self._pricing.cost(model, tokens))
+        if message.stop_reason == "refusal":
+            category = (
+                None if message.stop_details is None else message.stop_details.category
+            )
+            # A refusal is billed like any answer.
+            raise LLMRefused(
+                f"Anthropic refusal category={category}",
+                provider=_PROVIDER,
+                usage=usage,
+            )
         if structured and message.stop_reason == "max_tokens":
             # Truncated JSON fails validation again on a repair attempt that
             # has even less room left, so it is not attempted. The answer was

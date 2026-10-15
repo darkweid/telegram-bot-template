@@ -8,7 +8,13 @@ from src.core.llm.types import LLMUsage
 
 class LLMError(CoreException):
     """A model call failed. `provider` is the one that failed, None when no
-    provider was reached; it goes to the log line with `detail`."""
+    provider was reached; it goes to the log line with `detail`.
+
+    `usage` is what the provider billed before the call failed: a refusal, an
+    answer that failed validation, or the first answer of a repair whose
+    request then failed. llm_usage and the log line record the failure with
+    it; None when nothing was billed.
+    """
 
     message_key = N_("The language model could not answer. Please try again later.")
     log_level: ClassVar[LogLevel] = "error"
@@ -19,10 +25,12 @@ class LLMError(CoreException):
         detail: str | None = None,
         *,
         provider: LLMProviderName | None = None,
+        usage: LLMUsage | None = None,
         **params: Any,
     ) -> None:
         super().__init__(detail, **params)
         self.provider = provider
+        self.usage = usage
 
 
 class LLMNotConfigured(LLMError):
@@ -71,20 +79,9 @@ class LLMRefused(LLMError):
 
 class LLMOutputError(LLMError):
     """A structured answer failed validation even after the repair attempt, or
-    was cut at max_tokens. The provider billed the answers all the same:
-    `usage` is what they cost, so llm_usage records the failed call with it."""
+    was cut at max_tokens. The provider billed the answers all the same, so
+    `usage` is what they cost."""
 
     message_key = N_(
         "The language model gave an answer the bot could not read. Please try again."
     )
-
-    def __init__(
-        self,
-        detail: str | None = None,
-        *,
-        provider: LLMProviderName | None = None,
-        usage: LLMUsage | None = None,
-        **params: Any,
-    ) -> None:
-        super().__init__(detail, provider=provider, **params)
-        self.usage = usage

@@ -74,10 +74,14 @@ def test_each_llm_failure_tells_the_user_something_different() -> None:
     assert len(set(keys)) == len(keys)
 
 
-def test_an_output_error_carries_what_the_answers_cost() -> None:
-    """A failed repair is two answers the provider billed; llm_usage records
-    the failure with their cost only if the error brings it along."""
+@pytest.mark.parametrize("error_class", ALL_LLM_ERRORS, ids=lambda c: c.__name__)
+def test_every_llm_error_can_carry_what_was_billed(
+    error_class: type[LLMError],
+) -> None:
+    """A refusal, a failed repair or a repair request cut by the network can
+    each come after an answer the provider billed; llm_usage records the
+    failure with that cost only if the error brings it along."""
     usage = LLMUsage(input_tokens=10, output_tokens=5)
 
-    assert LLMOutputError("invalid", usage=usage).usage is usage
-    assert LLMOutputError().usage is None
+    assert error_class("failed", usage=usage).usage is usage
+    assert error_class().usage is None

@@ -217,8 +217,11 @@ def _response(
         # OpenRouter reports an upstream failure after the stream began this way.
         raise LLMUnavailable("OpenRouter finish_reason=error", provider=_PROVIDER)
     if choice.message.refusal or finish_reason == "content_filter":
+        # A refusal is billed like any answer.
         raise LLMRefused(
-            f"OpenRouter finish_reason={finish_reason}", provider=_PROVIDER
+            f"OpenRouter finish_reason={finish_reason}",
+            provider=_PROVIDER,
+            usage=_usage(completion),
         )
     if structured and finish_reason == "length":
         # Truncated JSON fails validation again on a repair attempt that has

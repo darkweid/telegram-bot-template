@@ -299,6 +299,29 @@ async def test_a_refusal_is_refused_not_empty_text(server: ScriptedLLMServer) ->
     await client.aclose()
 
 
+async def test_a_refusal_is_logged_with_what_it_cost(
+    server: ScriptedLLMServer,
+) -> None:
+    """A refusal is billed like any answer; a prompt that keeps getting refused
+    is exactly the spend an operator wants to see."""
+    server.reply(message("", stop_reason="refusal"))
+    client = make_client(server)
+
+    with captured_logs("src.core.llm.reporting") as records:
+        with pytest.raises(LLMRefused) as raised:
+            await client.complete(request())
+
+    assert raised.value.usage is not None
+    assert raised.value.usage.cost_usd == Decimal("0.0056")
+    [record] = records
+    line = record.getMessage()
+    assert "outcome=LLMRefused" in line
+    assert "input_tokens=1000" in line
+    assert "output_tokens=200" in line
+    assert "cost_usd=0.0056" in line
+    await client.aclose()
+
+
 @pytest.mark.parametrize(
     ("status", "error_type", "expected"),
     [

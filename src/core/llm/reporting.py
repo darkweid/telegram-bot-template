@@ -4,7 +4,7 @@ import sentry_sdk
 
 from loggers import get_logger
 from src.core.llm.enums import LLMProviderName
-from src.core.llm.errors import LLMError, LLMOutputError
+from src.core.llm.errors import LLMError
 from src.core.llm.types import LLMRequest, LLMResponse, LLMUsage
 
 logger = get_logger(__name__)
@@ -26,14 +26,13 @@ def report_llm_call(
     is logged only by RecordingLLMClient under LLM_LOG_CONTENT.
     """
     outcome = "ok" if error is None else type(error).__name__
-    usage: LLMUsage | None
+    # A failed call may still have been billed: a refusal, an answer that
+    # failed validation, a repair cut short.
+    usage: LLMUsage | None = None
     if response is not None:
         usage = response.usage
-    elif isinstance(error, LLMOutputError):
-        # The answers that failed validation were billed all the same.
+    elif error is not None:
         usage = error.usage
-    else:
-        usage = None
     input_tokens = 0 if usage is None else usage.input_tokens
     output_tokens = 0 if usage is None else usage.output_tokens
     cache_read_tokens = 0 if usage is None else usage.cache_read_tokens

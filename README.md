@@ -386,7 +386,9 @@ response = await llm.structured(
   a cost, with one warning per process.
 - **Usage.** Every attempt, failed ones included, writes a row to
   `llm_usage`: provider, model, `purpose`, tokens, cost, latency and the
-  Telegram user id. A call that fell back leaves two rows.
+  Telegram user id. A call that fell back leaves two rows. A failed call
+  the provider still billed (a refusal, an answer that failed validation, a
+  repair whose request broke off) is stored with what it cost.
   `/stats` shows spending for today (since midnight UTC), 7 and 30 days, and
   for the last 30 days by purpose and for the top 5 users; lines for failed
   calls and for calls without a known price appear only when there are any.

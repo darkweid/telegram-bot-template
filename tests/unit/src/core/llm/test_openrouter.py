@@ -614,26 +614,51 @@ async def test_a_failed_structured_call_logs_what_its_answers_cost(
     await client.aclose()
 
 
-async def test_a_network_failure_on_the_repair_request_is_logged_without_tokens(
+async def test_a_network_failure_on_the_repair_request_counts_the_first_answer(
     server: ScriptedLLMServer,
 ) -> None:
-    """The first answer's tokens are not carried by a transport error, so the
-    line has none; it must still be written and name the failure."""
+    """The first answer was received and billed before the repair request
+    failed; dropping its tokens would make the spend vanish from the line and
+    from llm_usage."""
     server.reply(completion(summary_json([])))
     server.fail(httpx2.ConnectError)
     client = make_client(server)
 
     with captured_logs("src.core.llm.reporting") as records:
-        with pytest.raises(LLMUnavailable):
+        with pytest.raises(LLMUnavailable) as raised:
             await client.structured(request(), Summary)
 
+    assert raised.value.usage is not None
+    assert raised.value.usage.input_tokens == 100
     [record] = records
     line = record.getMessage()
     assert record.levelno == logging.WARNING
     assert "outcome=LLMUnavailable" in line
-    assert "input_tokens=0" in line
-    assert "output_tokens=0" in line
-    assert "cost_usd=unknown" in line
+    assert "input_tokens=100" in line
+    assert "output_tokens=30" in line
+    assert "cost_usd=0.000123" in line
+    await client.aclose()
+
+
+async def test_a_refusal_is_logged_with_what_it_cost(
+    server: ScriptedLLMServer,
+) -> None:
+    """A refusal is billed like any answer; a prompt that keeps getting refused
+    is exactly the spend an operator wants to see."""
+    server.reply(completion(None, refusal="I can't help with that."))
+    client = make_client(server)
+
+    with captured_logs("src.core.llm.reporting") as records:
+        with pytest.raises(LLMRefused) as raised:
+            await client.complete(request())
+
+    assert raised.value.usage is not None
+    [record] = records
+    line = record.getMessage()
+    assert "outcome=LLMRefused" in line
+    assert "input_tokens=100" in line
+    assert "output_tokens=30" in line
+    assert "cost_usd=0.000123" in line
     await client.aclose()
 
 

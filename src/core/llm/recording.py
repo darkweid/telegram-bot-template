@@ -11,7 +11,7 @@ from loggers import get_logger
 from src.core.database.uow import SQLAlchemyUnitOfWork
 from src.core.errors.scrubbed import reportable
 from src.core.llm.enums import LLMCallStatus, LLMProviderName
-from src.core.llm.errors import LLMError, LLMOutputError
+from src.core.llm.errors import LLMError
 from src.core.llm.interface import LLMClient
 from src.core.llm.repository import LLMUsageRepository
 from src.core.llm.types import LLMRequest, LLMResponse, LLMUsage, StructuredResponse
@@ -51,14 +51,13 @@ class LLMUsageRecorder:
         latency_ms: int,
     ) -> None:
         context = get_update_context()
-        usage: LLMUsage | None
+        # A failed call may still have been billed: a refusal, an answer that
+        # failed validation, a repair cut short.
+        usage: LLMUsage | None = None
         if response is not None:
             usage = response.usage
-        elif isinstance(error, LLMOutputError):
-            # Answers that failed validation or were cut short were billed.
+        elif error is not None:
             usage = error.usage
-        else:
-            usage = None
         data: dict[str, Any] = {
             "created_at": get_utc_now(),
             "user_id": context.user_id if context is not None else None,

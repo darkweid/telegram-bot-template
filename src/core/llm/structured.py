@@ -5,7 +5,7 @@ from pydantic import BaseModel, ValidationError
 
 from src.core.errors.scrubbed import describe_validation_error
 from src.core.llm.enums import LLMProviderName
-from src.core.llm.errors import LLMOutputError
+from src.core.llm.errors import LLMError, LLMOutputError
 from src.core.llm.types import (
     LLMMessage,
     LLMRequest,
@@ -48,8 +48,9 @@ async def validated_with_repair[T: BaseModel](
         rejection = error
     try:
         second = await send(_repair_request(request, first.text, rejection))
-    except LLMOutputError as error:
-        # A repair answer cut at max_tokens: the first answer was billed too.
+    except LLMError as error:
+        # A repair answer cut at max_tokens or refused, or a repair request
+        # that never got an answer: the first answer was billed either way.
         error.usage = (
             first.usage
             if error.usage is None

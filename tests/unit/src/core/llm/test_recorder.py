@@ -8,7 +8,7 @@ from sqlalchemy.exc import DBAPIError
 from src.core.errors.scrubbed import ScrubbedError
 from src.core.llm import recording as recording_module
 from src.core.llm.enums import LLMCallStatus, LLMProviderName
-from src.core.llm.errors import LLMOutputError, LLMTimeout
+from src.core.llm.errors import LLMOutputError, LLMRefused, LLMTimeout
 from src.core.llm.models import LLMUsageRecord
 from src.core.llm.recording import LLMUsageRecorder
 from src.core.llm.repository import LLMUsageRepository
@@ -125,6 +125,25 @@ async def test_a_failed_repair_is_stored_with_what_both_answers_cost() -> None:
     assert (row.status, row.error_type) == (LLMCallStatus.ERROR, "LLMOutputError")
     assert (row.input_tokens, row.output_tokens) == (240, 80)
     assert row.cost_usd == Decimal("0.00246800")
+
+
+async def test_a_refusal_is_stored_with_what_it_cost() -> None:
+    """A refused answer was billed; any LLMError that carries usage is stored
+    with it, not only an output error."""
+    sessions = FakeSessionFactory()
+    paid = LLMUsage(input_tokens=90, output_tokens=12, cost_usd=Decimal("0.00031200"))
+    await LLMUsageRecorder(sessions, LLMUsageRepository()).record(
+        _request(),
+        None,
+        LLMRefused("refusal", provider=LLMProviderName.ANTHROPIC, usage=paid),
+        provider=LLMProviderName.ANTHROPIC,
+        model="claude-sonnet-5-5",
+        latency_ms=700,
+    )
+    row = _stored(sessions)
+    assert (row.status, row.error_type) == (LLMCallStatus.ERROR, "LLMRefused")
+    assert (row.input_tokens, row.output_tokens) == (90, 12)
+    assert row.cost_usd == Decimal("0.00031200")
 
 
 async def test_a_call_outside_an_update_has_no_user() -> None:
