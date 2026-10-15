@@ -7,6 +7,9 @@ import yaml
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 ANSIBLE = PROJECT_ROOT / "infra" / "ansible"
+# The project's own tasks; `make ansible-deps` installs third-party collections
+# and a virtualenv next to them.
+TASK_DIRS = ("roles", "playbooks")
 COMMAND_MODULES = (
     "ansible.builtin.command",
     "ansible.builtin.shell",
@@ -39,7 +42,8 @@ def _command(task: dict[str, Any]) -> str:
 def _compose_config_tasks() -> list[tuple[str, dict[str, Any]]]:
     return [
         (f"{path.relative_to(ANSIBLE)}: {task.get('name')}", task)
-        for path in sorted(ANSIBLE.rglob("*.yml"))
+        for directory in TASK_DIRS
+        for path in sorted((ANSIBLE / directory).rglob("*.yml"))
         for task in _tasks(yaml.safe_load(path.read_text(encoding="utf-8")))
         if COMPOSE_CONFIG.search(_command(task))
     ]
