@@ -112,8 +112,9 @@ Updates arrive as pull requests:
   commit subject, so it follows Conventional Commits too, and the description
   becomes the commit body: write it as history, what changed and why,
   including any configuration change.
-- **The pull request template** ends with a "Checks" section. Delete that
-  section before merging, so it does not end up in the squash commit body.
+- **The pull request template** (`.github/pull_request_template.md`) ends
+  with a "Checks" section. Delete that section before merging, so it does not
+  end up in the squash commit body.
 - **A failing check** is fixed with a new commit on the branch. Never
   force-push a branch under review.
 - **A change to a setting** updates its section in `src/main/config.py`,

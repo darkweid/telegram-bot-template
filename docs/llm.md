@@ -69,12 +69,16 @@ treat it as data.
 
 **The transaction ends before the call.** A model takes seconds, and a pooled
 connection must not wait for it. `SummarizeNotesUseCase` reads the notes in a
-unit of work, copies the texts inside the block, and calls the model after it:
+unit of work, copies the texts inside the block, and calls the model after it.
+With no notes it returns before building a request, so an empty case never
+costs a paid call:
 
 ```python
 async with self._uow as uow:
     notes = await self._notes.latest_for_user(uow.session, user_id, SUMMARY_NOTE_LIMIT)
     texts = [note.text for note in notes]
+if not texts:
+    return None
 request = LLMRequest(
     purpose=NOTE_SUMMARY_PURPOSE,
     system=note_summary_system_prompt(locale),

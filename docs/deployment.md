@@ -25,6 +25,18 @@ secret, and `make check-env` refuses a `COMPOSE_PROFILES` that disagrees with
 the compose network. The bot sets the webhook on every start and keeps it on
 shutdown, so Telegram queues updates while the next container starts.
 
+Run the prod-like stack with `make run`. A one-shot `migrate` service applies
+the migrations baked into the image before the bot starts, and the bot waits
+for it; `make migrate` runs the same service by hand. With `BOT_IMAGE` set in
+`.env` to an image CI pushed (`ghcr.io/<owner>/<repo>:sha-<12>`), `make run`
+pulls and runs that image instead of building one from the checkout. No target
+builds the checkout under that name: `make build` then builds Postgres only,
+and `make up` starts the stack without building, so it needs the Postgres
+image an earlier `make build` or `make run` built. With
+`COMPOSE_PROFILES=webhook`, `make run`, `up`, `down`, `logs` and `restart`
+handle nginx and certbot with the rest of the stack. The dev stack
+(`make run-dev`) always polls and leaves them out.
+
 ## nginx and the certificate
 
 nginx publishes ports 80 and 443, the only ports of the stack open to the
@@ -68,10 +80,19 @@ choice with keys only, a firewall, Docker, and the checkout in
 
 ```bash
 make ansible-deps                                  # Ansible in its own virtualenv
-make server-bootstrap ENV=production               # once, as root
-make server-provision ENV=production CHECK=1       # preview the changes
-make server-provision ENV=production               # apply
+make server-bootstrap ENV=production               # once, as the provider's account
+make server-provision ENV=production               # after adding the deploy key
+make server-provision ENV=production CHECK=1       # later: preview a change
 ```
+
+Bootstrap logs in as `root` by default; `BOOTSTRAP_USER=ubuntu` (or another
+sudo account), `BOOTSTRAP_PORT`, `ASK_PASS=1` and `ASK_BECOME=1` cover other
+providers, as `infra/ansible/README.md` shows. It creates `ops`, closes root
+and password login, and ends with a failure on purpose: it prints a deploy
+key generated on the server. Add that key to the repository as a read-only
+deploy key (GitHub: Settings -> Deploy keys), then run
+`make server-provision ENV=production`, which clones the repository into
+`/srv/<app_name>`.
 
 `bot_mode` in the inventory must match `BOT_MODE` in the server's `.env`:
 webhook opens ports 80 and 443, polling opens no web port.
@@ -183,15 +204,21 @@ newest runs.
 
 To turn it on for an environment:
 
-1. Provision the server; `make server-provision` ends with the values below
-   printed.
+1. Provision the server. The summary `make server-provision` prints holds
+   `SSH_USER`, `SERVER_IP`, `SSH_PORT`, `APP_DIR` and `SSH_KNOWN_HOSTS`.
 2. Settings -> Environments -> `production` (or `staging`):
-   - secrets `SSH_PRIVATE_KEY`, `SSH_KNOWN_HOSTS`, `SSH_USER` (`deploy`) and
-     `SERVER_IP`;
+   - secrets `SSH_PRIVATE_KEY` (the CD key whose public half is
+     `users_deploy_authorized_keys` in the inventory; `infra/ansible/README.md`
+     shows how to generate the pair), `SSH_KNOWN_HOSTS`, `SSH_USER`
+     (`deploy`) and `SERVER_IP`;
    - variables `APP_DIR` (`/srv/<app_name>`) and `SSH_PORT` (when not 22);
    - optional secrets `ALERT_BOT_TOKEN` and `ALERT_CHAT_ID`: a bot and chat
      that get one message per deploy. Without them the deploy runs and its
      log says no alert was sent.
+
+   Set them on the environment or the repository, not the organization: an
+   organization on the Free plan does not pass its secrets to a private
+   repository, and they arrive empty.
 3. Deployment branches of the environment: `main` for `production`, and
    both `main` and `stage` for `staging`. The deploy is triggered by
    `workflow_run`, which GitHub runs on the default branch, so an environment
@@ -208,7 +235,7 @@ commit instead.
 
 ## Releases
 
-Tag a commit CI built and pushed with `vX.Y.Z` and push the tag. The
+Tag a commit CI built and pushed (from `main` or `stage`) with `vX.Y.Z` and push the tag. The
 `Release` workflow (`.github/workflows/release.yml`) points
 `ghcr.io/<owner>/<repo>:vX.Y.Z` at the image CI pushed for that commit with
 `docker buildx imagetools create`: the same digest, nothing rebuilt. It then
