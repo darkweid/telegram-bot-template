@@ -265,7 +265,7 @@ i18n-init: ## Start a catalog for a new language: make i18n-init LOCALE=de
 	rm -f $(I18N_POT); \
 	if [ $$status -eq 0 ]; then $(I18N_NORMALIZE) $(I18N_DIR) --project $(I18N_PROJECT) || status=$$?; fi; \
 	if [ $$status -eq 0 ]; then \
-		echo "Add \"$(LOCALE)\" to SUPPORTED_LOCALES in src/core/i18n/__init__.py, then translate and run make i18n-compile"; \
+		echo "Add \"$(LOCALE)\" to SUPPORTED_LOCALES in src/core/locales.py, then translate and run make i18n-compile"; \
 	fi; \
 	exit $$status
 

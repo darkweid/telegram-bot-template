@@ -3,7 +3,8 @@ from pathlib import Path
 from babel.messages.mofile import write_mo
 from babel.messages.pofile import read_po
 
-from src.core.i18n import DOMAIN, SUPPORTED_LOCALES
+from src.core.i18n import DOMAIN
+from src.core.locales import SUPPORTED_LOCALES
 
 
 def compile_catalogs(source_dir: Path, target_dir: Path) -> None:
