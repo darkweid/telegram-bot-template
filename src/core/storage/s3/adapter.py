@@ -329,7 +329,8 @@ class S3Adapter(S3Client):
             )
 
     async def download_bytes(self, key: str, *, bucket: str | None = None) -> bytes:
-        """Download an object into memory (small files only)."""
+        """Download an object into memory (small files only). A missing key
+        raises the provider's ClientError (NoSuchKey)."""
         client = self._ensure_client()
         response = await client.get_object(Bucket=self._get_bucket(bucket), Key=key)
         body = response["Body"]

@@ -80,7 +80,7 @@ class InMemoryS3Client:
         if value.tzinfo is None:
             raise ValueError("last_modified must be timezone-aware.")
         if key not in self._get_bucket(bucket):
-            raise FileNotFoundError(f"Object not found: {key}")
+            raise ValueError(f"No object to date: {key}")
         self._get_modified(bucket)[key] = value
 
     def _get_bucket(self, bucket: str | None) -> dict[str, bytes]:
@@ -130,7 +130,11 @@ class InMemoryS3Client:
     async def download_bytes(self, key: str, *, bucket: str | None = None) -> bytes:
         source = self._get_bucket(bucket)
         if key not in source:
-            raise FileNotFoundError(f"Object not found: {key}")
+            # What botocore raises for S3's answer to GetObject on a missing key.
+            raise ClientError(
+                {"Error": {"Code": "NoSuchKey", "Message": "Object not found"}},
+                "GetObject",
+            )
         return source[key]
 
     async def delete_object(self, key: str, *, bucket: str | None = None) -> None:

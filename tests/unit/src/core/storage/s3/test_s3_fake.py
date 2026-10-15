@@ -97,9 +97,23 @@ async def test_fake_list_is_sorted_and_filtered_by_prefix() -> None:
     assert [i.key async for i in s3.list_objects(prefix="zzz")] == []
 
 
-async def test_fake_set_last_modified_on_missing_key_raises() -> None:
+async def test_fake_download_of_a_missing_key_raises_what_the_adapter_raises() -> None:
+    """S3 answers GetObject on a missing key with NoSuchKey, which botocore
+    raises as a ClientError; code that handles a missing attachment must be
+    tested against that, not an exception production never sees."""
     s3 = InMemoryS3Client()
-    with pytest.raises(FileNotFoundError):
+
+    with pytest.raises(ClientError) as raised:
+        await s3.download_bytes("missing")
+
+    assert raised.value.response["Error"]["Code"] == "NoSuchKey"
+    assert raised.value.operation_name == "GetObject"
+
+
+async def test_fake_set_last_modified_on_missing_key_raises() -> None:
+    """A test that dates an object it never stored has a bug of its own."""
+    s3 = InMemoryS3Client()
+    with pytest.raises(ValueError, match="nope"):
         s3.set_last_modified("nope", NOW)
 
 
