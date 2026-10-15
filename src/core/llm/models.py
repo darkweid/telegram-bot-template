@@ -6,6 +6,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from src.core.database.base import Base
 from src.core.database.mixins import UUID7IDMixin
+from src.core.llm.types import PURPOSE_MAX_LENGTH
 
 
 class LLMUsageRecord(UUID7IDMixin, Base):
@@ -24,7 +25,7 @@ class LLMUsageRecord(UUID7IDMixin, Base):
     # No foreign key: deleting a user must not delete what their calls cost,
     # and a call made by a worker task has no user at all.
     user_id: Mapped[int | None] = mapped_column(BigInteger, default=None)
-    purpose: Mapped[str] = mapped_column(String(64))
+    purpose: Mapped[str] = mapped_column(String(PURPOSE_MAX_LENGTH))
     # Plain strings, not PostgreSQL enums: a new provider or status must not
     # need an ALTER TYPE migration on an append-only table.
     provider: Mapped[str] = mapped_column(String(32))

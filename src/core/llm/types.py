@@ -7,6 +7,9 @@ from pydantic import BaseModel
 
 from src.core.llm.enums import LLMProviderName
 
+# The width of llm_usage.purpose.
+PURPOSE_MAX_LENGTH = 64
+
 
 @dataclass(frozen=True, slots=True)
 class LLMMessage:
@@ -40,6 +43,10 @@ class LLMRequest:
         # outage.
         if not self.purpose:
             raise ValueError("purpose must name the caller")
+        # A longer one would fit no llm_usage row, and the recorder's failed
+        # write is only logged: the caller's whole spend would go missing.
+        if len(self.purpose) > PURPOSE_MAX_LENGTH:
+            raise ValueError(f"purpose is longer than {PURPOSE_MAX_LENGTH} characters")
         if not self.messages:
             raise ValueError("a request needs at least one message")
         if self.max_tokens < 1:

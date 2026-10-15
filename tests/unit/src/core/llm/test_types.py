@@ -2,7 +2,7 @@ from decimal import Decimal
 
 import pytest
 
-from src.core.llm.types import LLMMessage, LLMRequest, LLMUsage
+from src.core.llm.types import PURPOSE_MAX_LENGTH, LLMMessage, LLMRequest, LLMUsage
 
 HELLO = (LLMMessage(role="user", content="hello"),)
 
@@ -49,3 +49,11 @@ def test_usage_without_cache_or_price_is_explicit() -> None:
     assert usage.cache_write_tokens == 0
     assert usage.cost_usd is None
     assert LLMUsage(1, 1, cost_usd=Decimal("0.1")).cost_usd == Decimal("0.1")
+
+
+def test_a_purpose_wider_than_its_column_is_refused() -> None:
+    """A purpose llm_usage cannot store would lose every row of that caller,
+    and the failed write is only logged."""
+    LLMRequest(purpose="p" * PURPOSE_MAX_LENGTH, messages=HELLO)
+    with pytest.raises(ValueError, match="purpose"):
+        LLMRequest(purpose="p" * (PURPOSE_MAX_LENGTH + 1), messages=HELLO)

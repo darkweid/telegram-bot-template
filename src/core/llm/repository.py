@@ -19,7 +19,7 @@ class LLMUsageSummary:
     cache_read_tokens: int
     cache_write_tokens: int
     # Over the calls whose price is known; `unpriced_calls` says how many
-    # successful calls the sum leaves out.
+    # calls that used tokens (a failed repair included) the sum leaves out.
     cost_usd: Decimal
     unpriced_calls: int
 
@@ -68,8 +68,11 @@ class LLMUsageRepository(BaseRepository[LLMUsageRecord]):
             self._cost().label("cost_usd"),
             func.count()
             .filter(
-                self.model.status == LLMCallStatus.SUCCESS,
                 self.model.cost_usd.is_(None),
+                (self.model.input_tokens > 0)
+                | (self.model.output_tokens > 0)
+                | (self.model.cache_read_tokens > 0)
+                | (self.model.cache_write_tokens > 0),
             )
             .label("unpriced_calls"),
         ).where(self._window(since, until))

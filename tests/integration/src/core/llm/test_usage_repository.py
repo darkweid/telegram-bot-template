@@ -3,7 +3,7 @@ from decimal import Decimal
 from typing import Any
 
 import pytest
-from sqlalchemy import func, select, text
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
 from src.core.llm.enums import LLMCallStatus, LLMProviderName
@@ -62,16 +62,26 @@ async def test_the_summary_counts_errors_and_unpriced_calls_apart(
         output_tokens=0,
         cost_usd=None,
     )
+    # A failed repair: billed, but the model has no known price.
+    await _add(
+        db_session,
+        SINCE + timedelta(hours=3),
+        status=LLMCallStatus.ERROR,
+        error_type="LLMOutputError",
+        input_tokens=50,
+        output_tokens=5,
+        cost_usd=None,
+    )
     summary = await LLMUsageRepository().summary(db_session, SINCE, UNTIL)
     assert summary == LLMUsageSummary(
-        calls=3,
-        errors=1,
-        input_tokens=200,
-        output_tokens=20,
+        calls=4,
+        errors=2,
+        input_tokens=250,
+        output_tokens=25,
         cache_read_tokens=50,
         cache_write_tokens=0,
         cost_usd=Decimal("0.00100000"),
-        unpriced_calls=1,
+        unpriced_calls=2,
     )
 
 
@@ -135,13 +145,14 @@ async def test_the_purge_takes_old_rows_in_batches(db_session: AsyncSession) -> 
     assert await repository.purge_older_than(db_session, cutoff, limit=2) == 2
     assert await repository.purge_older_than(db_session, cutoff, limit=2) == 1
     assert await repository.purge_older_than(db_session, cutoff, limit=2) == 0
-    remaining = await db_session.scalar(
-        select(func.count()).where(
-            LLMUsageRecord.created_at >= SINCE, LLMUsageRecord.created_at < UNTIL
+    remaining = (
+        await db_session.scalars(
+            select(LLMUsageRecord.id).where(
+                LLMUsageRecord.created_at >= SINCE, LLMUsageRecord.created_at < UNTIL
+            )
         )
-    )
-    assert remaining == 1
-    assert await db_session.get(LLMUsageRecord, kept.id) is kept
+    ).all()
+    assert remaining == [kept.id]
 
 
 async def test_llm_usage_is_indexed_by_time(integration_engine: AsyncEngine) -> None:

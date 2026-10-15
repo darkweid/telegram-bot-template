@@ -25,11 +25,10 @@ def _frozen_clock(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(recording_module, "get_utc_now", lambda: NOW)
 
 
-def _request(model: str | None = None) -> LLMRequest:
+def _request() -> LLMRequest:
     return LLMRequest(
         purpose="note_summary",
         messages=[LLMMessage(role="user", content="secret note text")],
-        model=model,
     )
 
 
