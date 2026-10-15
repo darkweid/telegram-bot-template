@@ -246,6 +246,10 @@ def _turn(message: LLMMessage) -> list[ChatCompletionMessageParam]:
             return [
                 ChatCompletionUserMessageParam(role="user", content=message.content)
             ]
+        if not message.content:
+            # Some providers behind OpenRouter refuse an empty assistant
+            # message that is not the last one.
+            return []
         return [
             ChatCompletionAssistantMessageParam(
                 role="assistant", content=message.content

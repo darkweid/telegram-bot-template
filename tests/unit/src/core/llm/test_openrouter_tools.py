@@ -382,3 +382,22 @@ async def test_tool_choice_none_is_sent_with_the_tools(
     body = server.bodies()[0]
     assert body["tool_choice"] == "none"
     assert body["tools"]
+
+
+async def test_an_empty_assistant_turn_is_not_sent(server: ScriptedLLMServer) -> None:
+    """Anthropic behind OpenRouter answers 400 to an empty assistant message
+    that is not the last one."""
+    server.reply(openrouter_completion())
+
+    await make_client(server).complete(
+        request(
+            messages=[
+                ASK,
+                LLMMessage(role="assistant", content=""),
+                LLMMessage(role="user", content="well?"),
+            ]
+        )
+    )
+
+    roles = [message["role"] for message in server.bodies()[0]["messages"]]
+    assert roles == ["user", "user"]
