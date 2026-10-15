@@ -2,6 +2,7 @@ from pathlib import Path
 
 from dotenv import dotenv_values
 from pydantic import ValidationError
+from pydantic_settings import BaseSettings
 import pytest
 from redis.connection import parse_url
 from sqlalchemy.engine import make_url
@@ -637,3 +638,44 @@ def test_llm_log_content_requires_debug() -> None:
 
     config = Config.model_validate(_config(app=debugging, llm=logging_llm).model_dump())
     assert config.llm.LLM_LOG_CONTENT
+
+
+LEAKED_SECRET = "hunter2-not-real"
+# A field whose name holds one of these carries a credential.
+_SECRET_FIELD_MARKERS = ("PASSWORD", "SECRET", "TOKEN", "API_KEY", "DSN")
+
+
+@pytest.mark.parametrize(
+    ("section", "values"),
+    [
+        (EmailConfig, {"EMAIL_ENABLED": True, "EMAIL_PASSWORD": LEAKED_SECRET}),
+        (RedisConfig, {"REDIS_PASSWORD": LEAKED_SECRET}),
+        (PostgresConfig, {"POSTGRES_PASSWORD": LEAKED_SECRET}),
+    ],
+    ids=["email", "redis", "postgres"],
+)
+def test_a_secret_never_appears_in_a_validation_error(
+    section: type[BaseSettings], values: dict[str, object]
+) -> None:
+    """A model-level or missing-field error prints the section's whole input;
+    get_settings() fails before the startup error handling, so the traceback
+    with the password would land in the container logs."""
+    with pytest.raises(ValidationError) as raised:
+        section(_env_file=None, **values)  # type: ignore[call-arg]
+
+    assert LEAKED_SECRET not in str(raised.value)
+
+
+def test_every_section_holding_a_secret_hides_its_input_in_errors() -> None:
+    """A section that gains a credential later must not be the one that
+    prints it; the guard follows the field names, not a list kept by hand."""
+    for name, field in Config.model_fields.items():
+        section = field.annotation
+        assert isinstance(section, type) and issubclass(section, BaseSettings)
+        holds_secret = any(
+            marker in key
+            for key in section.model_fields
+            for marker in _SECRET_FIELD_MARKERS
+        )
+        if holds_secret:
+            assert section.model_config.get("hide_input_in_errors"), name

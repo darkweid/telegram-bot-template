@@ -29,7 +29,7 @@ class RedisConfig(BaseSettings):
     REDIS_FSM_DATABASE: int = Field(2, ge=0)
     REDIS_TASKS_DATABASE: int = Field(1, ge=0)
 
-    model_config = SettingsConfigDict(extra="ignore")
+    model_config = SettingsConfigDict(extra="ignore", hide_input_in_errors=True)
 
     @model_validator(mode="after")
     def each_role_has_its_own_database(self) -> Self:
@@ -101,7 +101,7 @@ class SentryConfig(BaseSettings):
     SENTRY_ENV: str = "development"
     SENTRY_ENABLED: bool = False
 
-    model_config = SettingsConfigDict(extra="ignore")
+    model_config = SettingsConfigDict(extra="ignore", hide_input_in_errors=True)
 
 
 class PostgresConfig(BaseSettings):
@@ -123,7 +123,7 @@ class PostgresConfig(BaseSettings):
     DB_STATEMENT_TIMEOUT_SECONDS: float = Field(30, ge=0)
     DB_IDLE_IN_TRANSACTION_TIMEOUT_SECONDS: float = Field(60, ge=0)
 
-    model_config = SettingsConfigDict(extra="ignore")
+    model_config = SettingsConfigDict(extra="ignore", hide_input_in_errors=True)
 
     @field_validator("POSTGRES_DB")
     @classmethod
@@ -533,7 +533,7 @@ class EmailConfig(BaseSettings):
     EMAIL_STARTTLS: bool = True
     EMAIL_VALIDATE_CERTS: bool = True
 
-    model_config = SettingsConfigDict(extra="ignore")
+    model_config = SettingsConfigDict(extra="ignore", hide_input_in_errors=True)
 
     @model_validator(mode="after")
     def check_enabled_settings(self) -> Self:
