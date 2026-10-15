@@ -16,7 +16,7 @@ from tests.integration.conftest import REPO_ROOT, ScratchDatabase
 
 pytestmark = pytest.mark.asyncio(loop_scope="session")
 
-EXPECTED_TABLES = {"users", "notes"}
+EXPECTED_TABLES = {"users", "notes", "llm_usage"}
 
 
 async def test_chain_applies_to_a_clean_database(
