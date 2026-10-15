@@ -1,5 +1,6 @@
 import ast
 from collections.abc import Iterator
+import os
 from pathlib import Path
 import re
 import shutil
@@ -197,6 +198,8 @@ def test_a_dirty_tree_is_refused_untouched(copy: Path) -> None:
 
 
 def test_a_second_run_is_refused(copy: Path) -> None:
+    """The script is meant to run once; a second run on an already renamed copy
+    would rewrite the project name and the secrets of a bot that may be running."""
     run(copy, "demo", None)
     _git(copy, "add", "-A")
     _git(copy, "commit", "-qm", "init")
@@ -207,6 +210,8 @@ def test_a_second_run_is_refused(copy: Path) -> None:
 def test_a_refusal_exits_1_with_one_line(
     copy: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
+    """`make` shows the output as is, so a refusal has to be one readable line and
+    a non-zero exit, not a traceback."""
     assert main(["Bad_Name"], root=copy) == 1
     err = capsys.readouterr().err
     assert err.startswith("init-project: ")
@@ -253,3 +258,25 @@ def test_the_rename_changes_only_the_project_constants_in_python(copy: Path) -> 
     ]
     assert changed
     assert all(re.fullmatch(r'PROJECT = "[a-z0-9-]+"', line) for line in changed)
+
+
+def test_the_env_is_never_readable_by_others_while_it_holds_secrets(
+    copy: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The file is created private before the secrets go in: a chmod after the
+    write leaves a window in which a default umask of 022 exposes them."""
+    modes = []
+    original = Path.write_text
+
+    def recording_write(self: Path, *args: str, **kwargs: str) -> int:
+        if self.name == ".env":
+            modes.append(self.stat().st_mode & 0o777)
+        return original(self, *args, **kwargs)
+
+    previous = os.umask(0o022)
+    try:
+        monkeypatch.setattr(Path, "write_text", recording_write)
+        run(copy, "demo", None)
+    finally:
+        os.umask(previous)
+    assert modes == [0o600]

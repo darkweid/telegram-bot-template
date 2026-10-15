@@ -119,10 +119,9 @@ def _git(root: Path, *args: str) -> str:
 def _check_can_run(root: Path, name: str, locale: str | None) -> list[str]:
     """Every refusal happens here, before the first write."""
     validate_name(name)
-    if locale is not None and locale not in supported_locales(root):
-        raise InitError(
-            f"LOCALE {locale} is not one of {', '.join(supported_locales(root))}"
-        )
+    locales = supported_locales(root)
+    if locale is not None and locale not in locales:
+        raise InitError(f"LOCALE {locale} is not one of {', '.join(locales)}")
     if f"\nname: {TEMPLATE_SLUG}\n" not in (root / COMPOSE_FILE).read_text(
         encoding="utf-8"
     ):
@@ -189,8 +188,9 @@ def configure_env(root: Path, name: str, locale: str | None) -> list[str]:
         if not current or PLACEHOLDER_MARK in current:
             text = _set_key(text, key, secrets.token_urlsafe(48))
             generated.append(key)
-    env.write_text(text, encoding="utf-8")
+    env.touch(mode=0o600, exist_ok=True)
     env.chmod(0o600)
+    env.write_text(text, encoding="utf-8")
     return generated
 
 
