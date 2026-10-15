@@ -5,6 +5,7 @@ schema, so they are prompt text too: change them together with the prompt.
 """
 
 from collections.abc import Mapping, Sequence
+import re
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -17,6 +18,10 @@ RESPONSE_LANGUAGES: Mapping[str, str] = {"en": "English", "ru": "Russian"}
 SUMMARY_MAX_CHARS = 1500
 MAX_THEMES = 5
 THEME_MAX_CHARS = 80
+
+# A note tag inside a note's text, in any case or spacing a model would still
+# read as one.
+_NOTE_TAG = re.compile(r"<(\s*/?\s*note\b)", re.IGNORECASE)
 
 _SYSTEM_PROMPT = """\
 You summarize a user's personal notes for that user.
@@ -66,4 +71,7 @@ def note_summary_system_prompt(locale: str) -> str:
 
 
 def note_summary_user_message(texts: Sequence[str]) -> str:
-    return "\n".join(f"<note>{text}</note>" for text in texts)
+    """Each note inside its own tag pair. A note tag inside a note has its `<`
+    written as `&lt;`, so the note cannot close its frame early; nothing else
+    is escaped, so the model reads the rest as the user wrote it."""
+    return "\n".join(f"<note>{_NOTE_TAG.sub(r'&lt;\1', text)}</note>" for text in texts)
