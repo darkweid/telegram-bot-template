@@ -123,7 +123,8 @@ Set three variables in `.env`:
 
 The bot refuses to start in webhook mode without an `https` base URL and a
 secret. Keep `WEB_SERVER_HOST` at `0.0.0.0`: nginx reaches the bot over the
-compose network, and a loopback address would refuse every update. It sets the
+compose network, and a loopback address would refuse every update
+(`make check-env` refuses one). It sets the
 webhook on every start and keeps it on shutdown, so Telegram queues updates
 while the next container starts.
 
@@ -131,7 +132,9 @@ Run the prod-like stack with `make run`. A one-shot `migrate` service applies
 the migrations baked into the image before the bot starts, and the bot waits
 for it; `make migrate` runs the same service by hand. With `BOT_IMAGE` set in
 `.env` to an image CI pushed (`ghcr.io/<owner>/<repo>:sha-<12>`), `make run`
-pulls and runs that image instead of building one from the checkout.
+pulls and runs that image instead of building one from the checkout. No target
+builds the checkout under that name: `make build` then builds Postgres only,
+and `make up` starts the stack without building.
 
 Every service except the image builder has a CPU and memory cap taken from
 `.env` (`BOT_CPUS`, `BOT_MEMORY`, `WORKER_MEMORY`, ...; the commented block at
@@ -166,8 +169,12 @@ and port 80 is open; `DOMAIN` is the host of `WEBHOOK_BASE_URL`:
 
 Until a certificate exists, nginx serves port 80 only. certbot tries to renew
 twice a day and nginx reloads every six hours, so a renewed certificate is in
-use within six hours. A change to the nginx configuration in the checkout
-reaches the running nginx on the next deploy, which renders and reloads it.
+use within six hours. A reload reads the configuration nginx rendered when it
+started, never the checkout: a change to `infra/nginx` reaches the running
+nginx on the next deploy, which renders it into the container, tests it there
+with `nginx -t` and reloads. When the running nginx refuses it, the previous
+files are put back, nginx keeps serving them, and the deploy stops before the
+bot is touched.
 `make clean` keeps the certificate volume: Let's Encrypt issues a certificate
 for the same host at most five times a week.
 
@@ -211,16 +218,28 @@ previous stack still running. Any failure ends with exit code 1 and a
 `[deploy] ...` line saying what failed.
 
 - In webhook mode the new bot starts beside the old one and nginx moves to it
-  once it is healthy, so no update is refused. In polling mode the bot is
-  replaced in place: two pollers on one token conflict.
-- When the new bot, worker or scheduler never turns healthy, the stack goes
-  back to the image it ran before and the deploy fails. Migrations stay
-  applied, so the previous code runs against the new schema. The very first
-  deploy has no previous image and fails. After a rollback, `BOT_IMAGE` in
-  `.env` (or the local tag the build wrote) still names the failed image: pin
-  `BOT_IMAGE` to the previous tag or redeploy it before any plain `make run`.
-- The bot is replaced before the worker: a task added in a release is safe to
-  enqueue only once the new worker, which knows it, is running.
+  once it is healthy, so no update is refused. Every reload of the roll waits
+  for nginx's master process (up to 30 seconds after nginx started) and runs
+  `nginx -t` in the running container first: `nginx -s reload` alone exits 0
+  even when nginx refuses the configuration. A new bot that never turns
+  healthy, or that nginx cannot be moved onto, is removed and the old one keeps
+  serving. In polling mode the bot is replaced in place: two pollers on one
+  token conflict.
+- The worker and the scheduler are recreated with `up --wait`, capped at 180
+  seconds; 15 seconds later each must still be running with no restart
+  (`[deploy] worker is <state> 15s after it started` otherwise).
+- When the new bot never turns healthy, or the worker or the scheduler fails
+  that check, the stack goes back to the image it ran before and the deploy
+  fails. Migrations stay applied, so the previous code runs against the new
+  schema. The very first deploy has no previous image and fails. After a
+  rollback or a failed roll, `BOT_IMAGE` in `.env` (or the local tag the build
+  wrote) still names the failed image, and the deploy's last line says so:
+  before any plain
+  `make run` or `docker compose up -d`, deploy the previous release again or
+  pin `BOT_IMAGE` to its tag.
+- The bot is replaced before the worker, and the new bot serves while the old
+  worker still runs: a task the old worker does not know is lost. Register a
+  new task in one release and enqueue it from a later one.
 - `BUILD=1` builds the image on the box (the default without `BOT_IMAGE`);
   `BUILD=0` pulls `BOT_IMAGE`, the image CI pushed (the default with it):
   `BUILD=0 BOT_IMAGE=ghcr.io/<owner>/<repo>:sha-<12> bash infra/deploy/deploy.sh`.
@@ -520,7 +539,7 @@ you do).
 infra/              Dockerfiles, compose files, Postgres and Redis config, requirements
 infra/ansible/      server provisioning: inventory example, playbooks, roles
 infra/deploy/       deploy.sh, run on the server by CD or by hand
-infra/nginx/        the webhook nginx: config templates and the reload loop
+infra/nginx/        the webhook nginx: config templates, render.sh and the reload loop
 locales/            gettext catalogs, one directory per language
 loggers/            logging setup: plain-text or JSON lines on stdout
 migrations/         Alembic environment and revisions
