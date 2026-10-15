@@ -84,11 +84,14 @@ shell: ## Open a bash shell inside the bot container
 # week, so the certificate volume outlives `make clean`; remove it by hand
 # (`docker volume rm tg-bot-template-certbot-certs`) to start over. compose
 # labels every volume it creates with the project name, which selects the rest.
+# `rm --volumes` first removes the anonymous volumes images declare (certbot's
+# /var/lib/letsencrypt), which `down` without -v would leave behind.
 # The project name is fixed in compose, so every checkout and worktree of this
 # repository shares these volumes: `make clean` from any of them empties all.
 CERTIFICATE_VOLUME = tg-bot-template-certbot-certs
 .PHONY: clean
 clean: ## Remove the stack with its volumes (the certificate kept), local images and orphans
+	$(DOCKER_COMPOSE) --profile webhook rm --stop --force --volumes
 	$(DOCKER_COMPOSE) --profile webhook down --rmi local --remove-orphans
 	docker volume ls -q --filter label=com.docker.compose.project=tg-bot-template \
 		| grep -vxF '$(CERTIFICATE_VOLUME)' | xargs -r docker volume rm

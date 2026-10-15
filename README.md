@@ -122,6 +122,11 @@ for it; `make migrate` runs the same service by hand. With `BOT_IMAGE` set in
 `.env` to an image CI pushed (`ghcr.io/<owner>/<repo>:sha-<12>`), `make run`
 pulls and runs that image instead of building one from the checkout.
 
+Every service except the image builder has a CPU and memory cap taken from `.env` (`BOT_CPUS`,
+`BOT_MEMORY`, `WORKER_MEMORY`, ...; the commented block at the end of
+`.env.example` lists them with their defaults). Lower them on a small box
+instead of editing `infra/docker-compose.yml`.
+
 ### nginx and the certificate
 
 The `webhook` compose profile adds nginx and certbot. Set
@@ -145,11 +150,6 @@ Until a certificate exists, nginx serves port 80 only. certbot tries to renew
 twice a day and nginx reloads every six hours, so a renewed certificate is in
 use within six hours. `make clean` keeps the certificate volume: Let's Encrypt
 issues a certificate for the same host at most five times a week.
-
-Every service except the image builder has a CPU and memory cap taken from `.env` (`BOT_CPUS`,
-`BOT_MEMORY`, `WORKER_MEMORY`, ...; the commented block at the end of
-`.env.example` lists them with their defaults). Lower them on a small box
-instead of editing `infra/docker-compose.yml`.
 
 ## Roles
 

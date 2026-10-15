@@ -347,6 +347,15 @@ def test_make_clean_keeps_the_certificate() -> None:
     assert f"\nCERTIFICATE_VOLUME = {certificate_volume}\n" in makefile
     recipe = re.search(r"^clean:.*\n((?:\t.*\n)+)", makefile, re.MULTILINE)
     assert recipe
+    commands = recipe.group(1).splitlines()
     assert not re.search(r"\bdown\b.*\s(-v|--volumes)\b", recipe.group(1))
+    # certbot's image declares anonymous volumes, which `down` without -v keeps;
+    # `rm --volumes` removes those of the stack's containers and nothing named.
+    removal = next(i for i, line in enumerate(commands) if " rm --stop " in line)
+    down = next(i for i, line in enumerate(commands) if " down " in line)
+    assert removal < down
+    assert commands[removal].strip() == (
+        "$(DOCKER_COMPOSE) --profile webhook rm --stop --force --volumes"
+    )
     assert f"label=com.docker.compose.project={compose['name']}" in recipe.group(1)
     assert "grep -vxF '$(CERTIFICATE_VOLUME)'" in recipe.group(1)

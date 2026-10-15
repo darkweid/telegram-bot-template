@@ -1,10 +1,12 @@
 # Rendered only once the certificate exists (entrypoint.sh). An unknown SNI
 # name is refused during the handshake, so a scanner walking the address space
-# never sees the certificate.
+# never sees the certificate. A request that passed the handshake with the
+# webhook host's name but carries another Host lands here too, and is closed.
 server {
     listen 443 ssl default_server;
     server_name _;
     ssl_reject_handshake on;
+    return 444;
 }
 
 server {
@@ -18,6 +20,8 @@ server {
     ssl_session_timeout 1d;
 
     include /etc/nginx/bot/security_headers.inc;
+    # TLS only: browsers ignore it over plain HTTP.
+    add_header Strict-Transport-Security "max-age=31536000" always;
 
     proxy_http_version 1.1;
     proxy_set_header Connection "";

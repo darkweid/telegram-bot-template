@@ -61,14 +61,16 @@ fi
 # rolls the bot, and records each pin in bot_upstream.applied once nginx has
 # reloaded it. The record lives in a named volume, so nginx coming back in the
 # middle of a roll routes where it did. A record naming a container that no
-# longer resolves is stale, and the service name is used.
+# longer resolves, or naming none, is stale, and the service name is used.
 upstream="$state/bot_upstream.inc"
 applied="$state/bot_upstream.applied"
 
 pin_is_live() {
   [ -s "$applied" ] || return 1
-  sed -n 's/^server \([^: ]*\):.*/\1/p' "$applied" | while read -r name; do
-    getent hosts "$name" >/dev/null || exit 1
+  names="$(sed -n 's/^server \([^: ]*\):.*/\1/p' "$applied")"
+  [ -n "$names" ] || return 1
+  for name in $names; do
+    getent hosts "$name" >/dev/null || return 1
   done
 }
 
@@ -81,8 +83,9 @@ fi
 
 # certbot renews into the shared volume every 12 hours; a reload every 6 hours
 # puts the renewed certificate in use with no Docker socket in either container.
+# The loop inherits `set -e`, so a failed reload must not end it.
 if [ "$*" = "nginx -g daemon off;" ]; then
-  (while sleep 6h; do nginx -s reload; done) &
+  (while sleep 6h; do nginx -s reload || echo "nginx: reload failed; retrying in 6h" >&2; done) &
 fi
 
 exec /docker-entrypoint.sh "$@"

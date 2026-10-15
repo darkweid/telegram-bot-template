@@ -1,7 +1,10 @@
 from collections.abc import Iterator
 from dataclasses import dataclass
+import os
 from pathlib import Path
 import re
+import shutil
+import subprocess
 from typing import Any
 
 import yaml
@@ -15,6 +18,9 @@ _TOKEN = re.compile(r'#[^\n]*|"[^"]*"|[{};]|(?:\$\{[A-Z_]+\}|[^\s{};"#])+')
 # nginx untouched ($host, $remote_addr, ...).
 SUBSTITUTED = frozenset({"WEBHOOK_HOST", "WEBHOOK_PATH"})
 DEFAULT_TELEGRAM_SUBNETS = "149.154.160.0/20,91.108.4.0/22"
+HSTS = "Strict-Transport-Security"
+# Stands in for getent: resolves only the names listed in KNOWN_HOSTS.
+FAKE_GETENT = '#!/bin/sh\ncase " $KNOWN_HOSTS " in *" $2 "*) exit 0 ;; esac\nexit 2\n'
 
 
 @dataclass
@@ -68,6 +74,11 @@ def _drops(location: Directive) -> bool:
     return [(child.name, child.args) for child in location.block or []] == [
         ("return", ["444"])
     ]
+
+
+def _drops_every_request(server: Directive) -> bool:
+    """A `return 444` at server level answers no request whatever its path."""
+    return [child.args for child in server.children("return")] == [["444"]]
 
 
 def _guard(directive: Directive) -> tuple[list[str], list[tuple[str, list[str]]]]:
@@ -157,6 +168,9 @@ def test_unknown_hosts_get_no_answer() -> None:
     assert _drops(http_default.children("location")[0])
     tls_default = _server("tls.conf.template", default=True)
     assert tls_default.children("ssl_reject_handshake")[0].args == ["on"]
+    # The webhook host's SNI with another Host header passes the handshake and
+    # lands here; without the return nginx would answer it with a 404 page.
+    assert _drops_every_request(tls_default)
 
 
 def test_port_80_serves_the_acme_challenge_and_nothing_else() -> None:
@@ -171,7 +185,13 @@ def test_port_80_serves_the_acme_challenge_and_nothing_else() -> None:
     challenge = locations[("/.well-known/acme-challenge/",)]
     assert challenge.children("root")[0].args == ["/var/www/certbot"]
     assert _drops(locations[("/",)])
-    assert "proxy_pass" not in (NGINX_DIR / "http.conf.template").read_text()
+    assert "proxy_pass" not in (NGINX_DIR / "http.conf.template").read_text(
+        encoding="utf-8"
+    )
+
+
+def _sends_hsts(server: Directive) -> bool:
+    return any(header.args[0] == HSTS for header in server.children("add_header"))
 
 
 def test_every_answering_server_sends_the_security_headers() -> None:
@@ -183,6 +203,16 @@ def test_every_answering_server_sends_the_security_headers() -> None:
                 continue  # refuses the handshake; no response is ever sent
             includes = [include.args for include in server.children("include")]
             assert ["/etc/nginx/bot/security_headers.inc"] in includes, file_name
+
+
+def test_hsts_is_sent_over_tls_only() -> None:
+    """Browsers ignore Strict-Transport-Security over plain HTTP (RFC 6797), so
+    on port 80 it only looks like a promise; the webhook host's TLS server is
+    where it counts."""
+    include = (NGINX_DIR / "security_headers.inc").read_text(encoding="utf-8")
+    assert HSTS not in include
+    assert not any(_sends_hsts(server) for server in _servers("http.conf.template"))
+    assert _sends_hsts(_server("tls.conf.template", default=False))
 
 
 def test_the_http_context_hides_the_version_and_caps_the_body() -> None:
@@ -249,3 +279,75 @@ def test_ci_gates_the_image_on_the_nginx_check() -> None:
     assert "nginx" in jobs
     for job in ("record-pass", "build-and-push"):
         assert "nginx" in jobs[job]["needs"], job
+
+
+def test_a_missing_certificate_names_the_command_that_issues_it() -> None:
+    """The deploy greps this line to tell a missing certificate from a broken
+    configuration, and an operator reads it as the next step to take."""
+    entrypoint = (NGINX_DIR / "entrypoint.sh").read_text(encoding="utf-8")
+    assert (
+        'certificate="/etc/letsencrypt/live/$WEBHOOK_HOST/fullchain.pem"' in entrypoint
+    )
+    assert (
+        'echo "nginx: no certificate at $certificate; '
+        'run make cert-issue DOMAIN=$WEBHOOK_HOST" >&2'
+    ) in entrypoint
+
+
+def test_a_failed_reload_does_not_end_the_reload_loop() -> None:
+    """The loop runs under the entrypoint's `set -e`: one failed reload would
+    end it, and no renewed certificate would be put in use again until the
+    container restarts, by which time the old one may have expired."""
+    entrypoint = (NGINX_DIR / "entrypoint.sh").read_text(encoding="utf-8")
+    loop = re.search(
+        r"^\s*\(while sleep 6h; do (.*); done\) &$", entrypoint, re.MULTILINE
+    )
+    assert loop
+    assert re.fullmatch(r"nginx -s reload \|\| .+", loop.group(1))
+
+
+def _pin_is_live(tmp_path: Path, applied: str, known_hosts: str) -> bool:
+    entrypoint = (NGINX_DIR / "entrypoint.sh").read_text(encoding="utf-8")
+    function = re.search(
+        r"^pin_is_live\(\) \{\n.*?^\}\n", entrypoint, re.DOTALL | re.MULTILINE
+    )
+    assert function
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    getent = bin_dir / "getent"
+    getent.write_text(FAKE_GETENT, encoding="utf-8")
+    getent.chmod(0o755)
+    applied_file = tmp_path / "bot_upstream.applied"
+    applied_file.write_text(applied, encoding="utf-8")
+    sh = shutil.which("sh")
+    assert sh is not None
+    result = subprocess.run(
+        [sh, "-c", f"set -eu\n{function.group(0)}pin_is_live"],
+        env={
+            "PATH": f"{bin_dir}{os.pathsep}/usr/bin{os.pathsep}/bin",
+            "KNOWN_HOSTS": known_hosts,
+            "applied": str(applied_file),
+        },
+        check=False,
+    )
+    return result.returncode == 0
+
+
+def test_a_pin_to_running_containers_is_restored(tmp_path: Path) -> None:
+    """nginx coming back in the middle of a roll must route where the roll left
+    it, not to every bot container at once."""
+    applied = "server bot-blue:8080 resolve;\nserver bot-green:8080 resolve;\n"
+    assert _pin_is_live(tmp_path, applied, "bot-blue bot-green")
+
+
+def test_a_pin_to_a_gone_container_is_dropped(tmp_path: Path) -> None:
+    """A pin naming a container that no longer exists would leave nginx with
+    nothing to route to; the service name is used instead."""
+    applied = "server bot-blue:8080 resolve;\nserver bot-green:8080 resolve;\n"
+    assert not _pin_is_live(tmp_path, applied, "bot-blue")
+
+
+def test_a_pin_without_a_server_is_dropped(tmp_path: Path) -> None:
+    """A record with no server line (cut short, written by hand) would leave
+    the upstream empty and every update answered with 502."""
+    assert not _pin_is_live(tmp_path, "# nothing pinned\n", "bot")
