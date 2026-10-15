@@ -45,9 +45,17 @@ flowchart LR
     H -->|reply| B[Bot API]
 ```
 
-`src/core` is shared infrastructure with no domain knowledge. The domains are
-`src/user`, `src/admin`, `src/broadcast`, `src/developer`, `src/system` and
-`src/note`; `src/main` is the composition root that wires them together.
+`src/core` is shared infrastructure with no domain knowledge. `src/main` is
+the composition root that wires the domains together:
+
+- `src/user` - users: storing and refreshing them, `/start`, `/help` and
+  `/language`, the user and ban middlewares, bans and reachability;
+- `src/admin` - the admin commands `/ban`, `/unban` and `/stats`;
+- `src/developer` - the developer commands `/status` and `/test_alert`;
+- `src/broadcast` - broadcasts: the draft dialog, the run and its tasks;
+- `src/system` - the health checks behind the probes and `/status`;
+- `src/note` - notes, the reference domain to copy.
+
 Where core code needs something only a domain knows, it declares a `Protocol`
 and `src/main` binds the implementation: `UnreachableUserRecorder`
 (`src/core/telegram/session.py`), `LocalePreference`
@@ -320,3 +328,6 @@ follows the same steps.
     integration tests under `tests/integration/src/<module>/` for what needs a
     real PostgreSQL or Redis: `tests/unit/src/note/` and
     `tests/integration/src/note/` show both.
+
+Taking a module out is the same list in reverse, with the migration as the one
+step that needs a decision: see [removing modules](removing-modules.md).

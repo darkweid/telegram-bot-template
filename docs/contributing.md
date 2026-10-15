@@ -117,6 +117,9 @@ Updates arrive as pull requests:
   end up in the squash commit body.
 - **A failing check** is fixed with a new commit on the branch. Never
   force-push a branch under review.
+- **A security problem** goes to the maintainers privately, never into an
+  issue or a pull request: see
+  [reporting a vulnerability](../SECURITY.md#reporting-a-vulnerability).
 - **A change to a setting** updates its section in `src/main/config.py`,
   `.env.example` and [the configuration reference](configuration.md) in the
   same commit, and to `KNOWN_KEYS` in `scripts/ops/check_env.py`, which

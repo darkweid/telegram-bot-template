@@ -148,7 +148,8 @@ the error class; the format and the cooldown are described in
 container holds a `DisabledS3Client`, which raises `S3Disabled` on every call,
 so a bot that stores no files needs no keys. `S3_ENABLED=true` requires
 `S3_BUCKET_NAME`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY` and
-`S3_REGION_NAME`; the configuration refuses to start without them.
+`S3_REGION_NAME`; the configuration refuses to start without them. Every
+`S3_*` key is in [the configuration reference](configuration.md#s3).
 
 Use cases and tasks receive the client as `S3Client`
 (`src/core/storage/s3/interface.py`):
@@ -170,7 +171,8 @@ The client opens on first use and closes with the container.
 (a title and a message, filled from `NotificationEmail`). It is off by default:
 with `EMAIL_ENABLED=false` the mailer raises `EmailDisabled` and `EmailService`
 refuses to queue an email. `EMAIL_ENABLED=true` requires `EMAIL_SERVER`,
-`EMAIL_USER` and `EMAIL_FROM_NAME`.
+`EMAIL_USER` and `EMAIL_FROM_NAME`; the port and TLS keys are in
+[the configuration reference](configuration.md#email).
 
 A use case queues an email in its own transaction, and the worker sends it
 after the commit through the `email.send` task:

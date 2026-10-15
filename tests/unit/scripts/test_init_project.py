@@ -20,6 +20,7 @@ from scripts.init_project import (
     run,
     validate_name,
 )
+from scripts.ops.check_docs import check
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 SECRET_PATTERN = re.compile(r"[A-Za-z0-9_-]{32,256}")
@@ -186,6 +187,16 @@ def test_the_readme_is_replaced_and_the_script_removes_itself(copy: Path) -> Non
     makefile = (copy / "Makefile").read_text(encoding="utf-8")
     assert "init-project" not in makefile
     assert "##@ Stack" in makefile
+
+
+def test_the_docs_still_check_out_after_init(copy: Path) -> None:
+    """init replaces the README and deletes itself but keeps docs/; a doc that
+    links to a README anchor or names the script would fail the new bot's
+    first `make lint`."""
+    run(copy, "demo", None)
+    # Staged, so the deleted script leaves the index as it will in the commit.
+    _git(copy, "add", "-A")
+    assert check(copy) == []
 
 
 def test_a_dirty_tree_is_refused_untouched(copy: Path) -> None:

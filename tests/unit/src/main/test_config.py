@@ -496,8 +496,8 @@ def test_cache_default_ttl_may_not_outlive_the_version_counter() -> None:
 
 
 def test_throttling_defaults_match_the_spec(settings: Config) -> None:
-    """The README and .env.example quote these numbers; a drifted default would
-    make both wrong."""
+    """docs/bot-layer.md, docs/configuration.md and .env.example quote these
+    numbers; a drifted default would make all three wrong."""
     throttling = settings.throttling
     assert (
         throttling.THROTTLE_DEFAULT_LIMIT,

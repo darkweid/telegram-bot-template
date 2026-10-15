@@ -139,10 +139,12 @@ other vendor would most likely repeat it, and be paid for twice.
 The fallback must be the other provider, so that one vendor's outage cannot
 stop both paths; config refuses the same provider twice.
 
-Every switch logs a warning and queues a developer alert before the fallback
-is tried, so it leaves even when the fallback fails as well. The alert goes
-out in the background and the user's answer does not wait for it; the same
-failure is alerted once per `ALERT_COOLDOWN_SECONDS`.
+Every switch logs a warning and queues a developer alert, with the origin
+`llm <provider>` naming the provider that failed, before the fallback is
+tried, so it leaves even when the fallback fails as well. The alert goes out
+in the background and the user's answer does not wait for it; the same
+failure is alerted once per `ALERT_COOLDOWN_SECONDS`
+([errors and alerts](bot-layer.md#errors-and-alerts)).
 
 ## Usage and cost
 

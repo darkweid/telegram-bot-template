@@ -108,17 +108,45 @@ routers, which also accept private chats only.
 
 - Admins get `/ban`, `/unban`, `/stats` (`src/admin/handlers.py`) and
   `/broadcast` ([broadcasts](broadcast.md#sending-a-broadcast)).
-- Developers get `/status` and `/test_alert` (`src/developer/handlers.py`).
+- Developers get `/status`, which shows the [health report](#health), and
+  `/test_alert` (`src/developer/handlers.py`).
 
-Neither role is throttled, and a ban never drops their updates. Broadcasts
-still skip a banned role holder, and `/stats` counts them as banned until
-`/unban`.
+`/ban` and `/unban` take a Telegram user id or an `@username`, matched
+ignoring case. Only a user who has started the bot can be named, and a
+username that several stored users have had is refused: use the id. Admins
+and developers cannot be banned, and nobody bans themselves. A banned user's
+updates are dropped without an answer.
+
+A ban outlives a Redis outage. While Redis is down every update reads the
+stored row, so a ban or unban made then holds at once. The user snapshot
+cached before it is never served again: the bot remembers that its delete
+failed and retries it on the next read, and the change also queues the
+`user.drop_snapshot` task, which deletes the snapshot once Redis is back.
+Only a bot restarted during the outage forgets the failed delete, and then
+serves the old snapshot until the task lands, usually within a couple of
+minutes of Redis coming back.
+
+`/stats` shows users in total, reachable, banned, and active and new in the
+last 1, 7 and 30 days, then the LLM spending: today since midnight UTC, the
+last 7 and 30 days, the last 30 days by purpose and for the top 5 users, and
+the calls that failed or had no known price when there are any.
+
+Neither role is throttled, and a ban never drops their updates. A role beats
+a ban for updates only: someone banned before their id was added to
+`ADMIN_IDS` or `DEVELOPER_IDS` is served as usual, but broadcasts skip them and
+`/stats` counts them as banned until `/unban`.
 
 The public menu is set for all private chats, and each listed id gets a menu of
 its own in its private chat: the public commands plus those of its roles
 (`src/main/commands.py`), in every supported language, on every start. An id
 that never opened the bot cannot get a menu yet: the bot logs a warning and
-starts anyway. Any other refusal from Telegram fails startup.
+starts anyway, and the menu is set on the first start after that user opens
+the bot. Any other refusal from Telegram fails startup.
+
+The bot never deletes a menu it set. Removing an id from `ADMIN_IDS` or
+`DEVELOPER_IDS` takes the role away at once, but Telegram keeps showing that
+user the old menu; clear it once by hand with `deleteMyCommands` for the scope
+`{"type": "chat", "chat_id": <id>}` and every language code the bot set.
 
 ## Throttling
 
@@ -141,7 +169,8 @@ answer) and the rest are dropped. A handler that raises `SkipHandler` passes
 the update to the next matching one, and aiogram runs the inner middlewares
 again, so such an update counts once per handler reached. Counters live in
 Redis; while Redis is down each process counts in its own memory, so the limit
-holds per process.
+holds per process. The keys and their defaults are in
+[the configuration reference](configuration.md#throttling).
 
 ## Errors and alerts
 
@@ -178,19 +207,31 @@ when a handler raises an unexpected error, when a task fails for good, when the
 LLM client switches to its fallback provider, and when Redis goes down under the
 cache or the throttle limiter, and again when it recovers. They go to
 `DEV_ALERT_CHAT_ID` when it is set, otherwise to every developer in private,
-through a `Bot` of their own on a session of its own. The same failure (error
-class, origin and the innermost project frame) is alerted once per
-`ALERT_COOLDOWN_SECONDS` (300), and a task id once in 24 hours however often it
-is redelivered. An alert carries ids, the origin, the error class and where it
-was raised; the error message only for a `CoreException` or a scrubbed driver or
-validation error, since any other message can quote what the user sent. A failed
+through a `Bot` of their own on a session of its own. The bot must be a member
+of the alert chat, and a developer must have opened the bot: an alert Telegram
+refuses is logged and nothing more. The keys are in
+[the configuration reference](configuration.md#bot).
+
+An alert carries the error class, where it was raised, its origin (what was
+being handled: `update message`, `task <name>`, or `llm <provider>` for a
+fallback switch, naming the provider that failed), the user id or task id, and
+the Sentry event id when Sentry is on. The error message (cut to 500
+characters) is shown only for a `CoreException` or a scrubbed driver or
+validation error, whose text is rebuilt from safe fields; any other message can
+quote what the user sent (`int(message.text)`), so the alert points to the logs
+instead. The same failure (error class, origin and the innermost project frame)
+is alerted once per `ALERT_COOLDOWN_SECONDS` (300), a fallback switch included,
+and a task id once in 24 hours however often it is redelivered. A failed
 delivery is logged and never raised into the code being reported on.
 `/test_alert` sends a test through the same path, past the cooldown.
 
 ## Health
 
 The bot serves three probes on `WEB_SERVER_PORT` (8080) in both modes
-(`src/main/health.py`):
+(`src/main/health.py`). No port of the bot is published: the probes are
+reached over the compose network, and in webhook mode nginx passes them on
+only from private addresses
+([nginx and the certificate](deployment.md#nginx-and-the-certificate)).
 
 - `/live` answers 200 while the process runs; the Docker healthcheck reads it.
 - `/ready` answers 200 when PostgreSQL and the three Redis clients answer, and
@@ -198,12 +239,19 @@ The bot serves three probes on `WEB_SERVER_PORT` (8080) in both modes
 - `/health` always answers 200 with a JSON report from `HealthService`
   (`src/system/services.py`): `status`, `version`, `commit`, `mode`, the
   PostgreSQL and Redis readings, the Redis memory ratio, the outbox backlog
-  and its oldest pending row, the task backlog and the scheduler heartbeat age.
-  A reading that failed or timed out (2 seconds) is `null`.
+  and its oldest pending row, the task backlog and the scheduler heartbeat age:
+  `status`, `version`, `commit`, `mode`, `postgres`, `redis`,
+  `redis_memory_used_ratio`, `outbox_pending`, `outbox_oldest_pending_seconds`,
+  `task_queue_length` and `scheduler_heartbeat_age_seconds`. A reading that
+  failed or timed out (2 seconds) is `null`, and so is every Redis reading
+  while any of the three Redis databases is down.
 
 `status` is `degraded` when PostgreSQL or Redis is down, when Redis uses 90% of
 `maxmemory`, when the scheduler heartbeat is missing or older than
 `HEARTBEAT_TTL_SECONDS` (90), or when an outbox row has waited more than 5
-minutes. The task backlog (the workers' consumer group lag plus the pending
-entries) is reported but never changes the status. Developers see the same
-report with `/status`.
+minutes. The task backlog, `task_queue_length`, is the workers' consumer group
+lag plus the entries delivered and not yet acknowledged, not the stream's
+length, which keeps acknowledged tasks until the stream is trimmed. It is
+`null` when Redis cannot count the undelivered ones, which happens after some
+trims and deletions, and it never changes the status: there is no backlog that
+is wrong for every bot. Developers see the same report with `/status`.

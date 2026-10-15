@@ -80,8 +80,9 @@ layer; `src/core/llm` stays and has no caller until your own domain adds one.
       `notes`, and nothing else.
 12. `make i18n-update`: the note strings leave both catalogs (obsolete entries
     are not kept), then `make i18n-compile`.
-13. The documentation. `README.md` uses `src/note` as the reference domain and
-    `/summarize` as the LLM example. In `docs/`: `architecture.md` (examples
+13. The documentation. The template's `README.md` names `src/note` as the
+    reference domain to copy, in the features, the layout and adding a
+    module. In `docs/`: `architecture.md` (examples
     throughout, and the reference domain in `## Adding a module`),
     `background-jobs.md` (the `NOTE_TASKS` snippet under
     `## Declaring a task`), `bot-layer.md` (the `CallbackData` example, and
@@ -154,9 +155,9 @@ migrations before it replaces the worker.
       The revision drops the table `broadcasts` and the enum type
       `broadcaststatus`.
 12. `make i18n-update`, then `make i18n-compile`.
-13. The documentation. `README.md` has a `## Broadcast` section, lists
-    broadcasts among the features, the admin role's powers and the layout, and
-    names them where it explains what a role does not bypass. In `docs/`:
+13. The documentation. The template's `README.md` lists broadcasts among the
+    features and the admin role's powers, in the layout, and links to
+    `broadcast.md` from the features and the documentation table. In `docs/`:
     - the links to `broadcast.md` in `background-jobs.md` and `bot-layer.md`
       break with the file;
     - `background-jobs.md` names `RunBroadcastUseCase` as the task that wraps
