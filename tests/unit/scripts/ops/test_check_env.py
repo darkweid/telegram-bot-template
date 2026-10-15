@@ -4,8 +4,18 @@ import re
 import sys
 
 import pytest
+import yaml
 
-from scripts.ops.check_env import KNOWN_KEYS, EnvFileError, check, main, parse_env
+from scripts.ops.check_env import (
+    DEFAULT_SHUTDOWN_TIMEOUT_SECONDS,
+    DEFAULT_STOP_GRACE_PERIOD,
+    KNOWN_KEYS,
+    EnvFileError,
+    check,
+    main,
+    parse_env,
+)
+from src.main.config import BotConfig
 
 PROJECT_ROOT = Path(__file__).resolve().parents[4]
 SCRIPT = PROJECT_ROOT / "scripts/ops/check_env.py"
@@ -377,10 +387,12 @@ def test_messages_never_echo_a_value() -> None:
         "POSTGRES_PASSWORD": "leaked-password-not-real",
         "ADMIN_IDS": "leaked-admin",
         "BOT_CPUS": "leaked-cpus",
+        "BOT_STOP_GRACE_PERIOD": "leaked-grace",
+        "SHUTDOWN_TIMEOUT_SECONDS": "leaked-timeout",
         "UNKNOWN_LEAKED": "leaked-unknown",
     }
     report = check({**WEBHOOK, **secret_values})
-    assert len(report.errors) >= 6
+    assert len(report.errors) >= 8
     for message in report.errors + report.warnings:
         assert "leaked" not in message
 
@@ -522,3 +534,65 @@ def test_main_refuses_a_file_the_user_may_not_read(
     assert main([str(env_file)]) == 1
     err = capsys.readouterr().err
     assert err == f"{env_file}: error: cannot read the file as UTF-8 text\n"
+
+
+GRACE_TOO_SHORT = (
+    "BOT_STOP_GRACE_PERIOD must be at least SHUTDOWN_TIMEOUT_SECONDS + 5s: past "
+    "it Docker kills the bot while it is still finishing updates and background "
+    "work"
+)
+
+
+def test_a_grace_period_shorter_than_the_shutdown_plus_margin_is_refused() -> None:
+    """Past stop_grace_period Docker kills the bot mid-drain: a cancelled
+    model call goes unrecorded and a user keeps a status that never ends."""
+    assert _errors(BOT_STOP_GRACE_PERIOD="24s") == [GRACE_TOO_SHORT]
+    assert _errors(BOT_STOP_GRACE_PERIOD="25s") == []
+    assert _errors(SHUTDOWN_TIMEOUT_SECONDS="100", BOT_STOP_GRACE_PERIOD="104s") == [
+        GRACE_TOO_SHORT
+    ]
+    assert _errors(SHUTDOWN_TIMEOUT_SECONDS="100", BOT_STOP_GRACE_PERIOD="105s") == []
+    assert _errors(SHUTDOWN_TIMEOUT_SECONDS="25.5") == [GRACE_TOO_SHORT]
+
+
+@pytest.mark.parametrize("value", ["30", "1m", "30.5s", "1m30s", "-5s", "30 s"])
+def test_a_grace_period_in_another_format_is_refused(value: str) -> None:
+    """Compose reads more formats than this check does; the check keeps to
+    whole seconds and says so rather than misread one."""
+    assert _errors(BOT_STOP_GRACE_PERIOD=value) == [
+        "BOT_STOP_GRACE_PERIOD must be whole seconds such as 30s"
+    ]
+
+
+@pytest.mark.parametrize("value", ["", "0", "-1", "nan", "inf", "twenty"])
+def test_a_shutdown_timeout_that_is_not_a_positive_number_is_refused(
+    value: str,
+) -> None:
+    """The bot refuses it at start; the deploy says so before anything stops."""
+    assert _errors(SHUTDOWN_TIMEOUT_SECONDS=value) == [
+        "SHUTDOWN_TIMEOUT_SECONDS must be a positive number of seconds"
+    ]
+
+
+def test_absent_keys_fall_back_to_the_shipped_defaults() -> None:
+    """Compose and the bot run with their defaults when the keys are missing,
+    so the check compares the numbers they will run with."""
+    assert "BOT_STOP_GRACE_PERIOD" not in VALID
+    assert "SHUTDOWN_TIMEOUT_SECONDS" not in VALID
+    assert _errors() == []
+    assert _errors(BOT_STOP_GRACE_PERIOD="") == []
+    assert _errors(SHUTDOWN_TIMEOUT_SECONDS="26") == [GRACE_TOO_SHORT]
+    assert _errors(BOT_STOP_GRACE_PERIOD="20s") == [GRACE_TOO_SHORT]
+
+
+def test_the_defaults_match_compose_and_the_config() -> None:
+    """The script cannot import either (it runs on the box with the system
+    python3), so the copies it keeps are pinned here."""
+    compose = yaml.safe_load(
+        (PROJECT_ROOT / "infra/docker-compose.yml").read_text(encoding="utf-8")
+    )
+    assert compose["services"]["bot"]["stop_grace_period"] == (
+        f"${{BOT_STOP_GRACE_PERIOD:-{DEFAULT_STOP_GRACE_PERIOD}}}"
+    )
+    default_timeout = BotConfig.model_fields["SHUTDOWN_TIMEOUT_SECONDS"].default
+    assert default_timeout == DEFAULT_SHUTDOWN_TIMEOUT_SECONDS

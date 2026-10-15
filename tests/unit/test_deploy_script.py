@@ -622,3 +622,32 @@ def test_a_failing_worker_rolls_the_webhook_bot_back(tmp_path: Path) -> None:
         for container in deploy.state["containers"]
         if container["status"] == "running"
     } == {"sha256:previous"}
+
+
+STOP_TIMEOUT_FLAGS = ("-t", "--time", "--timeout")
+
+
+def _passes_a_stop_timeout(call: str) -> bool:
+    return any(
+        word in STOP_TIMEOUT_FLAGS or word.startswith(("--time=", "--timeout="))
+        for word in call.split()
+    )
+
+
+def test_bot_stops_use_the_containers_grace_period(tmp_path: Path) -> None:
+    """BOT_STOP_GRACE_PERIOD reaches Docker only as the container's
+    stop_grace_period: a timeout on the command line would cut the bot's
+    drain short whatever .env says."""
+    polling = _deploy(tmp_path / "polling", POLLING_ENV)
+    webhook = _deploy(
+        tmp_path / "webhook",
+        WEBHOOK_ENV,
+        state=_serving_webhook_stack(_container("bot", 1), pinned=["bot"]),
+    )
+    assert polling.returncode == 0, polling.output
+    assert webhook.returncode == 0, webhook.output
+    recreate = [call for call in polling.calls if "--force-recreate" in call]
+    stops = [call for call in webhook.calls if " stop " in f" {call} "]
+    assert recreate and stops
+    for call in recreate + stops:
+        assert not _passes_a_stop_timeout(call), call

@@ -27,9 +27,10 @@ def _services() -> dict[str, Any]:
 
 
 def _seconds(duration: str) -> int:
-    match = re.fullmatch(r"(\d+)s", duration)
+    """`30s`, or the default of `${VARIABLE:-30s}`."""
+    match = re.fullmatch(r"(\d+)s|\$\{[A-Z0-9_]+:-(\d+)s\}", duration)
     assert match, f"write durations in seconds, got {duration!r}"
-    return int(match.group(1))
+    return int(match.group(1) or match.group(2))
 
 
 # The prefix of each service's limit variables in .env (BOT_CPUS, BOT_MEMORY).
@@ -67,6 +68,14 @@ def test_docker_waits_longer_than_the_bot_does_on_shutdown() -> None:
     bot = _services()["bot"]
     default_timeout = BotConfig.model_fields["SHUTDOWN_TIMEOUT_SECONDS"].default
     assert _seconds(bot["stop_grace_period"]) >= default_timeout + 5
+
+
+def test_the_bot_grace_period_comes_from_the_env_with_a_default() -> None:
+    """A deployment that raises SHUTDOWN_TIMEOUT_SECONDS must be able to make
+    Docker wait longer too; without the key the default still covers the
+    default timeout."""
+    grace = _services()["bot"]["stop_grace_period"]
+    assert grace == "${BOT_STOP_GRACE_PERIOD:-30s}"
 
 
 def test_the_bot_publishes_no_port() -> None:

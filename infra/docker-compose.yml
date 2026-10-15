@@ -75,10 +75,11 @@ services:
     image: ${BOT_IMAGE:-telegram-bot-template-bot:latest}
     env_file: ../.env
     restart: unless-stopped
-    # Longer than SHUTDOWN_TIMEOUT_SECONDS (20 by default): SIGTERM makes the
-    # bot stop taking updates and finish the ones in progress, and past this
-    # period Docker kills it mid-update.
-    stop_grace_period: 30s
+    # At least SHUTDOWN_TIMEOUT_SECONDS (20 by default) plus 5 s: SIGTERM makes
+    # the bot stop taking updates, finish the ones in progress and then its
+    # background work, and past this period Docker kills it mid-update.
+    # make check-env refuses a shorter BOT_STOP_GRACE_PERIOD.
+    stop_grace_period: ${BOT_STOP_GRACE_PERIOD:-30s}
     healthcheck:
       # /live touches no dependency: a Postgres or Redis blip must not make
       # Docker restart a bot that recovers on its own.
