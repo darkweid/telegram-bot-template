@@ -20,7 +20,7 @@ pull requests.
   note through a dialog with a Cancel button and `/cancel`, `/notes` lists
   them five per page with keyset pagination in the buttons, and each note is
   deleted after a confirmation. It has its own table, migration, use cases,
-  keyboards and the full set of tests (handlers on the real dispatcher, use
+  keyboards, an event and its task, and the full set of tests (handlers on the real dispatcher, use
   cases on fakes, the repository against PostgreSQL).
 - Users stored on their first private-chat update and kept fresh with
   minimal writes: a row is rewritten only when the Telegram profile changes
@@ -249,8 +249,9 @@ and the task and sends nothing.
 publishes `NoteCreated` inside the note's transaction, the subscriber in
 `src/main/event_subscribers.py` writes an outbox row for the
 `note.note_created` task, and the worker logs the note and user ids. To react
-to an event of your own, add a subscriber there and a `TaskSpec` to `TASKS`
-in `src/main/tasks.py`.
+to an event of your own, define the subscriber and the task in your domain,
+map the subscriber to its event in `src/main/event_subscribers.py`, and add
+the domain's task specs to `TASKS` in `src/main/tasks.py`.
 
 ## Alerts
 
@@ -369,7 +370,7 @@ src/developer/      developer commands: status, test alert
 src/main/           entry points (bot, worker, scheduler), config, dependency
                     container, dispatcher, polling and webhook
 src/note/           notes, the reference domain: handlers, dialog, keyboards,
-                    use cases, repository
+                    use cases, repository, an event and its task
 src/system/         health checks behind the probes and /status
 src/user/           users: handlers, keyboards, middleware, use cases, repository
 tests/unit/         tests that need no Docker

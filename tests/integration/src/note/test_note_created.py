@@ -1,4 +1,4 @@
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator
 
 import pytest
 import pytest_asyncio
@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from taskiq import AsyncBroker
 
 from src.core.database.uow import SQLAlchemyUnitOfWork
-from src.core.events.registry import event_subscribers, set_event_subscribers
+from src.core.events.registry import set_event_subscribers
 from src.core.outbox.enums import OutboxMessageStatus
 from src.core.outbox.models import OutboxMessage
 from src.core.outbox.publisher import OutboxPublisher
@@ -26,11 +26,8 @@ pytestmark = pytest.mark.asyncio(loop_scope="session")
 
 
 @pytest.fixture(autouse=True)
-def _production_subscribers() -> Iterator[None]:
-    saved = event_subscribers()
+def _production_subscribers() -> None:
     set_event_subscribers(EVENT_SUBSCRIBERS)
-    yield
-    set_event_subscribers(saved)
 
 
 @pytest.fixture
@@ -47,9 +44,7 @@ async def author(integration_engine: AsyncEngine, user_id: int) -> AsyncIterator
         await session.execute(
             delete(OutboxMessage).where(
                 OutboxMessage.task_name == NOTE_CREATED,
-                # ->> yields text; as_integer() would cast to int4, too
-                # narrow for a Telegram id.
-                OutboxMessage.kwargs["user_id"].as_string() == str(user_id),
+                OutboxMessage.kwargs.contains({"user_id": user_id}),
             )
         )
         # The note goes with its author: the foreign key cascades.
@@ -86,7 +81,7 @@ async def test_a_new_note_reaches_its_task_through_the_outbox(
         [row] = await session.scalars(
             select(OutboxMessage).where(
                 OutboxMessage.task_name == NOTE_CREATED,
-                OutboxMessage.kwargs["user_id"].as_string() == str(user_id),
+                OutboxMessage.kwargs.contains({"user_id": user_id}),
             )
         )
     assert row.kwargs == {"note_id": str(note_id), "user_id": user_id}

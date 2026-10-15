@@ -1,11 +1,10 @@
-from collections.abc import Iterator
 from unittest.mock import AsyncMock
 from uuid import UUID
 
 import pytest
 
 from src.core.database.uow import SQLAlchemyUnitOfWork
-from src.core.events.registry import event_subscribers, set_event_subscribers
+from src.core.events.registry import set_event_subscribers
 from src.core.events.schemas import Actor, PublishedEvent
 from src.note.events import NoteCreated
 from src.note.exceptions import EmptyNoteError, NoteTooLongError
@@ -16,17 +15,16 @@ from tests.fakes.db import FakeAsyncSession
 
 
 @pytest.fixture
-def published() -> Iterator[list[PublishedEvent]]:
-    """Record what the use case publishes, then put the real registry back."""
+def published() -> list[PublishedEvent]:
+    """Record what the use case publishes; the autouse fixture in conftest
+    puts the real registry back."""
     seen: list[PublishedEvent] = []
 
     async def record(_uow: SQLAlchemyUnitOfWork, event: PublishedEvent) -> None:
         seen.append(event)
 
-    saved = event_subscribers()
     set_event_subscribers({NoteCreated: [record]})
-    yield seen
-    set_event_subscribers(saved)
+    return seen
 
 
 def _use_case(session: FakeAsyncSession, notes: AsyncMock) -> CreateNoteUseCase:
