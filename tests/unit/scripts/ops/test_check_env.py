@@ -76,8 +76,8 @@ def test_the_example_as_shipped_is_refused() -> None:
 
 def test_every_key_in_the_example_is_known() -> None:
     """A key added to .env.example and not here would warn on every
-    deployment. Plans that add settings (LLM_*, S3_*, EMAIL_*) register them
-    in KNOWN_KEYS in the same commit."""
+    deployment; a new setting goes into KNOWN_KEYS in the same commit as its
+    line in the example."""
     names = re.findall(
         r"^(?:# )?([A-Z][A-Z0-9_]*)=",
         ENV_EXAMPLE.read_text(encoding="utf-8"),
@@ -213,39 +213,18 @@ def test_the_alert_chat_may_be_a_group() -> None:
     assert _errors(DEV_ALERT_CHAT_ID="-1001234567890") == []
 
 
-@pytest.mark.parametrize("value", ["true", "1", "on", "yes"])
-def test_logging_model_content_is_refused(value: str) -> None:
-    """It writes what users send to the model into the logs; useful while
-    developing, never in a deployment."""
-    errors = _errors(LLM_LOG_CONTENT=value)
-    assert len(errors) == 1
-    assert errors[0].startswith("LLM_LOG_CONTENT must be off")
-
-
-@pytest.mark.parametrize("value", ["", "false", "0", "off", "No"])
-def test_model_content_logging_off_passes(value: str) -> None:
-    assert _errors(LLM_LOG_CONTENT=value) == []
-
-
 def test_a_placeholder_is_refused() -> None:
     errors = _errors(POSTGRES_PASSWORD="example-postgres-password-not-real")
     assert errors == ["POSTGRES_PASSWORD still holds the placeholder from .env.example"]
 
 
 def test_a_placeholder_of_a_disabled_feature_passes() -> None:
-    """The example ships with Sentry, S3 and email off and their placeholders in
-    place; a bot that uses none of them needs to touch none of them."""
+    """The example ships with Sentry off and its placeholder in place; a bot
+    that does not report to Sentry needs to touch none of it."""
     assert (
         _errors(
             SENTRY_ENABLED="false",
             SENTRY_DSN="https://example-key-not-real@sentry.example/1",
-            S3_ENABLED="false",
-            S3_SECRET_ACCESS_KEY="example-not-real",
-            EMAIL_ENABLED="false",
-            EMAIL_PASSWORD="example-not-real",
-            LLM_PROVIDER="",
-            LLM_FALLBACK_PROVIDER="",
-            ANTHROPIC_API_KEY="example-not-real",
         )
         == []
     )
@@ -255,15 +234,7 @@ def test_a_placeholder_of_a_disabled_feature_passes() -> None:
     "changes",
     [
         {"SENTRY_ENABLED": "true", "SENTRY_DSN": "https://not-real@sentry.example/1"},
-        {"S3_ENABLED": "True", "S3_SECRET_ACCESS_KEY": "example-not-real"},
-        {"EMAIL_ENABLED": "1", "EMAIL_PASSWORD": "example-not-real"},
-        {"LLM_PROVIDER": "anthropic", "ANTHROPIC_API_KEY": "example-not-real"},
-        {
-            "LLM_PROVIDER": "anthropic",
-            "ANTHROPIC_API_KEY": "real",
-            "LLM_FALLBACK_PROVIDER": "openrouter",
-            "OPENROUTER_API_KEY": "example-not-real",
-        },
+        {"SENTRY_ENABLED": "1", "SENTRY_DSN": "https://not-real@sentry.example/1"},
     ],
 )
 def test_a_placeholder_of_an_enabled_feature_is_refused(

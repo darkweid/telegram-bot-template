@@ -93,8 +93,6 @@ KNOWN_KEYS = frozenset(
         # BroadcastConfig
         "BROADCAST_RATE_PER_SECOND",
         "BROADCAST_CHECKPOINT_EVERY",
-        # LLMConfig: the rule below reads it by name
-        "LLM_LOG_CONTENT",
         # Build time: refused below, listed so the message says why
         "COMMIT_SHA",
         # compose and nginx
@@ -131,20 +129,13 @@ BOT_MODES = ("polling", "webhook")
 WEBHOOK_PROFILE = "webhook"
 # What pydantic reads as true for a bool setting.
 TRUE_VALUES = frozenset({"1", "true", "t", "yes", "y", "on"})
-FALSE_VALUES = frozenset({"", "0", "false", "f", "no", "n", "off"})
 # Marks every secret placeholder in .env.example.
 PLACEHOLDER_MARK = "not-real"
 # A key with one of these prefixes belongs to a feature its switch turns off;
 # a placeholder there is harmless until the switch is on.
 FEATURE_SWITCHES = {
     "SENTRY_": "SENTRY_ENABLED",
-    "S3_": "S3_ENABLED",
-    "EMAIL_": "EMAIL_ENABLED",
 }
-# ANTHROPIC_API_KEY and the like: needed only when the provider it is named
-# after is LLM_PROVIDER or LLM_FALLBACK_PROVIDER.
-PROVIDER_KEY = re.compile(r"([A-Z][A-Z0-9]*)_API_KEY")
-LLM_PROVIDER_KEYS = ("LLM_PROVIDER", "LLM_FALLBACK_PROVIDER")
 ASCII_DIGITS = re.compile(r"[0-9]+")
 CPUS_PATTERN = re.compile(r"[0-9]+(\.[0-9]+)?")
 # compose's byte units: 512M, 1g, 1.5GB, 1048576.
@@ -250,10 +241,6 @@ def _feature_is_off(env: dict[str, str], key: str) -> bool:
     for prefix, switch in FEATURE_SWITCHES.items():
         if key.startswith(prefix) and key != switch:
             return not _is_true(env.get(switch, ""))
-    provider = PROVIDER_KEY.fullmatch(key)
-    if provider:
-        in_use = {env.get(name, "").strip().lower() for name in LLM_PROVIDER_KEYS}
-        return provider.group(1).lower() not in in_use
     return False
 
 
@@ -310,12 +297,6 @@ def check(env: dict[str, str]) -> Report:
     chat_id = env.get("DEV_ALERT_CHAT_ID", "").strip()
     if chat_id and (not re.fullmatch(r"-?[0-9]+", chat_id) or int(chat_id) == 0):
         report.errors.append("DEV_ALERT_CHAT_ID must be a non-zero chat id or empty")
-
-    if env.get("LLM_LOG_CONTENT", "").strip().lower() not in FALSE_VALUES:
-        report.errors.append(
-            "LLM_LOG_CONTENT must be off in a deployment: it writes what users "
-            "send to the model into the logs"
-        )
 
     if "COMMIT_SHA" in env:
         report.errors.append(
