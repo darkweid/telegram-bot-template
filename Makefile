@@ -27,12 +27,20 @@ export COMMIT_SHA
 
 # Requirements management
 REQ_DIR = infra/requirements
-REQ_NAMES = base dev prod security
+REQ_NAMES = base dev prod security ansible
 REQ_DEV_TXT = $(REQ_DIR)/dev.txt
 REQ_PROD_TXT = $(REQ_DIR)/prod.txt
 REQ_COMPILE_IMAGE ?= python:3.13-slim-bookworm
 REQ_COMPILE_PLATFORM ?= linux/amd64
 REQ_COMPILE_FLAGS ?=
+
+# Server provisioning (infra/ansible). Its own virtualenv: `make req-sync-dev`
+# would uninstall Ansible from the dev environment.
+ANSIBLE_DIR = infra/ansible
+ANSIBLE_VENV = $(ANSIBLE_DIR)/.venv
+ANSIBLE_BIN = $(ANSIBLE_VENV)/bin
+ANSIBLE_PLAYBOOK = ANSIBLE_CONFIG=$(ANSIBLE_DIR)/ansible.cfg $(ANSIBLE_BIN)/ansible-playbook -i $(ANSIBLE_DIR)/inventory/$(ENV)
+BOOTSTRAP_USER ?= root
 
 .DEFAULT_GOAL := help
 
@@ -246,6 +254,46 @@ req-sync-dev: ## Install the dev lockfile into the active environment
 .PHONY: req-sync-prod
 req-sync-prod: ## Install the prod lockfile into the active environment
 	python -m piptools sync $(REQ_PROD_TXT)
+
+##@ Server
+
+.PHONY: ansible-deps
+ansible-deps: ## Create the Ansible virtualenv and install the pinned collections
+	python3 -m venv $(ANSIBLE_VENV)
+	$(ANSIBLE_BIN)/python -m pip install --quiet --upgrade pip
+	$(ANSIBLE_BIN)/python -m pip install --quiet -r $(REQ_DIR)/ansible.txt
+	@# Galaxy drops connections now and then; three tries before giving up.
+	cd $(ANSIBLE_DIR) && for attempt in 1 2 3; do \
+		.venv/bin/ansible-galaxy collection install -r requirements.yml && exit 0; sleep 10; \
+	done; exit 1
+
+.PHONY: ansible-lint
+ansible-lint: ## Lint the playbooks and roles (profile: production)
+	cd $(ANSIBLE_DIR) && PATH="$$PWD/.venv/bin:$$PATH" ansible-lint
+
+.PHONY: server-bootstrap
+server-bootstrap: ## Prepare a fresh server: make server-bootstrap ENV=production [BOOTSTRAP_USER=root] [BOOTSTRAP_PORT=22022] [ASK_PASS=1] [ASK_BECOME=1]
+	@test -n "$(ENV)" || { echo "ENV is required: make server-bootstrap ENV=production"; exit 1; }
+	@test -d $(ANSIBLE_DIR)/inventory/$(ENV) || { echo "No inventory at $(ANSIBLE_DIR)/inventory/$(ENV)"; exit 1; }
+	$(ANSIBLE_PLAYBOOK) $(ANSIBLE_DIR)/playbooks/bootstrap.yml \
+		-e bootstrap_user=$(BOOTSTRAP_USER) \
+		$(if $(BOOTSTRAP_PORT),-e bootstrap_port=$(BOOTSTRAP_PORT)) \
+		$(if $(ASK_PASS),--ask-pass) \
+		$(if $(ASK_BECOME),--ask-become-pass)
+
+.PHONY: server-provision
+server-provision: ## Converge a server: make server-provision ENV=production [CURRENT_SSH_PORT=22022] [CHECK=1]
+	@test -n "$(ENV)" || { echo "ENV is required: make server-provision ENV=production"; exit 1; }
+	@test -d $(ANSIBLE_DIR)/inventory/$(ENV) || { echo "No inventory at $(ANSIBLE_DIR)/inventory/$(ENV)"; exit 1; }
+	$(ANSIBLE_PLAYBOOK) $(ANSIBLE_DIR)/playbooks/site.yml \
+		$(if $(CURRENT_SSH_PORT),-e bootstrap_port=$(CURRENT_SSH_PORT)) \
+		$(if $(CHECK),--check --diff)
+
+.PHONY: server-reboot
+server-reboot: ## Reboot a server and wait for the stack: make server-reboot ENV=production
+	@test -n "$(ENV)" || { echo "ENV is required: make server-reboot ENV=production"; exit 1; }
+	@test -d $(ANSIBLE_DIR)/inventory/$(ENV) || { echo "No inventory at $(ANSIBLE_DIR)/inventory/$(ENV)"; exit 1; }
+	$(ANSIBLE_PLAYBOOK) $(ANSIBLE_DIR)/playbooks/reboot.yml
 
 ##@ Help
 

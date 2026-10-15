@@ -1,0 +1,31 @@
+---
+argument_specs:
+  main:
+    short_description: ufw for host listeners, DOCKER-USER for published container ports
+    options:
+      firewall_ssh_port:
+        type: int
+      firewall_rule_comment:
+        type: str
+        default: managed-by-ansible
+      firewall_public_tcp_ports:
+        type: list
+        elements: int
+        description: Defaults to [80, 443] when bot_mode is webhook and to [] otherwise.
+      firewall_trusted_interfaces:
+        type: list
+        elements: str
+        default: []
+      bot_mode:
+        type: str
+        choices: [polling, webhook]
+  ssh_rule:
+    short_description: Allow the SSH port in ufw
+    options:
+      firewall_ssh_port:
+        type: int
+      firewall_rule_comment:
+        type: str
+        default: managed-by-ansible
+  verify:
+    short_description: Fail when DOCKER-USER is missing its final DROP or its unit is down

@@ -20,3 +20,6 @@ htmlcov/
 
 .idea/
 .DS_Store
+
+# Ansible collections, installed by `make ansible-deps`
+infra/ansible/collections/
