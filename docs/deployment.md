@@ -33,10 +33,9 @@ pulls and runs that image instead of building one from the checkout. No target
 builds the checkout under that name: `make build` then builds only the
 PostgreSQL image, and `make up` starts the stack without building, so it needs
 the images an earlier `make run` left: the pulled bot image and the built
-PostgreSQL image. With
-`COMPOSE_PROFILES=webhook`, `make run`, `up`, `down`, `logs` and `restart`
-handle nginx and certbot with the rest of the stack. The dev stack
-(`make run-dev`) always polls and leaves them out.
+PostgreSQL image. With `COMPOSE_PROFILES=webhook`, `make run`, `up`, `down`,
+`logs` and `restart` handle nginx and certbot with the rest of the stack. The
+dev stack (`make run-dev`) always polls and leaves them out.
 
 ## nginx and the certificate
 
@@ -223,16 +222,9 @@ Two paths skip work:
   same tree, the push skips every check but Gitleaks and goes straight to the
   image build.
 
-With Coveralls on, every push gets a Coveralls build
-([coverage](testing.md#coverage)).
-
-A push that skips the unit tests carries over the coverage report of the
-nearest commit whose tree was tested: its own tree, or an earlier commit's
-when only documentation changed in between. When that lookup finds no report
-(none was kept, it expired, or the API call failed), the unit tests run again
-on that push, and a failure there fails CI like any other failed test. A
-report that was found but cannot be downloaded afterwards leaves the commit
-without a Coveralls build and fails nothing.
+With Coveralls on, every push gets a Coveralls build: a push that skips the
+unit tests carries over an earlier report, or runs the tests again when there
+is none to carry ([coverage](testing.md#coverage)).
 
 ## Continuous deployment
 
