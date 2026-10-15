@@ -1,5 +1,7 @@
 ## What and why
 
+<!-- Becomes the squash commit body. No tokens, .env values or user data (names, message text). -->
+
 ## Checks
 
 - [ ] `make lint` and `make test` pass

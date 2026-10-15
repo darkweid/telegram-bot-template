@@ -6,7 +6,7 @@ body:
     id: problem
     attributes:
       label: The problem
-      description: What a bot built on the template cannot do today, or does with too much code.
+      description: What a bot built on the template cannot do today, or does with too much code. This tracker is public; leave out tokens, `.env` values and your users' data.
     validations:
       required: true
   - type: textarea

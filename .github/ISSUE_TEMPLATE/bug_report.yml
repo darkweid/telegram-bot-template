@@ -6,14 +6,14 @@ body:
     id: what-happened
     attributes:
       label: What happened
-      description: What you did, what you expected and what you got instead.
+      description: What you did, what you expected and what you got instead. This tracker is public; leave out tokens, `.env` values and your users' data (names, usernames, message text).
     validations:
       required: true
   - type: textarea
     id: reproduce
     attributes:
       label: How to reproduce
-      description: Commands, the update you sent the bot, the setting you changed. Describe settings by name; never paste tokens or the contents of your `.env`.
+      description: The commands you ran and the steps in the chat (a command, a button press, a photo), not the raw update, which carries names and message text. Describe settings by name; never paste tokens, secrets or the contents of your `.env`.
     validations:
       required: true
   - type: input
@@ -34,5 +34,5 @@ body:
     id: logs
     attributes:
       label: Log lines
-      description: Remove tokens, passwords and anything your users wrote before pasting.
+      description: Remove tokens, passwords, user and chat ids, names and anything your users wrote before pasting.
       render: text
