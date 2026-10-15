@@ -159,7 +159,16 @@ class OpenRouterLLMClient:
                 "OpenRouter returned a body that is not JSON", provider=_PROVIDER
             ) from None
         latency_ms = int((time.perf_counter() - started) * 1000)
-        return _response(completion, structured=structured, latency_ms=latency_ms)
+        try:
+            return _response(completion, structured=structured, latency_ms=latency_ms)
+        except (AttributeError, TypeError):
+            # The SDK builds the completion without validating it, so a JSON
+            # body that is no completion (a choice without a message, a null
+            # usage count) fails on first access to the missing field.
+            raise LLMUnavailable(
+                "OpenRouter returned a body that is not a chat completion",
+                provider=_PROVIDER,
+            ) from None
 
     def _report(
         self,

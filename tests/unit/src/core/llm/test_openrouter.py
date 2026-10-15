@@ -499,6 +499,65 @@ async def test_a_200_without_choices_is_unavailable(
     await client.aclose()
 
 
+def _without_message() -> dict[str, Any]:
+    answer = completion()
+    del answer["choices"][0]["message"]
+    return answer
+
+
+def _null_message() -> dict[str, Any]:
+    answer = completion()
+    answer["choices"][0]["message"] = None
+    return answer
+
+
+def _null_prompt_tokens() -> dict[str, Any]:
+    return completion(
+        usage={"prompt_tokens": None, "completion_tokens": 30, "total_tokens": 30}
+    )
+
+
+def _null_completion_tokens() -> dict[str, Any]:
+    return completion(
+        usage={"prompt_tokens": 120, "completion_tokens": None, "total_tokens": 120}
+    )
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        _without_message(),
+        _null_message(),
+        _null_prompt_tokens(),
+        _null_completion_tokens(),
+    ],
+    ids=[
+        "choice-without-message",
+        "null-message",
+        "null-prompt-tokens",
+        "null-completion-tokens",
+    ],
+)
+async def test_a_200_with_a_malformed_choice_or_usage_is_unavailable(
+    server: ScriptedLLMServer, answer: dict[str, Any]
+) -> None:
+    """The SDK builds the completion without validating it; a missing field
+    escaping as AttributeError would skip the fallback, the usage row and the
+    translated reply, all of which hang on LLMError."""
+    server.reply(answer)
+    client = make_client(server)
+
+    with captured_logs("src.core.llm.reporting") as records:
+        with pytest.raises(LLMUnavailable) as raised:
+            await client.complete(request())
+
+    assert raised.value.__cause__ is None
+    assert raised.value.__suppress_context__
+    [record] = records
+    assert "outcome=LLMUnavailable" in record.getMessage()
+    await client.aclose()
+
+
 async def test_finish_reason_error_is_unavailable(server: ScriptedLLMServer) -> None:
     """An upstream failure after the answer began must fail over, not be shown
     as the partial text."""

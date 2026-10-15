@@ -69,6 +69,19 @@ class LLMUsage:
     cache_write_tokens: int = 0
     cost_usd: Decimal | None = None
 
+    def __post_init__(self) -> None:
+        # The SDKs build responses without validating them, so a malformed body
+        # can hand over a null count. Refused here, inside the adapter's guard
+        # for such bodies, rather than in the log line or the llm_usage insert.
+        counts = (
+            self.input_tokens,
+            self.output_tokens,
+            self.cache_read_tokens,
+            self.cache_write_tokens,
+        )
+        if not all(isinstance(count, int) for count in counts):
+            raise TypeError("token counts must be integers")
+
 
 @dataclass(frozen=True, slots=True)
 class LLMResponse:

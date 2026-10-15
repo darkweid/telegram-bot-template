@@ -468,6 +468,27 @@ async def test_a_200_that_is_not_a_message_is_unavailable(
     await client.aclose()
 
 
+async def test_a_null_token_count_is_unavailable_even_unpriced(
+    server: ScriptedLLMServer,
+) -> None:
+    """Without a price no arithmetic touches the counts, so a null one would
+    reach the log line and the llm_usage insert and fail there, outside the
+    adapter's guard."""
+    answer = message(model="claude-unlisted-model")
+    answer["usage"]["output_tokens"] = None
+    server.reply(answer)
+    client = make_client(server)
+
+    with captured_logs("src.core.llm.reporting") as records:
+        with pytest.raises(LLMUnavailable) as raised:
+            await client.complete(request(model="claude-unlisted-model"))
+
+    assert raised.value.__cause__ is None
+    [record] = records
+    assert "outcome=LLMUnavailable" in record.getMessage()
+    await client.aclose()
+
+
 async def test_aclose_closes_the_http_client(server: ScriptedLLMServer) -> None:
     """The container closes the adapter on shutdown; open sockets would leak
     and warn under filterwarnings=error."""
