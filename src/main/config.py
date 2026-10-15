@@ -1,7 +1,7 @@
 from functools import lru_cache
 import os
 import re
-from typing import Annotated, Literal, Self
+from typing import Annotated, Literal, Self, assert_never
 from urllib.parse import quote, urlsplit
 
 from pydantic import (
@@ -9,6 +9,7 @@ from pydantic import (
     ConfigDict,
     Field,
     SecretStr,
+    ValidationInfo,
     field_validator,
     model_validator,
 )
@@ -340,6 +341,13 @@ class WebhookConfig(BaseSettings):
         return self.WEBHOOK_BASE_URL.rstrip("/") + self.WEBHOOK_PATH
 
 
+def _printable_header(value: str, setting: str) -> str:
+    # A control character in a header value is a request-splitting vector.
+    if any(not " " <= character <= "~" for character in value):
+        raise ValueError(f"{setting} must be printable ASCII")
+    return value.strip()
+
+
 class HttpConfig(BaseSettings):
     # Sent on every outgoing request (src/core/http). Blank derives
     # "<project-name>/<VERSION>" from PROJECT_NAME and VERSION. Many APIs
@@ -351,10 +359,7 @@ class HttpConfig(BaseSettings):
     @field_validator("HTTP_USER_AGENT")
     @classmethod
     def reject_unprintable(cls, value: str) -> str:
-        # A control character in a header is a request-splitting vector.
-        if any(not " " <= character <= "~" for character in value):
-            raise ValueError("HTTP_USER_AGENT must be printable ASCII")
-        return value.strip()
+        return _printable_header(value, "HTTP_USER_AGENT")
 
 
 class LLMConfig(BaseSettings):
@@ -391,12 +396,9 @@ class LLMConfig(BaseSettings):
 
     @field_validator("OPENROUTER_APP_URL", "OPENROUTER_APP_TITLE")
     @classmethod
-    def reject_unprintable(cls, value: str) -> str:
-        # Both go out as HTTP header values, which are ASCII; a control
-        # character in a header is a request-splitting vector.
-        if any(not " " <= character <= "~" for character in value):
-            raise ValueError("OpenRouter app headers must be printable ASCII")
-        return value.strip()
+    def reject_unprintable(cls, value: str, info: ValidationInfo) -> str:
+        # Both go out as HTTP header values, which are ASCII.
+        return _printable_header(value, str(info.field_name))
 
     @model_validator(mode="after")
     def require_provider_settings(self) -> Self:
@@ -426,10 +428,13 @@ class LLMConfig(BaseSettings):
     def _require_provider(
         self, provider: LLMProviderName, model: str, model_setting: str
     ) -> None:
-        if provider is LLMProviderName.ANTHROPIC:
-            key_setting, key = "ANTHROPIC_API_KEY", self.ANTHROPIC_API_KEY
-        else:
-            key_setting, key = "OPENROUTER_API_KEY", self.OPENROUTER_API_KEY
+        match provider:
+            case LLMProviderName.ANTHROPIC:
+                key_setting, key = "ANTHROPIC_API_KEY", self.ANTHROPIC_API_KEY
+            case LLMProviderName.OPENROUTER:
+                key_setting, key = "OPENROUTER_API_KEY", self.OPENROUTER_API_KEY
+            case _:
+                assert_never(provider)
         if not key.get_secret_value():
             raise ValueError(f"{key_setting} is required when {provider} is used")
         if not model:

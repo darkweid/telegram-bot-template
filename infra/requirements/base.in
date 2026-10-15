@@ -2,7 +2,7 @@ aiogram>=3.31
 aiohttp>=3.14.3  # security: CVE-2026-34993/47265/50269/54273-54280, PYSEC-2026-237
 alembic
 alembic-postgresql-enum
-anthropic>=1.13,<1.14
+anthropic>=1.13
 asyncpg
 babel
 dishka>=1.10
