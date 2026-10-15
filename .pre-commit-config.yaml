@@ -80,8 +80,10 @@ repos:
         additional_dependencies:
           - aiogram==3.31.0
           - alembic==1.20.0
+          - anthropic==1.13.0
           - babel==2.18.0
           - dishka==1.10.1
+          - openai==3.31.0
           - pydantic==2.13.5
           - pydantic-settings==2.15.0
           - redis==8.1.0
