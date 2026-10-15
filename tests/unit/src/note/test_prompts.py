@@ -3,22 +3,14 @@ import re
 from pydantic import ValidationError
 import pytest
 
-from src.core.locales import SUPPORTED_LOCALES
 from src.note.prompts import (
     MAX_THEMES,
-    RESPONSE_LANGUAGES,
     SUMMARY_MAX_CHARS,
     THEME_MAX_CHARS,
     NoteSummary,
     note_summary_system_prompt,
     note_summary_user_message,
 )
-
-
-def test_every_supported_locale_has_a_response_language() -> None:
-    """A locale added without a language name would fail every /summarize of
-    the users who chose it."""
-    assert set(RESPONSE_LANGUAGES) == set(SUPPORTED_LOCALES)
 
 
 def test_the_system_prompt_names_the_reply_language() -> None:

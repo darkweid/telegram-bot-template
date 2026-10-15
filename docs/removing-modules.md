@@ -83,9 +83,9 @@ layer; `src/core/llm` stays and has no caller until your own domain adds one.
     throughout, and the reference domain in `## Adding a module`),
     `background-jobs.md` (the `NOTE_TASKS` snippet under
     `## Declaring a task`), `bot-layer.md` (the `CallbackData` example, and
-    "note" in the router order), `i18n.md` (the command description example,
-    and the step that adds a language to `RESPONSE_LANGUAGES`, which lived in
-    the note prompts) and `llm.md` (the worked example). Point each example at
+    "note" in the router order), `i18n.md` (the command description example)
+    and `llm.md` (the worked example). `RESPONSE_LANGUAGES` lives in
+    `src/core/locales.py` and stays. Point each example at
     a module you keep, or cut it.
 14. Delete the note section of this document, then run
     `git grep -n -i -w -E 'notes?' -- README.md docs` and rewrite or cut every

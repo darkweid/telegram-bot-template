@@ -77,8 +77,9 @@ A malformed request (no purpose, no messages, a purpose too long) raises
 retry or fail over.
 
 **Prompts** live in the domain's `prompts.py` (`src/note/prompts.py`), in
-English. The reply language is a parameter: `RESPONSE_LANGUAGES` maps every
-supported locale to the English name the prompt states, and
+English. The reply language is a parameter: `RESPONSE_LANGUAGES`
+(`src/core/locales.py`) maps every supported locale to the English name the
+prompt states, and
 `note_summary_system_prompt(locale)` fills it in. Text the user wrote goes
 into the user message inside tags, and the system prompt tells the model to
 treat it as data.
