@@ -84,6 +84,13 @@ COMPOSE=(docker compose --env-file .env -f infra/docker-compose.yml)
 # healthcheck in infra/docker-compose.yml reports one that never answers
 # unhealthy sooner (start_period plus retries x interval, 70s).
 BOT_HEALTHY_TIMEOUT_SECONDS=120
+# The worker and the scheduler get this long to come up. The scheduler's
+# healthcheck reports one that never beats unhealthy after start_period plus
+# retries x interval, 130s.
+TASKS_HEALTHY_TIMEOUT_SECONDS=180
+# The worker has no healthcheck, so `--wait` passes the moment it runs; it
+# must still be running, never restarted, this long after.
+TASKS_SETTLE_SECONDS=15
 ROLLBACK_FAILED="[deploy] rollback failed; the bot, worker or scheduler may still run the new image beside the previous one - check 'docker compose ps' and the logs, then deploy the previous image again"
 # How long the nginx workers retired by a reload get to finish the requests
 # they still carry to the old bot.
@@ -333,6 +340,26 @@ discard_new_bot() {
   route_bot_to bot || true
 }
 
+# Recreates the worker and the scheduler on the image in BOT_IMAGE. A restart
+# counts as a failure, as for the bot: the restart policy would otherwise hide
+# a crash loop. Callers test it in an `if` or after `||`, so every step checks
+# its own status.
+replace_worker_and_scheduler() {
+  local service id state
+  "${COMPOSE[@]}" up -d --no-deps --wait \
+    --wait-timeout "$TASKS_HEALTHY_TIMEOUT_SECONDS" worker scheduler || return 1
+  sleep "$TASKS_SETTLE_SECONDS"
+  for service in worker scheduler; do
+    for id in $("${COMPOSE[@]}" ps -a -q "$service"); do
+      state="$(docker inspect -f '{{.State.Status}} {{.RestartCount}}' "$id")" || return 1
+      if [ "$state" != "running 0" ]; then
+        echo "[deploy] ${service} is ${state:-gone} ${TASKS_SETTLE_SECONDS}s after it started"
+        return 1
+      fi
+    done
+  done
+}
+
 # Polling mode: one bot per token, ever - two pollers make Telegram answer
 # both with a conflict. The container is replaced in place; updates wait at
 # Telegram for the few seconds it takes.
@@ -433,7 +460,7 @@ fi
 # image, so no two versions of the code keep running together. The migrations
 # stay applied: the previous code runs against the new schema.
 echo "[deploy] replacing the worker and the scheduler"
-if ! "${COMPOSE[@]}" up -d --no-deps --wait worker scheduler; then
+if ! replace_worker_and_scheduler; then
   if [ -z "$PREVIOUS_IMAGE" ]; then
     die "[deploy] the worker or the scheduler did not become healthy and there is no previous image to go back to"
   fi
@@ -441,7 +468,7 @@ if ! "${COMPOSE[@]}" up -d --no-deps --wait worker scheduler; then
   # Every step is tried even when an earlier one failed: the bot must not stay
   # on the new image beside a worker that went back.
   rollback_failed=0
-  BOT_IMAGE="$PREVIOUS_IMAGE" "${COMPOSE[@]}" up -d --no-deps --wait worker scheduler || rollback_failed=1
+  BOT_IMAGE="$PREVIOUS_IMAGE" replace_worker_and_scheduler || rollback_failed=1
   if [ "$BOT_MODE" = "webhook" ]; then
     roll_bot "$PREVIOUS_IMAGE" || rollback_failed=1
   else

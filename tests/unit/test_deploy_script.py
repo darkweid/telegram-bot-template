@@ -45,6 +45,7 @@ echo "$STUB_UNAME"
 # The deploy waits between polls and before it checks the worker; the stand-in
 # containers change state only when docker is called, so waiting buys nothing.
 SLEEP_STUB = "#!/bin/sh\n"
+TASKS_UP = f"{COMPOSE} up -d --no-deps --wait --wait-timeout 180 worker scheduler"
 
 
 @dataclass
@@ -144,7 +145,7 @@ def test_a_polling_deploy_runs_the_steps_in_order(tmp_path: Path) -> None:
         f"{COMPOSE} run --rm --no-deps migrate",
         f"{COMPOSE} --profile webhook rm -sf nginx certbot",
         f"{COMPOSE} up -d --no-deps --force-recreate --wait --wait-timeout 120 bot",
-        f"{COMPOSE} up -d --no-deps --wait worker scheduler",
+        TASKS_UP,
     ]
     positions = [_index(deploy.calls, step) for step in steps]
     assert positions == sorted(positions)
@@ -226,13 +227,13 @@ def test_a_failing_worker_takes_the_stack_back(tmp_path: Path) -> None:
         tmp_path,
         POLLING_ENV,
         STUB_BOT_ID="c1",
-        STUB_FAIL_ON=f"{LOCAL_IMAGE} | {COMPOSE} up -d --no-deps --wait worker",
+        STUB_FAIL_ON=f"{LOCAL_IMAGE} | {TASKS_UP}",
     )
     assert deploy.returncode == 1
     assert "going back to sha256:previous" in deploy.output
     rollback = deploy.calls[_index(deploy.calls, "sha256:previous") :]
     assert [call for call in rollback if " up " in call] == [
-        f"sha256:previous | {COMPOSE} up -d --no-deps --wait worker scheduler",
+        f"sha256:previous | {TASKS_UP}",
         f"sha256:previous | {COMPOSE} up -d --no-deps --force-recreate --wait "
         "--wait-timeout 120 bot",
     ]
@@ -415,3 +416,36 @@ def test_a_running_nginx_renders_the_new_configuration_before_the_roll(
     assert f"{LOCAL_IMAGE} | {COMPOSE} exec -T -e NGINX_REQUIRE_TLS=1 nginx sh " in (
         "\n".join(deploy.calls)
     )
+
+
+def test_a_failing_worker_rolls_the_webhook_bot_back(tmp_path: Path) -> None:
+    """No two versions of the code may keep running together: the bot goes back
+    to the previous image through the same roll, with no update refused."""
+    state = _serving_webhook_stack(_container("bot", 1), pinned=["bot"])
+    state["tasks"] = {LOCAL_IMAGE: "restarting 2"}
+    deploy = _deploy(tmp_path, WEBHOOK_ENV, state=state)
+    assert deploy.returncode == 1
+    assert "worker is restarting 2 15s after it started" in deploy.output
+    assert "rolled back; the deploy failed" in deploy.output
+    rollback = deploy.events[
+        _position(deploy.events, "start tg-bot-template-worker-1 sha256:previous") :
+    ]
+    assert rollback == [
+        "start tg-bot-template-worker-1 sha256:previous",
+        "start tg-bot-template-scheduler-1 sha256:previous",
+        f"write {NEW_BOT}",
+        f"reload {NEW_BOT}",
+        "start tg-bot-template-bot-3 sha256:previous",
+        "write tg-bot-template-bot-3",
+        "reload tg-bot-template-bot-3",
+        f"stop {NEW_BOT}",
+        f"remove {NEW_BOT}",
+        "write bot",
+        "reload bot",
+    ]
+    assert deploy.running("bot") == ["tg-bot-template-bot-3"]
+    assert {
+        container["image"]
+        for container in deploy.state["containers"]
+        if container["status"] == "running"
+    } == {"sha256:previous"}
