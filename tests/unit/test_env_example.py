@@ -55,7 +55,8 @@ SECRET_NAME = re.compile(
 def test_secret_placeholders_are_marked_not_real(name: str) -> None:
     """A placeholder that looks real gets committed or pasted into a deploy
     by mistake; "not-real" makes it obvious. Empty means "off" and is fine."""
-    match = re.search(rf"^(# )?{name}=(.*)$", ENV_EXAMPLE, re.MULTILINE)
-    assert match is not None
-    value = match.group(2)
-    assert not value or "not-real" in value, f"{name}={value} lacks not-real"
+    # Every occurrence: a key shipped empty can show its example commented out.
+    values = re.findall(rf"^(?:# )?{name}=(.*)$", ENV_EXAMPLE, re.MULTILINE)
+    assert values
+    for value in values:
+        assert not value or "not-real" in value, f"{name}={value} lacks not-real"

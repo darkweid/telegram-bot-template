@@ -108,7 +108,7 @@ from [@BotFather](https://t.me/BotFather).
 git clone https://github.com/darkweid/tg-bot-template.git my-bot && cd my-bot
 python3.13 -m venv .venv && source .venv/bin/activate
 pip install -r infra/requirements/dev.txt
-cp .env.example .env          # set BOT_TOKEN; LLM keys, or LLM_PROVIDER= to run without LLM
+cp .env.example .env          # set BOT_TOKEN; the LLM stays off until LLM_PROVIDER is set
 make run-dev                  # compiles catalogs, migrates, starts with autoreload
 make logs s=bot
 ```
@@ -361,6 +361,8 @@ response = await llm.structured(
   the model (`claude-sonnet-5-5` by default), with `ANTHROPIC_API_KEY` or
   `OPENROUTER_API_KEY`. Empty `LLM_PROVIDER` turns the layer off: every call
   raises `LLMNotConfigured`, and the user is told the feature is off.
+  `.env.example` ships it off, with a working provider and fallback pair in
+  commented lines.
   `LLM_TIMEOUT_SECONDS` and `LLM_MAX_RETRIES` go to the provider SDK.
 - **Fallback.** With `LLM_FALLBACK_PROVIDER` and `LLM_FALLBACK_MODEL` set, a
   call that times out, is rate limited or finds the provider unavailable is

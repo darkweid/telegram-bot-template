@@ -1,5 +1,6 @@
 from decimal import Decimal
 from pathlib import Path
+import re
 
 from dotenv import dotenv_values
 from pydantic import SecretStr, ValidationError
@@ -10,6 +11,7 @@ from src.core.llm.pricing import PRICES, ModelPrice
 from src.main.config import Config, LLMConfig
 
 PROJECT_ROOT = Path(__file__).resolve().parents[4]
+ENV_EXAMPLE = (PROJECT_ROOT / ".env.example").read_text()
 
 ANTHROPIC_KEY = SecretStr("sk-ant-test-not-real")
 OPENROUTER_KEY = SecretStr("sk-or-test-not-real")
@@ -155,6 +157,12 @@ def test_a_full_two_provider_setup_is_accepted() -> None:
     assert config.LLM_FALLBACK_PROVIDER is LLMProviderName.OPENROUTER
 
 
+def _commented_example(name: str) -> str | None:
+    """The value of `# NAME=value` in .env.example: a setting shown, not set."""
+    match = re.search(rf"^# {name}=(.+)$", ENV_EXAMPLE, re.MULTILINE)
+    return None if match is None else match.group(1)
+
+
 def test_env_example_passes_validation() -> None:
     """CI copies .env.example to .env and starts alembic from it; a value
     there that fails validation breaks every pipeline."""
@@ -166,8 +174,39 @@ def test_env_example_passes_validation() -> None:
 
     config = _llm(**values)
 
+    assert config.LLM_PROVIDER is None
+    assert config.LLM_FALLBACK_PROVIDER is None
+
+
+def test_env_example_ships_the_llm_off() -> None:
+    """Placeholder keys would let the bot start and then fail every call at
+    the provider, alerting developers each time; a copied .env starts with
+    the layer off instead, like S3 and email."""
+    example = dotenv_values(PROJECT_ROOT / ".env.example")
+
+    assert example["LLM_PROVIDER"] == ""
+    assert example["LLM_FALLBACK_PROVIDER"] == ""
+    assert example["ANTHROPIC_API_KEY"] == ""
+    assert example["OPENROUTER_API_KEY"] == ""
+
+
+def test_the_commented_llm_example_passes_validation() -> None:
+    """Uncommenting the example lines and pasting real keys is how a new bot
+    turns the layer on; the example itself must be a valid configuration."""
+    names = (
+        "LLM_PROVIDER",
+        "LLM_FALLBACK_PROVIDER",
+        "LLM_FALLBACK_MODEL",
+        "ANTHROPIC_API_KEY",
+        "OPENROUTER_API_KEY",
+    )
+    values = {name: _commented_example(name) for name in names}
+    assert None not in values.values(), values
+
+    config = _llm(**values)
+
     assert config.LLM_PROVIDER is LLMProviderName.ANTHROPIC
-    assert config.LLM_FALLBACK_MODEL == "google/gemini-3.8-flash"
+    assert config.LLM_FALLBACK_PROVIDER is LLMProviderName.OPENROUTER
 
 
 @pytest.mark.parametrize("setting", ["OPENROUTER_APP_URL", "OPENROUTER_APP_TITLE"])
@@ -264,15 +303,18 @@ def test_the_documented_override_example_parses(tmp_path: Path) -> None:
 
 def test_every_shipped_anthropic_model_has_a_price() -> None:
     """A model without a price records its calls with no cost and /stats
-    shows nothing spent; the defaults a new bot starts with must be priced."""
-    example = dotenv_values(PROJECT_ROOT / ".env.example")
-    shipped = {
-        (LLMProviderName.ANTHROPIC, LLMConfig.model_fields["LLM_MODEL"].default),
-        (example["LLM_PROVIDER"], example["LLM_MODEL"]),
-        (example["LLM_FALLBACK_PROVIDER"], example["LLM_FALLBACK_MODEL"]),
+    shows nothing spent; the defaults a new bot starts with, and the models
+    .env.example shows, must be priced."""
+    shown = re.findall(
+        r"^(?:# )?LLM_(?:FALLBACK_)?MODEL=(.+)$", ENV_EXAMPLE, re.MULTILINE
+    )
+    # OpenRouter ids are "<vendor>/<model>" (LLMConfig enforces it), so an id
+    # without a vendor is an Anthropic one.
+    anthropic_models = {
+        model
+        for model in [LLMConfig.model_fields["LLM_MODEL"].default, *shown]
+        if "/" not in model
     }
-
-    anthropic_models = {model for provider, model in shipped if provider == "anthropic"}
 
     assert anthropic_models
     assert anthropic_models <= set(PRICES)
