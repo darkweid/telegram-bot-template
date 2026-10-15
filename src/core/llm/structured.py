@@ -37,8 +37,13 @@ async def validated_with_repair[T: BaseModel](
     to the model in one repair request; a second failure is LLMOutputError,
     whose detail names locations and error types only - the answer is model
     output and may quote user data, so it never reaches a log line. Its
-    `usage` is what both answers cost.
+    `usage` is what both answers cost. A request with tools raises
+    ValueError before any call.
     """
+    if request.tools:
+        # Neither API combines a response schema with tools the same way; this
+        # is the caller's mistake and is refused before anything is billed.
+        raise ValueError("structured output takes no tools")
     first = await send(request)
     try:
         return StructuredResponse(

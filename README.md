@@ -48,7 +48,7 @@ you switch it on.
   progress and a Stop button, resumed from the last checkpoint after a worker
   restart. [Details](docs/broadcast.md)
 - An LLM client for Anthropic and OpenRouter: structured output validated by
-  pydantic, a fallback provider, and the cost of every call recorded and shown
+  pydantic, tools, images, two model tiers, a fallback provider, and the cost of every call recorded and shown
   in `/stats`. Off until `LLM_PROVIDER` is set. [Details](docs/llm.md)
 - S3 storage and SMTP email with HTML templates, both off by default.
   [S3](docs/background-jobs.md#file-storage-s3), [email](docs/background-jobs.md#email)

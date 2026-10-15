@@ -179,14 +179,3 @@ def test_the_assistant_turn_keeps_every_block_in_order() -> None:
 
 def test_an_empty_answer_still_makes_an_assistant_turn() -> None:
     assert _response().assistant_turn == LLMMessage(role="assistant", content="")
-
-
-def test_the_text_of_a_message_is_its_text_blocks_only() -> None:
-    """Adapters and the transcript without block support read this; an image
-    or a call must not leak into it as text."""
-    assert LLMMessage(role="user", content="hello").text == "hello"
-    mixed = LLMMessage(
-        role="user", content=(TextBlock("a"), PNG, TextBlock("b"), RESULT)
-    )
-    assert mixed.text == "ab"
-    assert LLMMessage(role="user", content=(PNG,)).text == ""

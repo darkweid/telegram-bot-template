@@ -1,6 +1,7 @@
 """Writing one `llm_usage` row per provider call."""
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
+import json
 import time
 from typing import Any
 
@@ -15,7 +16,18 @@ from src.core.llm.enums import LLMCallStatus, LLMProviderName, ModelTier
 from src.core.llm.errors import LLMError
 from src.core.llm.interface import LLMClient
 from src.core.llm.repository import LLMUsageRepository
-from src.core.llm.types import LLMRequest, LLMResponse, LLMUsage, StructuredResponse
+from src.core.llm.types import (
+    ContentBlock,
+    ImageBlock,
+    LLMRequest,
+    LLMResponse,
+    LLMUsage,
+    ProviderBlock,
+    StructuredResponse,
+    TextBlock,
+    ToolResultBlock,
+    ToolUseBlock,
+)
 from src.core.update_context import get_update_context
 from src.core.utils.datetime_utils import get_utc_now
 
@@ -139,7 +151,7 @@ class RecordingLLMClient:
                 "LLM exchange for %s: %r -> %r",
                 request.purpose,
                 _transcript(request),
-                response.text,
+                _rendered(response.content),
             )
         await self._recorder.record(
             request,
@@ -170,6 +182,32 @@ class RecordingLLMClient:
         )
 
 
-def _transcript(request: LLMRequest) -> list[tuple[str, str]]:
-    system = [("system", request.system)] if request.system else []
-    return system + [(message.role, message.text) for message in request.messages]
+def _transcript(request: LLMRequest) -> list[tuple[str, str | list[str]]]:
+    system: list[tuple[str, str | list[str]]] = (
+        [("system", request.system)] if request.system else []
+    )
+    return system + [
+        (message.role, _rendered(message.content)) for message in request.messages
+    ]
+
+
+def _rendered(content: str | Sequence[ContentBlock]) -> str | list[str]:
+    if isinstance(content, str):
+        return content
+    return [_rendered_block(block) for block in content]
+
+
+def _rendered_block(block: ContentBlock) -> str:
+    # Image bytes would flood the line, and a provider block is opaque: both
+    # are named by their size only.
+    match block:
+        case TextBlock(text=text):
+            return text
+        case ImageBlock(media_type=media_type, data=data):
+            return f"<image {media_type} {len(data)} bytes>"
+        case ToolUseBlock(name=name, input=arguments):
+            return f"<tool_use {name} {json.dumps(arguments, ensure_ascii=False)}>"
+        case ToolResultBlock(tool_use_id=call_id, content=text, is_error=is_error):
+            return f"<tool_result {call_id}{' error' if is_error else ''} {text}>"
+        case ProviderBlock(provider=provider, data=data):
+            return f"<provider {provider} {len(json.dumps(data))} bytes>"

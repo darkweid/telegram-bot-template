@@ -387,3 +387,16 @@ async def test_redacted_thinking_goes_back_byte_for_byte(
 def test_the_image_types_match_what_the_request_type_admits() -> None:
     """The cast to the SDK's literal is only safe while both lists agree."""
     assert set(get_args(ImageMediaType.__value__)) == IMAGE_MEDIA_TYPES
+
+
+async def test_structured_output_takes_no_tools(server: ScriptedLLMServer) -> None:
+    """Neither API combines a response schema with tools the same way; the
+    caller's mistake is refused before anything is sent or billed."""
+
+    class Answer(BaseModel):
+        summary: str
+
+    with pytest.raises(ValueError, match="tools"):
+        await make_client(server).structured(request(), Answer)
+
+    assert server.requests == []

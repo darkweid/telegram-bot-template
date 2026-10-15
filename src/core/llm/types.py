@@ -101,15 +101,6 @@ class LLMMessage:
                     f"{type(block).__name__} cannot be part of a {self.role} message"
                 )
 
-    @property
-    def text(self) -> str:
-        """The message's text blocks joined; what a text-only reader sees."""
-        if isinstance(self.content, str):
-            return self.content
-        return "".join(
-            block.text for block in self.content if isinstance(block, TextBlock)
-        )
-
 
 @dataclass(frozen=True, slots=True)
 class LLMTool:

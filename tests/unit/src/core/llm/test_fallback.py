@@ -1,4 +1,5 @@
 import asyncio
+from dataclasses import replace
 from typing import Any
 from unittest.mock import AsyncMock
 
@@ -19,11 +20,17 @@ from src.core.llm.errors import (
 )
 from src.core.llm.fallback import FallbackLLMClient
 from src.core.llm.recording import LLMUsageRecorder, RecordingLLMClient
-from src.core.llm.types import LLMMessage, LLMRequest, LLMResponse
+from src.core.llm.types import (
+    LLMMessage,
+    LLMRequest,
+    LLMResponse,
+    ProviderBlock,
+    ToolResultBlock,
+)
 from src.core.redis.degradation import RedisDegradationReporter
 from src.core.telegram.alerts import DeveloperAlerter
 from src.core.update_context import UpdateContext, bind_update_context
-from tests.fakes.llm import FakeLLMClient, llm_response
+from tests.fakes.llm import FakeLLMClient, llm_response, tool_call
 from tests.fakes.redis import InMemoryRedis
 from tests.fakes.telegram import FakeTelegramSession, make_bot
 from tests.helpers.logs import captured_logs
@@ -242,3 +249,36 @@ async def test_a_failed_primary_and_the_answering_fallback_are_two_rows() -> Non
     assert second.args[2] is None
     assert second.kwargs["provider"] is LLMProviderName.OPENROUTER
     assert second.kwargs["model"] == FALLBACK_MODEL
+
+
+async def test_the_fallback_gets_the_tool_history_at_the_same_tier() -> None:
+    """The adapters translate the neutral history themselves, so a switch in
+    the middle of a tool loop sends the same turns; the tier stays, the
+    primary's model id goes."""
+    client, primary, fallback = _client()
+    primary.queue(LLMUnavailable("down", provider=LLMProviderName.ANTHROPIC))
+    fallback.queue(_fallback_answer())
+    call = tool_call("lookup", {"query": "rice"})
+    history = (
+        LLMMessage(role="user", content="rice"),
+        LLMMessage(
+            role="assistant",
+            content=(
+                ProviderBlock(
+                    provider=LLMProviderName.ANTHROPIC, data={"type": "thinking"}
+                ),
+                call,
+            ),
+        ),
+        LLMMessage(
+            role="user",
+            content=(ToolResultBlock(tool_use_id=call.id, content="found"),),
+        ),
+    )
+
+    await client.complete(replace(REQUEST, messages=history, tier=ModelTier.FAST))
+
+    [sent] = fallback.calls
+    assert sent.messages == history
+    assert sent.tier is ModelTier.FAST
+    assert sent.model is None
