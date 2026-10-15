@@ -1,14 +1,14 @@
 # tg-bot-template
 
-A production-ready template for Telegram bots on aiogram 3. One codebase runs
-in polling or webhook mode, chosen by a single setting. PostgreSQL stores the
-users and Redis keeps the dialog (FSM) state. Dependencies are wired with
-dishka, from the database session down to the use case a handler calls.
-English and Russian work out of the box, and adding a language is a catalog
-and two lines of code. Unit tests run against a fake Bot API, integration
-tests against a real PostgreSQL and Redis, and GitHub Actions runs both on
-pull requests. Ansible prepares a fresh Ubuntu server, and CD deploys every
-push that passes CI once you switch it on.
+A template for Telegram bots on aiogram 3. One codebase runs in polling or
+webhook mode, chosen by a single setting. PostgreSQL stores the users and Redis
+keeps the dialog (FSM) state. Dependencies are wired with dishka, from the
+database session down to the use case a handler calls. English and Russian work
+out of the box, and adding a language is a catalog and two lines of code. Unit
+tests run against a fake Bot API, integration tests against a real PostgreSQL
+and Redis, and GitHub Actions runs both on pull requests. Ansible prepares a
+fresh Ubuntu server, and CD deploys every push that passes CI once you switch
+it on.
 
 ## Features
 
@@ -57,7 +57,8 @@ push that passes CI once you switch it on.
   config, Bandit, pip-audit and Gitleaks. A push that passes them builds the
   image and pushes it to GHCR, tagged `sha-` plus the first 12 characters of
   the commit and `latest` (`main`) or `stage` (`stage`). A change that
-  touches only documentation runs the lint and Gitleaks jobs alone.
+  touches only documentation runs the lint and Gitleaks jobs alone, plus the
+  coverage upload on a push when Coveralls is on (see Coverage).
 - Deployment to your own server: Ansible roles for a fresh Ubuntu box (the
   firewall opens 80 and 443 only in webhook mode), nginx with Let's Encrypt
   certificates in webhook mode, `infra/deploy/deploy.sh` with migrations
@@ -114,14 +115,17 @@ The dev stack always polls. A change to a `.py` file under `src/`,
 Set three variables in `.env`:
 
 - `BOT_MODE=webhook`;
-- `WEBHOOK_BASE_URL`, the public HTTPS origin Telegram will call;
+- `WEBHOOK_BASE_URL`, the public HTTPS origin Telegram will call, on port 443
+  (nginx takes the webhook on no other port);
 - `WEBHOOK_SECRET`, 32 to 256 letters, digits, `_` or `-`, which Telegram
   echoes on every update. Generate one with
   `python -c "import secrets; print(secrets.token_urlsafe(48))"`.
 
 The bot refuses to start in webhook mode without an `https` base URL and a
-secret. It sets the webhook on every start and keeps it on shutdown, so
-Telegram queues updates while the next container starts.
+secret. Keep `WEB_SERVER_HOST` at `0.0.0.0`: nginx reaches the bot over the
+compose network, and a loopback address would refuse every update. It sets the
+webhook on every start and keeps it on shutdown, so Telegram queues updates
+while the next container starts.
 
 Run the prod-like stack with `make run`. A one-shot `migrate` service applies
 the migrations baked into the image before the bot starts, and the bot waits
@@ -150,9 +154,10 @@ and nothing else.
 
 `make check-env` checks `.env` before anything starts from it: the token and
 webhook formats, `COMPOSE_PROFILES` against `BOT_MODE`, the subnets, the
-container limits, and placeholders from `.env.example` left in a password or
-in the key of an enabled feature. It names the key at fault and never prints a
-value. The deploy script runs it first.
+container limits, a `WEBHOOK_BASE_URL` on a port other than 443 and a loopback
+`WEB_SERVER_HOST` in webhook mode, and placeholders from `.env.example` left in
+a password or in the key of an enabled feature. It names the key at fault and
+never prints a value. The deploy script runs it first.
 
 Issue the first certificate once DNS for the webhook host points at the box
 and port 80 is open; `DOMAIN` is the host of `WEBHOOK_BASE_URL`:
@@ -161,14 +166,16 @@ and port 80 is open; `DOMAIN` is the host of `WEBHOOK_BASE_URL`:
 
 Until a certificate exists, nginx serves port 80 only. certbot tries to renew
 twice a day and nginx reloads every six hours, so a renewed certificate is in
-use within six hours. `make clean` keeps the certificate volume: Let's Encrypt
-issues a certificate for the same host at most five times a week.
+use within six hours. A change to the nginx configuration in the checkout
+reaches the running nginx on the next deploy, which renders and reloads it.
+`make clean` keeps the certificate volume: Let's Encrypt issues a certificate
+for the same host at most five times a week.
 
 ## Server provisioning
 
-`infra/ansible` turns a fresh Ubuntu 24.04 server into one that runs the
-stack: a `deploy` user for CD and an `ops` user for you, SSH on a port of your
-choice with keys only, a firewall, Docker, and the checkout in
+`infra/ansible` turns a fresh Ubuntu 24.04 or 26.04 server into one that runs
+the stack: a `deploy` user for CD and an `ops` user for you, SSH on a port of
+your choice with keys only, a firewall, Docker, and the checkout in
 `/srv/<app_name>`. `bot_mode` in the inventory must match `BOT_MODE` in the
 server's `.env`: webhook opens ports 80 and 443, polling opens nothing, and
 provisioning stops when the two disagree (the check is skipped on the first
@@ -183,9 +190,11 @@ make server-provision ENV=production               # apply
 
 The inventory, the variables and what each role does are in
 `infra/ansible/README.md`. The first deploy is by hand on the server: put
-`.env` in `/srv/<app_name>`, run `make check-env`, in webhook mode
+`.env` in `/srv/<app_name>`, then as `deploy` (`sudo -iu deploy`, then
+`cd /srv/<app_name>`; `.env` is readable by `deploy` only, and `ops` is not in
+the `docker` group) run `make check-env`, in webhook mode
 `make cert-issue DOMAIN=<host of WEBHOOK_BASE_URL>`, then
-`infra/deploy/deploy.sh`.
+`bash infra/deploy/deploy.sh`.
 
 ## Deployment
 
@@ -207,14 +216,19 @@ previous stack still running. Any failure ends with exit code 1 and a
 - When the new bot, worker or scheduler never turns healthy, the stack goes
   back to the image it ran before and the deploy fails. Migrations stay
   applied, so the previous code runs against the new schema. The very first
-  deploy has no previous image and just fails.
+  deploy has no previous image and fails. After a rollback, `BOT_IMAGE` in
+  `.env` (or the local tag the build wrote) still names the failed image: pin
+  `BOT_IMAGE` to the previous tag or redeploy it before any plain `make run`.
+- The bot is replaced before the worker: a task added in a release is safe to
+  enqueue only once the new worker, which knows it, is running.
 - `BUILD=1` builds the image on the box (the default without `BOT_IMAGE`);
   `BUILD=0` pulls `BOT_IMAGE`, the image CI pushed (the default with it):
   `BUILD=0 BOT_IMAGE=ghcr.io/<owner>/<repo>:sha-<12> bash infra/deploy/deploy.sh`.
   `BUILD=1` with `BOT_IMAGE` set is refused. Both variables accept only `0`
   or `1`.
-- At the end it removes images and build cache unused for a week, on Linux
-  only; `PRUNE=0` keeps them.
+- At the end it removes images created more than a week ago that no
+  container uses (by creation time, not last use) and build cache unused for
+  a week, on Linux only; `PRUNE=0` keeps them.
 
 ## Continuous deployment
 
@@ -279,10 +293,10 @@ reads the stored row. The snapshot cached before it is never served again:
 the bot remembers that its delete failed and drops it once Redis is back, and
 the worker drops it too. Only a bot restarted during the outage forgets that,
 and then serves the old snapshot until the worker drops it, usually within a
-couple of minutes of Redis coming back. A role beats a ban for updates only: someone banned before their id
-was added to `ADMIN_IDS` or `DEVELOPER_IDS` is served as usual, but
-broadcasts skip them and `/stats` counts them as banned until they are
-unbanned with `/unban`.
+couple of minutes of Redis coming back. A role beats a ban for updates only:
+someone banned before their id was added to `ADMIN_IDS` or `DEVELOPER_IDS` is
+served as usual, but broadcasts skip them and `/stats` counts them as banned
+until they are unbanned with `/unban`.
 
 Admins also get `/stats`: users in total, reachable, banned, and active and
 new in the last 1, 7 and 30 days.
@@ -423,15 +437,15 @@ Telegram allows about 30 to different users) and saves its position every
 `BROADCAST_CHECKPOINT_EVERY` recipients (50), at least once a minute, and after
 every user who blocked the bot. If the worker stops mid-broadcast, a scheduled
 task resumes it within about five minutes from the last saved position, so up
-to `BROADCAST_CHECKPOINT_EVERY` users may get the message twice. Stop takes effect at the next save, within
-about a minute, flood waits included. The final report edits the
-progress message, and is recorded once Telegram has taken the edit or refused
-it for good (a deleted progress message, a blocked bot). If the worker stops
-after a broadcast finished but before the edit landed, or the edit met a
-network error, the same task edits it about five minutes later, from the stored
-counts. The report message that notifies the admin goes out after the record,
-at most once: a worker that stops in between leaves the edited progress message
-as the only report.
+to `BROADCAST_CHECKPOINT_EVERY` users may get the message twice. Stop takes
+effect at the next save, within about a minute, flood waits included. The final
+report edits the progress message, and is recorded once Telegram has taken the
+edit or refused it for good (a deleted progress message, a blocked bot). If the
+worker stops after a broadcast finished but before the edit landed, or the edit
+met a network error, the same task edits it about five minutes later, from the
+stored counts. The report message that notifies the admin goes out after the
+record, at most once: a worker that stops in between leaves the edited progress
+message as the only report.
 
 A user who blocked the bot is counted as unreachable and marked so; a chat
 Telegram cannot find counts as failed. Network errors are retried. Anything
@@ -557,7 +571,7 @@ there would override the commit baked into the image.
 ## Adding a language
 
 1. `make i18n-init LOCALE=de` starts `locales/de/LC_MESSAGES/messages.po`.
-2. Add `"de"` to `SUPPORTED_LOCALES` in `src/core/i18n/__init__.py`.
+2. Add `"de"` to `SUPPORTED_LOCALES` in `src/core/locales.py`.
 3. Add the language's own name to `LANGUAGE_NAMES` in `src/user/keyboards.py`,
    for example `"de": "Deutsch"`.
 4. Translate the catalog and run `make i18n-compile`.

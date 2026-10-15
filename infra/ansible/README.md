@@ -103,10 +103,12 @@ Then:
    `SERVER_IP`, `SSH_KNOWN_HOSTS` as secrets, `SSH_PORT` and `APP_DIR` as
    variables. `SSH_KNOWN_HOSTS` comes from the server over the connection you already
    verified, so no `ssh-keyscan`.
-3. First deploy, building on the server. In webhook mode issue the certificate
-   first (`make cert-issue DOMAIN=<domain>`, see the root README, Webhook mode).
-   Then `ssh -p <sshd_port> ops@<host>` and
-   `sudo -iu deploy bash -c 'cd /srv/<app_name> && bash infra/deploy/deploy.sh'`.
+3. First deploy, building on the server. Everything here runs as `deploy`:
+   `.env` is readable by `deploy` only, and `ops` is not in the `docker` group.
+   `ssh -p <sshd_port> ops@<host>`, then `sudo -iu deploy` and
+   `cd /srv/<app_name>`. Run `make check-env`; in webhook mode issue the
+   certificate (`make cert-issue DOMAIN=<domain>`, see the root README, Webhook
+   mode); then `bash infra/deploy/deploy.sh`.
 
 ## Later
 
