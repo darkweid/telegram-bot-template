@@ -20,8 +20,13 @@ def _deploy_job() -> dict:
     return _load("_deploy.yml")["jobs"]["deploy"]
 
 
-def _step(name: str) -> dict:
-    steps = [step for step in _deploy_job()["steps"] if step.get("name") == name]
+def _check_job() -> dict:
+    return _load("_deploy.yml")["jobs"]["check"]
+
+
+def _step(name: str, job: dict | None = None) -> dict:
+    job = _deploy_job() if job is None else job
+    steps = [step for step in job["steps"] if step.get("name") == name]
     assert len(steps) == 1, name
     return steps[0]
 
@@ -66,7 +71,7 @@ def test_deploy_runs_only_after_a_successful_push_to_its_branch() -> None:
     """workflow_run always runs in the default branch's context, so github.ref is
     main even for a stage push; only head_branch tells them apart. A pull
     request's CI or a failed run must never deploy."""
-    condition = _deploy_job()["if"]
+    condition = _check_job()["if"]
 
     assert "github.event.workflow_run.conclusion == 'success'" in condition
     assert "github.event.workflow_run.event == 'push'" in condition
@@ -81,6 +86,37 @@ def test_deploys_to_one_environment_never_overlap() -> None:
 
     assert concurrency["group"] == "deploy-${{ inputs.environment }}"
     assert concurrency["cancel-in-progress"] is False
+
+
+def test_only_a_run_with_an_image_enters_the_deploy_queue() -> None:
+    """GitHub keeps one waiting job per concurrency group. A documentation push
+    that entered it would replace a code deploy waiting there and then find no
+    image, so nothing would be deployed at all."""
+    jobs = _load("_deploy.yml")["jobs"]
+    deploy = jobs["deploy"]
+    queued = [name for name, job in jobs.items() if "concurrency" in job]
+
+    assert queued == ["deploy"]
+    assert deploy["needs"] == "check"
+    assert deploy["if"] == "needs.check.outputs.image == 'true'"
+    assert "concurrency" not in _load("_deploy.yml")
+    built = _step("Check that CI built the image", _check_job())
+    assert "if" not in built
+    assert _check_job()["outputs"]["image"] == "${{ steps.built.outputs.image }}"
+
+
+def test_a_manual_deploy_takes_only_a_commit_of_its_branch() -> None:
+    """A commit only `stage` ever held must not reach production by hand, and a
+    blank tag deploys the environment's branch, not whichever ref the dispatch
+    happened to run from."""
+    step = _step("Resolve the commit to deploy", _check_job())
+    script = step["run"]
+
+    assert step["env"]["BRANCH"] == "${{ inputs.branch }}"
+    assert 'git merge-base --is-ancestor "$sha" "origin/${BRANCH}"' in script
+    assert 'git rev-parse --verify "origin/${BRANCH}^{commit}"' in script
+    assert "github.sha" not in script
+    assert "${{ inputs.image_tag }}" not in script
 
 
 def test_the_server_runs_the_image_ci_built() -> None:
@@ -111,7 +147,7 @@ def test_the_build_check_names_the_job_ci_runs() -> None:
     """The deploy finds CI's image by the build job's display name. A renamed
     job makes every CD run end green with nothing deployed."""
     build_name = _load("_ci.yml")["jobs"]["build-and-push"]["name"]
-    script = _step("Check that CI built the image")["run"]
+    script = _step("Check that CI built the image", _check_job())["run"]
 
     assert f'endswith("{build_name}")' in script
 

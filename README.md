@@ -248,7 +248,11 @@ To turn it on for an environment:
    `PROD_DEPLOY_ENABLED` (or `STAGE_DEPLOY_ENABLED`) to `true`.
 
 To redeploy an earlier build, run the CD workflow by hand (Actions -> CD (prod)
--> Run workflow) with `image_tag` set to its `sha-<12>` tag.
+-> Run workflow) with `image_tag` set to its `sha-<12>` tag. Only a commit of
+the environment's branch is accepted: `main` for production, `stage` for
+staging. A blank `image_tag` deploys the tip of that branch; when the tip is a
+documentation-only commit CI built no image for it, and the deploy fails at the
+pull, so give the tag of the last code commit instead.
 
 ## Roles
 

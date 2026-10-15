@@ -11,11 +11,11 @@ on:
         type: string
         required: true
       branch:
-        description: "Branch a workflow_run trigger is accepted from"
+        description: "Branch a workflow_run trigger is accepted from, and the only one a manual dispatch deploys from"
         type: string
         required: true
       image_tag:
-        description: "Existing sha-<12> image tag to redeploy (blank = sha-<12> of the dispatched commit)"
+        description: "Existing sha-<12> image tag to redeploy (blank = the tip of the branch)"
         type: string
         required: false
         default: ""
@@ -32,13 +32,11 @@ permissions:
   packages: read
 
 jobs:
-  deploy:
-    name: Deploy
-    # The DEPLOY_ENABLED gate lives in the caller: environment variables are not
-    # readable in a job-level `if`, because the environment is only resolved once
-    # the job starts. Here the environment is simply where the server secrets and
-    # APP_DIR come from.
-    environment: ${{ inputs.environment }}
+  # Decides what to deploy, outside the concurrency group below. GitHub keeps
+  # one waiting job per group, so a run that turns out to have nothing to deploy
+  # must never enter it: it would replace a code deploy that was waiting there.
+  check:
+    name: Check
     # A manual dispatch always carries intent, so it skips the workflow_run
     # conclusion/event/branch checks that exist only to filter the automatic
     # trigger down to "CI passed on this environment's branch".
@@ -47,6 +45,97 @@ jobs:
           (github.event.workflow_run.conclusion == 'success' &&
            github.event.workflow_run.event == 'push' &&
            github.event.workflow_run.head_branch == inputs.branch) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      sha: ${{ steps.ref.outputs.sha }}
+      image: ${{ steps.built.outputs.image }}
+
+    steps:
+      # A manual dispatch resolves its commit against the environment's branch,
+      # so it needs that branch's full history; workflow_run carries the exact
+      # commit CI validated and needs no checkout.
+      - name: Checkout repository
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      # image_tag is dispatcher-controlled input, so it is read from `env:` here -
+      # never interpolated into the script - and only a bare sha-<12 lowercase hex>
+      # shape is accepted, since that is the only shape CI ever produces, on either
+      # contour. The commit it names must be on the environment's branch: a
+      # commit only `stage` ever held must not reach production by hand. A blank
+      # tag deploys the tip of that branch, whichever ref the dispatch ran from.
+      - name: Resolve the commit to deploy
+        id: ref
+        env:
+          INPUT_TAG: ${{ inputs.image_tag }}
+          BRANCH: ${{ inputs.branch }}
+          RUN_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          if [ "${{ github.event_name }}" != "workflow_dispatch" ]; then
+            echo "sha=${RUN_SHA}" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ -z "$INPUT_TAG" ]; then
+            sha="$(git rev-parse --verify "origin/${BRANCH}^{commit}")"
+          else
+            if ! printf '%s' "$INPUT_TAG" | grep -qE '^sha-[0-9a-f]{12}$'; then
+              echo "::error::image_tag must be blank or match sha-<12 lowercase hex chars> (the only shape CI produces). Got '$INPUT_TAG'."
+              exit 1
+            fi
+            prefix="${INPUT_TAG#sha-}"
+            if ! sha="$(git rev-parse --verify "${prefix}^{commit}" 2>/dev/null)"; then
+              echo "::error::No commit in this repository's history matches image_tag prefix '$prefix'."
+              exit 1
+            fi
+            if ! git merge-base --is-ancestor "$sha" "origin/${BRANCH}"; then
+              echo "::error::Commit ${sha} is not on ${BRANCH}; only a commit of ${BRANCH} deploys to this environment."
+              exit 1
+            fi
+          fi
+          echo "sha=${sha}" >> "$GITHUB_OUTPUT"
+
+      # CI skips the image build for a push made up entirely of documentation,
+      # so there is not always a sha- tag to pull. The triggering run itself
+      # says whether it built one: CI classifies the whole push, and a commit
+      # range judged again here could disagree - a push whose last commit is
+      # documentation and whose earlier ones are code would skip a deploy that
+      # was due. The attempt, not the run: a re-run of a failed build is what
+      # triggered this job.
+      #
+      # A manual dispatch is explicit intent and is never gated.
+      - name: Check that CI built the image
+        id: built
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+          RUN_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "image=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          conclusion="$(gh api --paginate \
+            "repos/${{ github.repository }}/actions/runs/${RUN_ID}/attempts/${RUN_ATTEMPT}/jobs?per_page=100" \
+            --jq '.jobs[] | select(.name | endswith("Build & push image")) | .conclusion')"
+          if [ "$conclusion" = "success" ]; then
+            echo "image=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::CI run ${RUN_ID} built no image (build job: ${conclusion:-absent}); nothing to deploy."
+            echo "image=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  deploy:
+    name: Deploy
+    needs: check
+    if: needs.check.outputs.image == 'true'
+    # The DEPLOY_ENABLED gate lives in the caller: environment variables are not
+    # readable in a job-level `if`, because the environment is only resolved once
+    # the job starts. Here the environment is where the server secrets and
+    # APP_DIR come from.
+    environment: ${{ inputs.environment }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     # Never parallel within one environment: two merges must not run two
@@ -62,81 +151,18 @@ jobs:
       - name: Capture job start time
         run: echo "JOB_START_TS=$(date +%s)" >> "$GITHUB_ENV"
 
-      # workflow_run carries the exact commit CI validated; workflow_dispatch has no
-      # such context, so it provisionally checks out github.sha (the tip of the
-      # dispatched ref, main by default). fetch-depth: 0 gives the next step full
-      # history to resolve an older, explicitly pinned commit against, should the
-      # dispatch ask for one.
+      # The commit `check` resolved, so the runner's checkout, the image tag
+      # pulled from GHCR and the remote box all agree on it.
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event_name == 'workflow_dispatch' && github.sha || github.event.workflow_run.head_sha }}
-          fetch-depth: 0
-
-      # image_tag is dispatcher-controlled input, so it is read from `env:` here -
-      # never interpolated into the script - and only a bare sha-<12 lowercase hex>
-      # shape is accepted, since that is the only shape CI ever produces, on either
-      # contour. A matching tag is resolved against the full history fetched above and
-      # checked out locally, so the runner's checkout, the image tag pushed to GHCR
-      # and the remote box all agree on the exact same commit; a workflow_run keeps
-      # deploying the commit CI itself validated, unchanged.
-      - name: Resolve the commit to deploy
-        id: ref
-        env:
-          INPUT_TAG: ${{ inputs.image_tag }}
-        run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            if [ -z "$INPUT_TAG" ]; then
-              sha="${{ github.sha }}"
-            else
-              if ! printf '%s' "$INPUT_TAG" | grep -qE '^sha-[0-9a-f]{12}$'; then
-                echo "::error::image_tag must be blank or match sha-<12 lowercase hex chars> (the only shape CI produces). Got '$INPUT_TAG'."
-                exit 1
-              fi
-              prefix="${INPUT_TAG#sha-}"
-              if ! sha="$(git rev-parse --verify "${prefix}^{commit}" 2>/dev/null)"; then
-                echo "::error::No commit in this repository's history matches image_tag prefix '$prefix'."
-                exit 1
-              fi
-              git checkout --quiet "$sha"
-            fi
-          else
-            sha="${{ github.event.workflow_run.head_sha }}"
-          fi
-          echo "sha=${sha}" >> "$GITHUB_OUTPUT"
-
-      # CI skips the image build for a push made up entirely of documentation,
-      # so there is not always a sha- tag to pull. The triggering run itself
-      # says whether it built one: CI classifies the whole push, and a commit
-      # range judged again here could disagree - a push whose last commit is
-      # documentation and whose earlier ones are code would skip a deploy that
-      # was due. The attempt, not the run: a re-run of a failed build is what
-      # triggered this job.
-      #
-      # A manual dispatch is explicit intent and is never gated.
-      - name: Check that CI built the image
-        id: built
-        if: github.event_name != 'workflow_dispatch'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          RUN_ID: ${{ github.event.workflow_run.id }}
-          RUN_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
-        run: |
-          conclusion="$(gh api --paginate \
-            "repos/${{ github.repository }}/actions/runs/${RUN_ID}/attempts/${RUN_ATTEMPT}/jobs?per_page=100" \
-            --jq '.jobs[] | select(.name | endswith("Build & push image")) | .conclusion')"
-          if [ "$conclusion" = "success" ]; then
-            echo "image=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "::notice::CI run ${RUN_ID} built no image (build job: ${conclusion:-absent}); nothing to deploy."
-            echo "image=false" >> "$GITHUB_OUTPUT"
-          fi
+          ref: ${{ needs.check.outputs.sha }}
 
       - name: Compute image and tag
         id: meta
         run: |
           image_lower="$(echo "ghcr.io/${{ github.repository }}" | tr '[:upper:]' '[:lower:]')"
-          short_sha="$(echo "${{ steps.ref.outputs.sha }}" | cut -c1-12)"
+          short_sha="$(echo "${{ needs.check.outputs.sha }}" | cut -c1-12)"
           echo "image=${image_lower}" >> "$GITHUB_OUTPUT"
           echo "tag=sha-${short_sha}" >> "$GITHUB_OUTPUT"
 
@@ -145,7 +171,6 @@ jobs:
       # Keyscanning inside the job would trust whatever answers, which is the
       # same hole as StrictHostKeyChecking=no.
       - name: Set up SSH
-        if: steps.built.outputs.image != 'false'
         env:
           SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
           SSH_KNOWN_HOSTS: ${{ secrets.SSH_KNOWN_HOSTS }}
@@ -174,7 +199,6 @@ jobs:
 
       - name: Deploy over SSH
         id: deploy
-        if: steps.built.outputs.image != 'false'
         env:
           IMAGE: ${{ steps.meta.outputs.image }}
           TAG: ${{ steps.meta.outputs.tag }}
@@ -213,7 +237,7 @@ jobs:
           set -euo pipefail
           cd "$APP_DIR"
           git fetch --quiet origin
-          git checkout --quiet ${{ steps.ref.outputs.sha }}
+          git checkout --quiet ${{ needs.check.outputs.sha }}
           echo "${{ github.token }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
           # The token would otherwise sit base64-encoded in ~/.docker/config.json
           # on the box until the next deploy overwrites it.
@@ -224,19 +248,19 @@ jobs:
       # Never fails the job: the run's colour is the deploy's outcome, and an alert
       # channel that is down or not configured must not turn a good deploy red.
       # Empty secrets - none set, or an organization secret a Free plan does not
-      # pass to a private repository - skip the alert with a warning. Skipped
-      # alongside the deploy it reports on: a skipped deploy has outcome `skipped`,
-      # which the body below would render as FAILED. always() keeps it alive after
-      # a genuine failure, the case it exists for.
+      # pass to a private repository - skip the alert with a warning. always()
+      # keeps it alive after a failed step, the case it exists for: a deploy
+      # skipped by an earlier failure reports FAILED. A run with nothing to
+      # deploy never starts this job, so it sends nothing.
       - name: Telegram notification
-        if: always() && steps.built.outputs.image != 'false'
+        if: always()
         continue-on-error: true
         env:
           ALERT_BOT_TOKEN: ${{ secrets.ALERT_BOT_TOKEN }}
           ALERT_CHAT_ID: ${{ secrets.ALERT_CHAT_ID }}
           DEPLOY_OUTCOME: ${{ steps.deploy.outcome }}
           ENVIRONMENT_NAME: ${{ inputs.environment }}
-          DEPLOYED_SHA: ${{ steps.ref.outputs.sha }}
+          DEPLOYED_SHA: ${{ needs.check.outputs.sha }}
         run: |
           if [ -z "$ALERT_BOT_TOKEN" ] || [ -z "$ALERT_CHAT_ID" ]; then
             echo "::warning::ALERT_BOT_TOKEN or ALERT_CHAT_ID is empty for the ${ENVIRONMENT_NAME} environment; no deploy alert sent (Settings -> Environments)."
