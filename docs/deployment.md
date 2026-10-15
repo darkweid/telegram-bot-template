@@ -2,7 +2,8 @@
 
 How the bot gets onto a server and stays up to date there: webhook mode
 behind nginx, provisioning a fresh server, what `infra/deploy/deploy.sh` does
-step by step, continuous deployment from GitHub Actions, and releases. Open
+step by step, the CI that builds the image, continuous deployment from GitHub
+Actions, and releases. Open
 it before the first deploy, and again when a deploy fails and you need to
 know what state it left behind. Every key named here is described in
 [the configuration reference](configuration.md).
@@ -186,6 +187,43 @@ previous image, or deploy it again, before any plain `make run`.
 The new bot serves while the old worker still runs, so a task the old worker
 does not know is lost. Register a new task in one release and enqueue it from
 a later one.
+
+## Continuous integration
+
+`CI (prod)` (`.github/workflows/prod_ci.yml`) runs on pull requests to `main`
+and pushes to `main`, `CI (stage)` (`.github/workflows/stage_ci.yml`) on the
+same events for `stage`, and either can be started by hand. Both call
+`.github/workflows/_ci.yml`, so every branch runs the same jobs. A newer push
+to the same pull request or branch cancels the run in progress.
+
+| Job | What it checks |
+|---|---|
+| Lint | `make lint`: every pre-commit hook over every file |
+| Migration HEADs | the Alembic chain has a single head |
+| Unit tests | `make test-cov`, with the 90% coverage gate |
+| Integration tests | `tests/integration` against PostgreSQL and Redis services |
+| Bandit | `src`, `scripts` and `migrations` |
+| pip-audit | the pinned `base`, `dev`, `prod` and `ansible` lockfiles |
+| Gitleaks | the commits of the push or the pull request, for secrets |
+| nginx | the webhook profile's configuration loads with a certificate, and requests from outside Telegram's subnets and the private networks are dropped |
+
+A push that passes every job builds the image and pushes it to GHCR as
+`ghcr.io/<owner>/<repo>:sha-<12>` (the first 12 characters of the commit) and
+a moving tag, `latest` for `main` or `stage` for `stage`. A pull request
+builds nothing. The `sha-<12>` image is what CD deploys and a release tags.
+
+Two paths skip work:
+
+- **Documentation only.** A change that touches nothing but `docs/`,
+  `README.md`, `LICENSE`, `SECURITY.md`, `.github/ISSUE_TEMPLATE` and the pull
+  request template (`scripts/ops/docs_only_change.py`; any other path counts as
+  code) runs Lint and Gitleaks alone, builds no image and so deploys nothing.
+  With Coveralls on, a push of it still gets a coverage report
+  ([coverage](testing.md#coverage)).
+- **A tree that already passed.** A squash merge lands a commit whose tree is
+  the one its pull request was tested on. When CI finds a passing run of the
+  same tree, the push skips every check but Gitleaks and goes straight to the
+  image build.
 
 ## Continuous deployment
 

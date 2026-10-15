@@ -228,7 +228,8 @@ def main(argv: list[str] | None = None, root: Path = ROOT) -> int:
     )
     print(
         "LICENSE, SECURITY.md and .github/ISSUE_TEMPLATE still describe the "
-        "template: rewrite them for your bot or delete them."
+        "template: rewrite them for your bot, or delete them together with the "
+        "links to them; make lint names each link."
     )
     return 0
 

@@ -237,14 +237,12 @@ only from private addresses
 - `/ready` answers 200 when PostgreSQL and the three Redis clients answer, and
   503 otherwise.
 - `/health` always answers 200 with a JSON report from `HealthService`
-  (`src/system/services.py`): `status`, `version`, `commit`, `mode`, the
-  PostgreSQL and Redis readings, the Redis memory ratio, the outbox backlog
-  and its oldest pending row, the task backlog and the scheduler heartbeat age:
-  `status`, `version`, `commit`, `mode`, `postgres`, `redis`,
-  `redis_memory_used_ratio`, `outbox_pending`, `outbox_oldest_pending_seconds`,
-  `task_queue_length` and `scheduler_heartbeat_age_seconds`. A reading that
-  failed or timed out (2 seconds) is `null`, and so is every Redis reading
-  while any of the three Redis databases is down.
+  (`src/system/services.py`): `status`, `version`, `commit`, `mode`,
+  `postgres`, `redis`, `redis_memory_used_ratio`, `outbox_pending`,
+  `outbox_oldest_pending_seconds`, `task_queue_length` and
+  `scheduler_heartbeat_age_seconds`. A reading that failed or timed out
+  (2 seconds) is `null`, and so is every Redis reading while any of the three
+  Redis databases is down.
 
 `status` is `degraded` when PostgreSQL or Redis is down, when Redis uses 90% of
 `maxmemory`, when the scheduler heartbeat is missing or older than

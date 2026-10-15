@@ -52,14 +52,19 @@ you switch it on.
   in `/stats`. Off until `LLM_PROVIDER` is set. [Details](docs/llm.md)
 - S3 storage and SMTP email with HTML templates, both off by default.
   [S3](docs/background-jobs.md#file-storage-s3), [email](docs/background-jobs.md#email)
-- One error handler that logs the failure, answers in the user's Telegram language and
-  reports unexpected errors to Sentry, and `/live`, `/ready` and `/health`
-  probes in both modes. [Details](docs/bot-layer.md#health)
+- One error handler that logs the failure, answers in the user's Telegram
+  language and reports unexpected errors to Sentry.
+  [Details](docs/bot-layer.md#errors-and-alerts)
+- `/live`, `/ready` and `/health` probes in both modes; `/health` also reports
+  the outbox backlog, the task queue and the scheduler heartbeat.
+  [Details](docs/bot-layer.md#health)
 - Strict typing (mypy), import-layer contracts (import-linter), a fake Bot API
   for tests and a 90% coverage gate. [Details](docs/testing.md)
-- GitHub Actions CI: pre-commit hooks, a single Alembic head, unit and
-  integration tests, `nginx -t`, Bandit, pip-audit and Gitleaks; a push that
-  passes builds the image and pushes it to GHCR. [Details](docs/contributing.md)
+- GitHub Actions CI on pull requests and pushes to `main` and `stage`:
+  pre-commit hooks, a single Alembic head, unit and integration tests, the
+  nginx configuration, Bandit, pip-audit and Gitleaks; a push that passes
+  builds the image and pushes it to GHCR.
+  [Details](docs/deployment.md#continuous-integration)
 - Deployment to your own server: Ansible roles, nginx with Let's Encrypt in
   webhook mode, a deploy script with migrations first and a rollback to the
   previous image, CD behind a per-environment switch, and releases that tag
@@ -130,11 +135,12 @@ make logs s=bot
 
 The result is one diff: review it with `git status` and `git diff`, and commit
 it. `LICENSE`, `SECURITY.md` and `.github/ISSUE_TEMPLATE` still describe the
-template; rewrite them for your bot or delete them.
+template: rewrite them for your bot, or delete them together with the links
+to them; `make lint` names each link.
 
 The stack publishes PostgreSQL on 5432 and Redis on 6379 of `127.0.0.1`.
 When either port is taken, set `POSTGRES_HOST_PORT` or `REDIS_HOST_PORT` in
-`.env` ([PostgreSQL settings](docs/configuration.md#postgresql)).
+`.env` ([compose settings](docs/configuration.md#compose-and-resource-limits)).
 
 The dev stack always polls. A change to a `.py` file under `src/`, `loggers/`
 or `models/` restarts the bot and the worker; after changing a schedule, run
@@ -146,7 +152,8 @@ or `models/` restarts the bot and the worker; after changing a schedule, run
 1. `BOT_MODE=webhook` in `.env`.
 2. `WEBHOOK_BASE_URL`, the public `https` origin Telegram calls, on port 443.
 3. `WEBHOOK_SECRET`: `make init-project` already generated one.
-4. `COMPOSE_PROFILES=webhook`, which adds nginx and certbot to the stack.
+4. `COMPOSE_PROFILES=webhook`, which adds nginx and certbot to the stack;
+   start it with `make run`, since `make run-dev` always polls.
 5. Once DNS points at the server and port 80 is open:
    `make cert-issue DOMAIN=bot.example.com`.
 
@@ -186,8 +193,8 @@ A new domain registers itself in a fixed set of places, as `src/note` does:
 
 - its model in `models/__init__.py`, and a migration (`make migration m="..."`);
 - its provider in `build_container` (`src/main/di.py`);
-- its router in `create_dispatcher` (`src/main/dispatcher.py`), before the
-  `unmatched` router;
+- its router in `create_dispatcher` (`src/main/dispatcher.py`), after the
+  user router and before the `unmatched` router;
 - its commands in `PUBLIC_COMMANDS` (`src/main/commands.py`);
 - its event subscribers in `EVENT_SUBSCRIBERS`
   (`src/main/event_subscribers.py`) and its tasks in `TASKS`
