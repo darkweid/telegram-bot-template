@@ -79,3 +79,50 @@ async def test_a_recorded_call_is_committed_on_its_own(
                 delete(LLMUsageRecord).where(LLMUsageRecord.purpose == purpose)
             )
             await session.commit()
+
+
+CANCELLED_AT = datetime(2003, 3, 3, 3, 3, 3, tzinfo=UTC)
+
+
+async def test_a_cancelled_call_row_round_trips(
+    integration_engine: AsyncEngine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """/stats counts a cancelled call as an error and never as unpriced: it
+    stored no usage, so it used no tokens it could leave out of the sum."""
+    monkeypatch.setattr(recording_module, "get_utc_now", lambda: CANCELLED_AT)
+    sessionmaker = async_sessionmaker(integration_engine, expire_on_commit=False)
+    purpose = f"test_{uuid4().hex}"
+    request = LLMRequest(
+        purpose=purpose, messages=[LLMMessage(role="user", content="hi")]
+    )
+    await LLMUsageRecorder(sessionmaker, LLMUsageRepository()).record(
+        request,
+        None,
+        None,
+        provider=LLMProviderName.ANTHROPIC,
+        model="claude-sonnet-5-5",
+        latency_ms=1500,
+        cancelled=True,
+    )
+    try:
+        async with sessionmaker() as session:
+            row = (
+                await session.execute(
+                    select(LLMUsageRecord).where(LLMUsageRecord.purpose == purpose)
+                )
+            ).scalar_one()
+            summary = await LLMUsageRepository().summary(
+                session,
+                datetime(2003, 1, 1, tzinfo=UTC),
+                datetime(2004, 1, 1, tzinfo=UTC),
+            )
+        assert (row.status, row.error_type) == (LLMCallStatus.ERROR, "Cancelled")
+        assert (row.input_tokens, row.output_tokens, row.cost_usd) == (0, 0, None)
+        assert (summary.calls, summary.errors, summary.unpriced_calls) == (1, 1, 0)
+        assert summary.cost_usd == Decimal(0)
+    finally:
+        async with sessionmaker() as session:
+            await session.execute(
+                delete(LLMUsageRecord).where(LLMUsageRecord.purpose == purpose)
+            )
+            await session.commit()

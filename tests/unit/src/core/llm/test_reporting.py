@@ -10,6 +10,7 @@ from src.core.llm.enums import LLMProviderName
 from src.core.llm.reporting import report_llm_call
 from src.core.llm.types import LLMMessage, LLMRequest
 from tests.fakes.llm import llm_response
+from tests.helpers.logs import captured_logs
 
 SECRET_PROMPT = "my diary entry about the surgery"
 
@@ -58,3 +59,27 @@ def test_each_call_leaves_exactly_one_breadcrumb_without_content() -> None:
     assert crumb["category"] == "src.core.llm.reporting"
     assert "purpose=note_summary" in crumb["message"]
     assert "surgery" not in repr(crumb)
+
+
+def test_a_cancelled_call_logs_its_outcome_without_tokens() -> None:
+    """A cancelled call has no response to read tokens from: the line says
+    what happened and claims no cost."""
+    with captured_logs("src.core.llm.reporting") as records:
+        report_llm_call(
+            provider=LLMProviderName.ANTHROPIC,
+            model="claude-sonnet-5-5",
+            request=LLMRequest(
+                purpose="note_summary",
+                messages=[LLMMessage(role="user", content=SECRET_PROMPT)],
+            ),
+            response=None,
+            error=None,
+            latency_ms=1500,
+            cancelled=True,
+        )
+    [record] = records
+    assert record.levelno == logging.WARNING
+    line = record.getMessage()
+    assert "outcome=Cancelled input_tokens=0 output_tokens=0" in line
+    assert "cost_usd=unknown latency_ms=1500" in line
+    assert "surgery" not in line

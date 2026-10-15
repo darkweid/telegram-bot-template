@@ -213,3 +213,25 @@ async def test_no_prompt_or_answer_text_reaches_the_row() -> None:
     row = _stored(sessions)
     values = [getattr(row, column.key) for column in LLMUsageRecord.__table__.columns]
     assert not any(isinstance(value, str) and "secret" in value for value in values)
+
+
+async def test_a_cancelled_call_is_stored_as_an_error_without_usage() -> None:
+    """/stats counts it among the errors; its tokens are unknown, so none are
+    claimed and the cost stays unknown rather than zero."""
+    sessions = FakeSessionFactory()
+    recorder = LLMUsageRecorder(sessions, LLMUsageRepository())
+    await recorder.record(
+        _request(),
+        None,
+        None,
+        provider=LLMProviderName.ANTHROPIC,
+        model="claude-haiku-5-5",
+        latency_ms=2000,
+        cancelled=True,
+    )
+    row = _stored(sessions)
+    assert (row.status, row.error_type) == (LLMCallStatus.ERROR, "Cancelled")
+    assert (row.input_tokens, row.output_tokens) == (0, 0)
+    assert (row.cache_read_tokens, row.cache_write_tokens) == (0, 0)
+    assert row.cost_usd is None
+    assert (row.model, row.latency_ms) == ("claude-haiku-5-5", 2000)
