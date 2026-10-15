@@ -1,3 +1,8 @@
+import os
+from pathlib import Path
+import subprocess
+import sys
+
 import pytest
 
 from src.core.tasks.heartbeat import HeartbeatScheduleSource
@@ -22,3 +27,22 @@ async def test_the_healthcheck_passes_once_the_loop_has_beaten(
     await source.get_schedules()
     await source.shutdown()
     assert await healthcheck.check("redis://unused")
+
+
+def test_the_healthcheck_never_loads_aiogram() -> None:
+    """The check runs every 30 s under the scheduler's 0.5 CPU cap and must end
+    inside compose's 5 s timeout; importing aiogram alone took seconds there."""
+    root = Path(__file__).resolve().parents[4]
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import src.main.heartbeat, sys; print('aiogram' in sys.modules)",
+        ],
+        cwd=root,
+        env={**os.environ, "TESTING": "true"},
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert result.stdout.strip() == "False"

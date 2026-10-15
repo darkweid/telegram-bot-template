@@ -1,6 +1,6 @@
 from src.core.cache.interface import Cache
 from src.core.database.uow import SQLAlchemyUnitOfWork
-from src.core.i18n import SUPPORTED_LOCALES
+from src.core.locales import SUPPORTED_LOCALES
 from src.user.cache import invalidate_user_after_commit
 from src.user.exceptions import UnsupportedLocaleError
 from src.user.repositories import UserRepository

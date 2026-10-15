@@ -3,7 +3,8 @@ from pathlib import Path
 from aiogram.utils.i18n import I18n
 import pytest
 
-from src.core.i18n import LOCALES_DIR, N_, SUPPORTED_LOCALES, build_i18n, resolve_locale
+from src.core.i18n import LOCALES_DIR, N_, build_i18n, resolve_locale
+from src.core.locales import SUPPORTED_LOCALES
 
 
 @pytest.mark.parametrize(
