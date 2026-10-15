@@ -679,3 +679,4 @@ def test_every_section_holding_a_secret_hides_its_input_in_errors() -> None:
         )
         if holds_secret:
             assert section.model_config.get("hide_input_in_errors"), name
+    assert Config.model_config.get("hide_input_in_errors")

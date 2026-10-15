@@ -571,7 +571,9 @@ class Config(BaseModel):
     s3: S3Config
     email: EmailConfig
 
-    model_config = ConfigDict(extra="ignore")
+    # A cross-section validator's error would otherwise print every section,
+    # secrets included.
+    model_config = ConfigDict(extra="ignore", hide_input_in_errors=True)
 
     @model_validator(mode="after")
     def user_cache_ttl_fits_the_version_ttl(self) -> Self:
