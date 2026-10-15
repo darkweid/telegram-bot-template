@@ -66,6 +66,9 @@ msgstr "Идёт рассылка: {processed} из {total}"
 msgid "Broadcast stopped: {processed} of {total}"
 msgstr "Рассылка остановлена: {processed} из {total}"
 
+msgid "By purpose, last 30 days:"
+msgstr "По назначению, за 30 дней:"
+
 msgid "Cancel"
 msgstr "Отмена"
 
@@ -96,6 +99,10 @@ msgid "Delete {number}"
 msgstr "Удалить {number}"
 
 #, python-brace-format
+msgid "Errors in the last 30 days: {count}"
+msgstr "С ошибкой за 30 дней: {count}"
+
+#, python-brace-format
 msgid ""
 "Hello, {name}!\n"
 "\n"
@@ -108,9 +115,26 @@ msgstr ""
 msgid "Keep"
 msgstr "Оставить"
 
+msgid "LLM spending (days are UTC):"
+msgstr "Расходы на LLM (дни по UTC):"
+
 #, python-brace-format
 msgid "Language: {language}"
 msgstr "Язык: {language}"
+
+#, python-brace-format
+msgid "Last 30 days: ${cost}, {count} call"
+msgid_plural "Last 30 days: ${cost}, {count} calls"
+msgstr[0] "За 30 дней: ${cost}, {count} вызов"
+msgstr[1] "За 30 дней: ${cost}, {count} вызова"
+msgstr[2] "За 30 дней: ${cost}, {count} вызовов"
+
+#, python-brace-format
+msgid "Last 7 days: ${cost}, {count} call"
+msgid_plural "Last 7 days: ${cost}, {count} calls"
+msgstr[0] "За 7 дней: ${cost}, {count} вызов"
+msgstr[1] "За 7 дней: ${cost}, {count} вызова"
+msgstr[2] "За 7 дней: ${cost}, {count} вызовов"
 
 #, python-brace-format
 msgid "New in the last day / week / month: {day} / {week} / {month}"
@@ -274,11 +298,21 @@ msgid "This note no longer exists."
 msgstr "Этой заметки уже нет."
 
 #, python-brace-format
+msgid "Today: ${cost}, {count} call"
+msgid_plural "Today: ${cost}, {count} calls"
+msgstr[0] "Сегодня: ${cost}, {count} вызов"
+msgstr[1] "Сегодня: ${cost}, {count} вызова"
+msgstr[2] "Сегодня: ${cost}, {count} вызовов"
+
+#, python-brace-format
 msgid "Too many requests. Try again in {seconds} second."
 msgid_plural "Too many requests. Try again in {seconds} seconds."
 msgstr[0] "Слишком много запросов. Попробуйте через {seconds} секунду."
 msgstr[1] "Слишком много запросов. Попробуйте через {seconds} секунды."
 msgstr[2] "Слишком много запросов. Попробуйте через {seconds} секунд."
+
+msgid "Top users, last 30 days:"
+msgstr "Топ пользователей, за 30 дней:"
 
 msgid "Unban a user"
 msgstr "Разбанить пользователя"
@@ -286,6 +320,10 @@ msgstr "Разбанить пользователя"
 #, python-brace-format
 msgid "Usage: /{command} USER_ID or /{command} @username"
 msgstr "Использование: /{command} ID или /{command} @username"
+
+#, python-brace-format
+msgid "Without a known price in the last 30 days: {count}"
+msgstr "Без известной цены за 30 дней: {count}"
 
 msgid "Write a note"
 msgstr "Написать заметку"
@@ -321,6 +359,13 @@ msgstr "{name} ({id}) не забанен."
 #, python-brace-format
 msgid "{name} ({id}) is unbanned."
 msgstr "{name} ({id}) разбанен."
+
+#, python-brace-format
+msgid "{name}: ${cost}, {count} call"
+msgid_plural "{name}: ${cost}, {count} calls"
+msgstr[0] "{name}: ${cost}, {count} вызов"
+msgstr[1] "{name}: ${cost}, {count} вызова"
+msgstr[2] "{name}: ${cost}, {count} вызовов"
 
 msgid "« Newer"
 msgstr "« Новее"

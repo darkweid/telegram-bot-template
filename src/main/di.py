@@ -3,6 +3,7 @@ and released when the container closes."""
 
 from collections.abc import AsyncIterator, Mapping
 from contextlib import AsyncExitStack
+from datetime import timedelta
 from typing import assert_never
 
 from aiogram import Bot
@@ -28,6 +29,7 @@ from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from taskiq import AsyncBroker
 
+from src.admin.di import AdminProvider
 from src.broadcast.di import BroadcastProvider
 from src.core.cache.interface import Cache
 from src.core.cache.redis_cache import RedisCache
@@ -51,6 +53,7 @@ from src.core.llm.openrouter import OpenRouterLLMClient
 from src.core.llm.pricing import PricingTable
 from src.core.llm.recording import LLMUsageRecorder, RecordingLLMClient
 from src.core.llm.repository import LLMUsageRepository
+from src.core.llm.tasks import LLMUsageRetention
 from src.core.outbox.interface import TaskPublisher
 from src.core.outbox.publisher import OutboxPublisher
 from src.core.redis.core import create_redis_client
@@ -385,6 +388,10 @@ class LLMProvider(Provider):
         return PricingTable(config.llm.LLM_PRICING_OVERRIDES)
 
     @provide
+    def usage_retention(self, config: Config) -> LLMUsageRetention:
+        return LLMUsageRetention(timedelta(days=config.llm.LLM_USAGE_RETENTION_DAYS))
+
+    @provide
     async def client(
         self,
         config: Config,
@@ -607,6 +614,7 @@ def build_container(
         EmailProvider(),
         BrokerProvider(),
         UserProvider(),
+        AdminProvider(),
         BroadcastProvider(),
         NoteProvider(),
         SystemProvider(),

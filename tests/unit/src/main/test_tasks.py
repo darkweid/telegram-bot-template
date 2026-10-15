@@ -3,6 +3,7 @@ from taskiq.middlewares import SmartRetryMiddleware
 from taskiq_redis import RedisStreamBroker
 
 from src.broadcast.task_names import RESUME_STALLED_BROADCASTS, RUN_BROADCAST
+from src.core.llm.tasks import purge_llm_usage
 from src.core.tasks.middlewares import TaskFailureAlertMiddleware
 from src.main import tasks as tasks_module
 from src.main.config import Config
@@ -100,3 +101,11 @@ def test_the_note_subscriber_is_installed() -> None:
 
 def test_the_note_task_is_registered() -> None:
     assert NOTE_CREATED in {spec.name for spec in TASKS}
+
+
+def test_llm_usage_is_purged_daily() -> None:
+    """The purge keeps llm_usage at LLM_USAGE_RETENTION_DAYS; half an hour
+    after the outbox purge, so the two never run at once."""
+    [spec] = [spec for spec in TASKS if spec.name == "llm_usage.purge"]
+    assert spec.func is purge_llm_usage
+    assert spec.schedule == ({"cron": "30 3 * * *"},)

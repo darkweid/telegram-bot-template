@@ -8,6 +8,7 @@ from taskiq import AsyncBroker, InMemoryBroker
 
 from src.broadcast.tasks import BROADCAST_TASKS
 from src.core.email.tasks import EMAIL_TASKS
+from src.core.llm.tasks import purge_llm_usage
 from src.core.outbox.sweeper import purge_outbox, sweep_outbox
 from src.core.tasks.broker import create_stream_broker
 from src.core.tasks.middlewares import TaskFailureAlertMiddleware
@@ -21,6 +22,8 @@ TASKS: tuple[TaskSpec, ...] = (
     # within a couple of minutes.
     TaskSpec("outbox.sweep", sweep_outbox, schedule=({"cron": "* * * * *"},)),
     TaskSpec("outbox.purge", purge_outbox, schedule=({"cron": "0 3 * * *"},)),
+    # Half an hour after the outbox purge, so the two never run at once.
+    TaskSpec("llm_usage.purge", purge_llm_usage, schedule=({"cron": "30 3 * * *"},)),
     *USER_TASKS,
     *BROADCAST_TASKS,
     *NOTE_TASKS,

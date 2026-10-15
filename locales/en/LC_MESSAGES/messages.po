@@ -65,6 +65,9 @@ msgstr ""
 msgid "Broadcast stopped: {processed} of {total}"
 msgstr ""
 
+msgid "By purpose, last 30 days:"
+msgstr ""
+
 msgid "Cancel"
 msgstr ""
 
@@ -92,6 +95,10 @@ msgid "Delete {number}"
 msgstr ""
 
 #, python-brace-format
+msgid "Errors in the last 30 days: {count}"
+msgstr ""
+
+#, python-brace-format
 msgid ""
 "Hello, {name}!\n"
 "\n"
@@ -101,9 +108,24 @@ msgstr ""
 msgid "Keep"
 msgstr ""
 
+msgid "LLM spending (days are UTC):"
+msgstr ""
+
 #, python-brace-format
 msgid "Language: {language}"
 msgstr ""
+
+#, python-brace-format
+msgid "Last 30 days: ${cost}, {count} call"
+msgid_plural "Last 30 days: ${cost}, {count} calls"
+msgstr[0] ""
+msgstr[1] ""
+
+#, python-brace-format
+msgid "Last 7 days: ${cost}, {count} call"
+msgid_plural "Last 7 days: ${cost}, {count} calls"
+msgstr[0] ""
+msgstr[1] ""
 
 #, python-brace-format
 msgid "New in the last day / week / month: {day} / {week} / {month}"
@@ -256,16 +278,29 @@ msgid "This note no longer exists."
 msgstr ""
 
 #, python-brace-format
+msgid "Today: ${cost}, {count} call"
+msgid_plural "Today: ${cost}, {count} calls"
+msgstr[0] ""
+msgstr[1] ""
+
+#, python-brace-format
 msgid "Too many requests. Try again in {seconds} second."
 msgid_plural "Too many requests. Try again in {seconds} seconds."
 msgstr[0] ""
 msgstr[1] ""
+
+msgid "Top users, last 30 days:"
+msgstr ""
 
 msgid "Unban a user"
 msgstr ""
 
 #, python-brace-format
 msgid "Usage: /{command} USER_ID or /{command} @username"
+msgstr ""
+
+#, python-brace-format
+msgid "Without a known price in the last 30 days: {count}"
 msgstr ""
 
 msgid "Write a note"
@@ -301,6 +336,12 @@ msgstr ""
 #, python-brace-format
 msgid "{name} ({id}) is unbanned."
 msgstr ""
+
+#, python-brace-format
+msgid "{name}: ${cost}, {count} call"
+msgid_plural "{name}: ${cost}, {count} calls"
+msgstr[0] ""
+msgstr[1] ""
 
 msgid "« Newer"
 msgstr ""
