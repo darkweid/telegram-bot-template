@@ -2,12 +2,15 @@
 call: the order of the steps and the refusals are checked without a Docker
 daemon, and nothing here can touch the developer's containers or images."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+import json
 import os
 from pathlib import Path
 import re
 import shutil
 import subprocess
+import sys
+from typing import Any
 
 import pytest
 import yaml
@@ -32,24 +35,16 @@ WEBHOOK_ENV = {
     "WEBHOOK_BASE_URL": "https://bot.example.com",
     "WEBHOOK_SECRET": "s" * 48,
 }
-# Records "<BOT_IMAGE> | <arguments>" per call. `ps -q bot` answers with
-# STUB_BOT_ID (a running bot), `inspect` with an image id, and a call whose
-# record contains STUB_FAIL_ON fails.
-DOCKER_STUB = """#!/bin/sh
-record="${BOT_IMAGE:-} | $*"
-printf '%s\\n' "$record" >>"$STUB_LOG"
-case "$*" in
-  *"ps -q bot") [ -n "${STUB_BOT_ID:-}" ] && echo "$STUB_BOT_ID" ;;
-  *"inspect -f {{.Image}} "*) echo sha256:previous ;;
-esac
-if [ -n "${STUB_FAIL_ON:-}" ]; then
-  case "$record" in *"$STUB_FAIL_ON"*) exit 1 ;; esac
-fi
-exit 0
+# tests/fakes/docker_cli.py says what it records and answers.
+DOCKER_STUB = f"""#!/bin/sh
+exec "{sys.executable}" -I -S "{PROJECT_ROOT / 'tests/fakes/docker_cli.py'}" "$@"
 """
 UNAME_STUB = """#!/bin/sh
 echo "$STUB_UNAME"
 """
+# The deploy waits between polls and before it checks the worker; the stand-in
+# containers change state only when docker is called, so waiting buys nothing.
+SLEEP_STUB = "#!/bin/sh\n"
 
 
 @dataclass
@@ -57,6 +52,19 @@ class Deploy:
     returncode: int
     output: str
     calls: list[str]
+    state: dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def events(self) -> list[str]:
+        events: list[str] = self.state.get("events", [])
+        return events
+
+    def running(self, service: str) -> list[str]:
+        return [
+            container["name"]
+            for container in self.state["containers"]
+            if container["service"] == service and container["status"] == "running"
+        ]
 
 
 def _deploy(
@@ -64,6 +72,7 @@ def _deploy(
     env_file: dict[str, str],
     *,
     uname: str = "Linux",
+    state: dict[str, Any] | None = None,
     **variables: str,
 ) -> Deploy:
     root = tmp_path / "checkout"
@@ -79,7 +88,11 @@ def _deploy(
     )
     stubs = tmp_path / "bin"
     stubs.mkdir()
-    for name, body in (("docker", DOCKER_STUB), ("uname", UNAME_STUB)):
+    for name, body in (
+        ("docker", DOCKER_STUB),
+        ("uname", UNAME_STUB),
+        ("sleep", SLEEP_STUB),
+    ):
         (stubs / name).write_text(body, encoding="utf-8")
         (stubs / name).chmod(0o755)
     log = tmp_path / "docker.log"
@@ -92,6 +105,10 @@ def _deploy(
         "STUB_UNAME": uname,
         **variables,
     }
+    state_file = tmp_path / "docker.json"
+    if state is not None:
+        state_file.write_text(json.dumps(state), encoding="utf-8")
+        environment["STUB_STATE"] = str(state_file)
     completed = subprocess.run(
         ["bash", str(root / "infra/deploy/deploy.sh")],
         cwd=tmp_path,
@@ -105,6 +122,7 @@ def _deploy(
         completed.returncode,
         completed.stdout + completed.stderr,
         log.read_text(encoding="utf-8").splitlines(),
+        json.loads(state_file.read_text(encoding="utf-8")) if state is not None else {},
     )
 
 
@@ -213,7 +231,7 @@ def test_a_failing_worker_takes_the_stack_back(tmp_path: Path) -> None:
     assert deploy.returncode == 1
     assert "going back to sha256:previous" in deploy.output
     rollback = deploy.calls[_index(deploy.calls, "sha256:previous") :]
-    assert rollback == [
+    assert [call for call in rollback if " up " in call] == [
         f"sha256:previous | {COMPOSE} up -d --no-deps --wait worker scheduler",
         f"sha256:previous | {COMPOSE} up -d --no-deps --force-recreate --wait "
         "--wait-timeout 120 bot",
@@ -304,7 +322,7 @@ def test_a_failed_rollback_still_rolls_the_bot_back(tmp_path: Path) -> None:
         tmp_path,
         POLLING_ENV,
         STUB_BOT_ID="c1",
-        STUB_FAIL_ON="--wait worker scheduler",
+        STUB_FAIL_ON="worker scheduler",
     )
     assert deploy.returncode == 1
     assert "[deploy] rollback failed" in deploy.output
@@ -328,7 +346,7 @@ def test_build_and_prune_accept_only_0_or_1(tmp_path: Path, variable: str) -> No
     ("fail_on", "message"),
     [
         ("force-recreate", "the bot did not become healthy and there is no previous"),
-        ("--wait worker scheduler", "the worker or the scheduler did not become"),
+        ("worker scheduler", "the worker or the scheduler did not become"),
     ],
 )
 def test_a_first_deploy_has_nothing_to_go_back_to(
@@ -341,3 +359,59 @@ def test_a_first_deploy_has_nothing_to_go_back_to(
     assert message in deploy.output
     assert "no previous image to go back to" in deploy.output
     assert not any(call.startswith("sha256:") for call in deploy.calls)
+
+
+def _container(
+    service: str, number: int, image: str = "sha256:previous", **fields: Any
+) -> dict[str, Any]:
+    return {
+        "id": f"{service}{number}",
+        "name": f"tg-bot-template-{service}-{number}",
+        "service": service,
+        "image": image,
+        "status": "running",
+        "restarts": 0,
+        "health": ["healthy"],
+        **fields,
+    }
+
+
+def _serving_webhook_stack(*bots: dict[str, Any], pinned: list[str]) -> dict[str, Any]:
+    return {
+        "containers": [*bots, _container("worker", 1), _container("scheduler", 1)],
+        "nginx": {"id": "nginx1", "inc": pinned, "applied": pinned},
+    }
+
+
+def _position(events: list[str], event: str) -> int:
+    assert event in events, f"{event!r} not in {events}"
+    return events.index(event)
+
+
+NEW_BOT = "tg-bot-template-bot-2"
+OLD_BOT = "tg-bot-template-bot-1"
+
+
+def test_a_running_nginx_renders_the_new_configuration_before_the_roll(
+    tmp_path: Path,
+) -> None:
+    """A reload reads the files nginx rendered when it started, not the checkout:
+    without a render in the running container every reload of the roll would
+    keep serving the previous configuration while `nginx -t` passed the new
+    one."""
+    deploy = _deploy(
+        tmp_path,
+        WEBHOOK_ENV,
+        state=_serving_webhook_stack(_container("bot", 1), pinned=["bot"]),
+    )
+    assert deploy.returncode == 0, deploy.output
+    render = _position(deploy.events, "render")
+    assert deploy.events[render : render + 3] == [
+        "render",
+        "test the running nginx",
+        "reload bot",
+    ]
+    assert render < _position(deploy.events, f"start {NEW_BOT} {LOCAL_IMAGE}")
+    assert f"{LOCAL_IMAGE} | {COMPOSE} exec -T -e NGINX_REQUIRE_TLS=1 nginx sh " in (
+        "\n".join(deploy.calls)
+    )

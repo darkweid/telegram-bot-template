@@ -394,7 +394,18 @@ if [ "$BOT_MODE" = "webhook" ]; then
   # Before the roll, which relies on the running nginx reading bot_upstream.inc.
   # Starts nginx on the first deploy; later a no-op unless the service itself
   # changed in infra/docker-compose.yml, which recreates it.
+  NGINX_BEFORE="$("${COMPOSE[@]}" ps -q nginx)"
   "${COMPOSE[@]}" up -d --no-deps nginx certbot
+  # A started or recreated nginx rendered this checkout's configuration on its
+  # way up. One left running still serves what it rendered when it started: a
+  # reload reads /etc/nginx/conf.d, never the mounted directory, so the files
+  # tested above are rendered into it here, tested there and reloaded.
+  if [ -n "$NGINX_BEFORE" ] && [ "$NGINX_BEFORE" = "$("${COMPOSE[@]}" ps -q nginx)" ]; then
+    echo "[deploy] rendering the nginx configuration into the running nginx"
+    "${COMPOSE[@]}" exec -T -e NGINX_REQUIRE_TLS=1 nginx sh /etc/nginx/bot/render.sh
+    "${COMPOSE[@]}" exec -T nginx nginx -t
+    "${COMPOSE[@]}" exec -T nginx nginx -s reload
+  fi
   echo "[deploy] rolling the bot"
   if ! roll_bot "$BOT_IMAGE"; then
     die "[deploy] rolling the bot failed; the previous one keeps serving and the deploy failed"
