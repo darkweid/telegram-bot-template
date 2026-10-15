@@ -14,7 +14,11 @@ def _jobs() -> dict[str, Any]:
 
 
 def _gated(job: dict[str, Any], step: dict[str, Any]) -> bool:
-    return GATE in f"{job.get('if', '')} {step.get('if', '')}"
+    """A job condition gates its steps only when the gate is required, not one
+    side of an OR (unit-tests also runs for the tests alone)."""
+    job_condition = str(job.get("if", ""))
+    job_gates = GATE in job_condition and "||" not in job_condition
+    return job_gates or GATE in str(step.get("if", ""))
 
 
 def test_nothing_reaches_coveralls_until_the_gate_is_on() -> None:
