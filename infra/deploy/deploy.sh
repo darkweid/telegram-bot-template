@@ -92,9 +92,10 @@ TASKS_HEALTHY_TIMEOUT_SECONDS=180
 # The worker has no healthcheck, so `--wait` passes the moment it runs; it
 # must still be running, never restarted, this long after.
 TASKS_SETTLE_SECONDS=15
-# The image the deploy was given stays in .env (BOT_IMAGE) or under the local
-# tag, so compose still names it after a rollback.
-STILL_NAMED="The failed image is still the one BOT_IMAGE or the local tag names, and a later 'make run' or 'docker compose up -d' would start it again: deploy the previous release again, or pin BOT_IMAGE to its tag, before either."
+# A rollback changes neither the checkout nor .env, and a pull never retags:
+# when the image came from .env's BOT_IMAGE or the local tag (a build), compose
+# still names it; one CD passed in the shell is named nowhere.
+STILL_NAMED="The checkout stays at the new commit, and when this deploy took its image from BOT_IMAGE in .env or from the local tag, that still names the failed image: pin BOT_IMAGE to the previous image, or deploy it again, before any plain 'make run'."
 ROLLBACK_FAILED="[deploy] rollback failed; the bot, worker or scheduler may still run the new image beside the previous one - check 'docker compose ps' and the logs, then deploy the previous image again"
 # How long the nginx workers retired by a reload get to finish the requests
 # they still carry to the old bot.

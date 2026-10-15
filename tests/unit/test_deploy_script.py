@@ -256,10 +256,9 @@ def test_a_failing_polling_bot_goes_back_to_the_previous_image(
         "--wait-timeout 120 bot"
     )
     assert not any("worker" in call for call in deploy.calls)
-    # .env and the local tag still name the failed image after the rollback.
-    assert "a later 'make run' or 'docker compose up -d' would start it again" in (
-        deploy.output
-    )
+    # The deploy built its image, so the local tag still names the failed one.
+    assert "that still names the failed image" in deploy.output
+    assert "before any plain 'make run'" in deploy.output
 
 
 @pytest.mark.parametrize(
@@ -545,9 +544,7 @@ def test_a_new_bot_that_never_turns_healthy_is_removed(tmp_path: Path) -> None:
     deploy = _deploy(tmp_path, WEBHOOK_ENV, state=state)
     assert deploy.returncode == 1
     assert "rolling the bot failed; the previous one keeps serving" in deploy.output
-    assert "a later 'make run' or 'docker compose up -d' would start it" in (
-        deploy.output
-    )
+    assert "The checkout stays at the new commit" in deploy.output
     events = deploy.events
     assert _position(events, f"remove {NEW_BOT}") < len(events) - 1
     assert f"stop {OLD_BOT}" not in events
