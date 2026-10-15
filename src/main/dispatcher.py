@@ -18,6 +18,8 @@ from src.core.telegram.middlewares.throttling import ThrottlingMiddleware
 from src.core.telegram.middlewares.update_context import UpdateContextMiddleware
 from src.core.telegram.roles import Roles
 from src.developer.handlers import build_developer_router
+from src.main.commands import PUBLIC_COMMANDS
+from src.note.handlers import build_note_router
 from src.user.handlers import build_user_router
 from src.user.middlewares import BanMiddleware, UserMiddleware
 
@@ -39,12 +41,16 @@ async def create_dispatcher(container: AsyncContainer) -> Dispatcher:
     middleware, then ThrottlingMiddleware.
 
     Role routers come before the user router: an admin's command must reach the
-    admin handler even when a user handler would match it too.
+    admin handler even when a user handler would match it too. Domain routers
+    (note) follow the user router; the unmatched router is always last.
     """
     dp = Dispatcher(
         storage=await container.get(BaseStorage),
         events_isolation=await container.get(BaseEventIsolation),
         roles=await container.get(Roles),
+        # /help lists what the menu shows; the user domain cannot import the
+        # domains that add commands to it.
+        public_commands=PUBLIC_COMMANDS,
     )
     container_middleware = ContainerMiddleware(container)
     dp.update.outer_middleware(UpdateContextMiddleware())
@@ -74,6 +80,7 @@ async def create_dispatcher(container: AsyncContainer) -> Dispatcher:
         build_developer_router(),
         build_broadcast_router(),
         build_user_router(),
+        build_note_router(),
         _build_unmatched_router(),
     )
     return dp

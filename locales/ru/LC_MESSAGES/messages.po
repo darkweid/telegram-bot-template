@@ -21,6 +21,16 @@ msgid "A broadcast is already running. Wait for it to finish or stop it."
 msgstr "Рассылка уже идёт. Дождитесь её окончания или остановите её."
 
 #, python-brace-format
+msgid "A note can be at most {limit} characters long. This one has {length}."
+msgstr "Заметка может быть не длиннее {limit} символов. В этой — {length}."
+
+msgid "A note cannot be empty."
+msgstr "Заметка не может быть пустой."
+
+msgid "A note is text only. Send the text, or /cancel."
+msgstr "Заметка — только текст. Пришлите текст или /cancel."
+
+#, python-brace-format
 msgid "Active in the last day / week / month: {day} / {week} / {month}"
 msgstr "Активны за день / неделю / месяц: {day} / {week} / {month}"
 
@@ -68,6 +78,23 @@ msgstr "Выберите язык:"
 msgid "Commands:"
 msgstr "Команды:"
 
+msgid "Delete"
+msgstr "Удалить"
+
+#, python-brace-format
+msgid ""
+"Delete this note?\n"
+"\n"
+"{text}"
+msgstr ""
+"Удалить эту заметку?\n"
+"\n"
+"{text}"
+
+#, python-brace-format
+msgid "Delete {number}"
+msgstr "Удалить {number}"
+
 #, python-brace-format
 msgid ""
 "Hello, {name}!\n"
@@ -77,6 +104,9 @@ msgstr ""
 "Привет, {name}!\n"
 "\n"
 "Отправьте /help, чтобы узнать, что я умею."
+
+msgid "Keep"
+msgstr "Оставить"
 
 #, python-brace-format
 msgid "Language: {language}"
@@ -96,6 +126,15 @@ msgstr "Новый пользователь: {name}, id {id}"
 
 msgid "No such user. They have to start the bot first."
 msgstr "Такого пользователя нет. Сначала он должен запустить бота."
+
+msgid "Note deleted."
+msgstr "Заметка удалена."
+
+msgid "Note saved. Send /notes to see all of them."
+msgstr "Заметка сохранена. Все заметки — /notes."
+
+msgid "Older »"
+msgstr "Старее »"
 
 #, python-brace-format
 msgid "Reachable: {count}"
@@ -121,6 +160,10 @@ msgstr ""
 "Отправьте /cancel, чтобы выйти."
 
 #, python-brace-format
+msgid "Send the text of the note, up to {limit} characters, or /cancel."
+msgstr "Пришлите текст заметки, до {limit} символов, или /cancel."
+
+#, python-brace-format
 msgid ""
 "Sent: {sent}\n"
 "Unreachable: {unreachable}\n"
@@ -142,6 +185,9 @@ msgstr "Состояние бота"
 
 msgid "Show user statistics"
 msgstr "Статистика пользователей"
+
+msgid "Show your notes"
+msgstr "Мои заметки"
 
 msgid "Something went wrong. Please try again later."
 msgstr "Что-то пошло не так. Попробуйте ещё раз чуть позже."
@@ -183,6 +229,9 @@ msgstr "Языковая модель сейчас недоступна. Поп�
 msgid "The language model took too long to answer. Please try again."
 msgstr "Языковая модель отвечала слишком долго. Попробуйте ещё раз."
 
+msgid "The note was not saved."
+msgstr "Заметка не сохранена."
+
 msgid "This broadcast has already finished."
 msgstr "Эта рассылка уже завершена."
 
@@ -191,6 +240,9 @@ msgstr "В этом боте эта функция недоступна."
 
 msgid "This language is not available."
 msgstr "Этот язык недоступен."
+
+msgid "This message is too old. Send /notes again."
+msgstr "Это сообщение слишком старое. Отправьте /notes ещё раз."
 
 msgid "This message is too old. Start again with /broadcast."
 msgstr "Это сообщение слишком старое. Начните заново с /broadcast."
@@ -201,6 +253,9 @@ msgid_plural "This message will go to {count} users. Send it?"
 msgstr[0] "Это сообщение получит {count} пользователь. Отправить?"
 msgstr[1] "Это сообщение получат {count} пользователя. Отправить?"
 msgstr[2] "Это сообщение получат {count} пользователей. Отправить?"
+
+msgid "This note no longer exists."
+msgstr "Этой заметки уже нет."
 
 #, python-brace-format
 msgid "Too many requests. Try again in {seconds} second."
@@ -216,8 +271,17 @@ msgstr "Разбанить пользователя"
 msgid "Usage: /{command} USER_ID or /{command} @username"
 msgstr "Использование: /{command} ID или /{command} @username"
 
+msgid "Write a note"
+msgstr "Написать заметку"
+
 msgid "You cannot ban yourself."
 msgstr "Себя забанить нельзя."
+
+msgid "You have no notes yet. Send /note to write one."
+msgstr "Заметок пока нет. Напишите первую: /note."
+
+msgid "Your notes:"
+msgstr "Ваши заметки:"
 
 #, python-brace-format
 msgid "{count} user"
@@ -241,3 +305,6 @@ msgstr "{name} ({id}) не забанен."
 #, python-brace-format
 msgid "{name} ({id}) is unbanned."
 msgstr "{name} ({id}) разбанен."
+
+msgid "« Newer"
+msgstr "« Новее"

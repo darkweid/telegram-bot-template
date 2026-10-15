@@ -7,4 +7,5 @@ migration with no error; tests/unit/test_models_registration.py guards against t
 
 from src.broadcast.models import Broadcast as Broadcast
 from src.core.outbox.models import OutboxMessage as OutboxMessage
+from src.note.models import Note as Note
 from src.user.models import User as User

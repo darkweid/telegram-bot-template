@@ -68,7 +68,7 @@ async def test_the_stored_choice_beats_telegrams_language(
 async def test_help_lists_every_command(settings: Config, i18n: I18n) -> None:
     [reply] = await _replies(settings, i18n, build_message_update("/help"))
     assert reply.text is not None
-    for command in ("/start", "/help", "/language"):
+    for command in ("/start", "/help", "/language", "/note", "/notes"):
         assert command in reply.text
 
 

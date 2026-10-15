@@ -20,6 +20,16 @@ msgid "A broadcast is already running. Wait for it to finish or stop it."
 msgstr ""
 
 #, python-brace-format
+msgid "A note can be at most {limit} characters long. This one has {length}."
+msgstr ""
+
+msgid "A note cannot be empty."
+msgstr ""
+
+msgid "A note is text only. Send the text, or /cancel."
+msgstr ""
+
+#, python-brace-format
 msgid "Active in the last day / week / month: {day} / {week} / {month}"
 msgstr ""
 
@@ -67,11 +77,28 @@ msgstr ""
 msgid "Commands:"
 msgstr ""
 
+msgid "Delete"
+msgstr ""
+
+#, python-brace-format
+msgid ""
+"Delete this note?\n"
+"\n"
+"{text}"
+msgstr ""
+
+#, python-brace-format
+msgid "Delete {number}"
+msgstr ""
+
 #, python-brace-format
 msgid ""
 "Hello, {name}!\n"
 "\n"
 "Send /help to see what I can do."
+msgstr ""
+
+msgid "Keep"
 msgstr ""
 
 #, python-brace-format
@@ -91,6 +118,15 @@ msgid "New user: {name}, id {id}"
 msgstr ""
 
 msgid "No such user. They have to start the bot first."
+msgstr ""
+
+msgid "Note deleted."
+msgstr ""
+
+msgid "Note saved. Send /notes to see all of them."
+msgstr ""
+
+msgid "Older »"
 msgstr ""
 
 #, python-brace-format
@@ -113,6 +149,10 @@ msgid ""
 msgstr ""
 
 #, python-brace-format
+msgid "Send the text of the note, up to {limit} characters, or /cancel."
+msgstr ""
+
+#, python-brace-format
 msgid ""
 "Sent: {sent}\n"
 "Unreachable: {unreachable}\n"
@@ -130,6 +170,9 @@ msgid "Show the bot's status"
 msgstr ""
 
 msgid "Show user statistics"
+msgstr ""
+
+msgid "Show your notes"
 msgstr ""
 
 msgid "Something went wrong. Please try again later."
@@ -170,6 +213,9 @@ msgstr ""
 msgid "The language model took too long to answer. Please try again."
 msgstr ""
 
+msgid "The note was not saved."
+msgstr ""
+
 msgid "This broadcast has already finished."
 msgstr ""
 
@@ -177,6 +223,9 @@ msgid "This feature is not available in this bot."
 msgstr ""
 
 msgid "This language is not available."
+msgstr ""
+
+msgid "This message is too old. Send /notes again."
 msgstr ""
 
 msgid "This message is too old. Start again with /broadcast."
@@ -187,6 +236,9 @@ msgid "This message will go to {count} user. Send it?"
 msgid_plural "This message will go to {count} users. Send it?"
 msgstr[0] ""
 msgstr[1] ""
+
+msgid "This note no longer exists."
+msgstr ""
 
 #, python-brace-format
 msgid "Too many requests. Try again in {seconds} second."
@@ -201,7 +253,16 @@ msgstr ""
 msgid "Usage: /{command} USER_ID or /{command} @username"
 msgstr ""
 
+msgid "Write a note"
+msgstr ""
+
 msgid "You cannot ban yourself."
+msgstr ""
+
+msgid "You have no notes yet. Send /note to write one."
+msgstr ""
+
+msgid "Your notes:"
 msgstr ""
 
 #, python-brace-format
@@ -224,4 +285,7 @@ msgstr ""
 
 #, python-brace-format
 msgid "{name} ({id}) is unbanned."
+msgstr ""
+
+msgid "« Newer"
 msgstr ""

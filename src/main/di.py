@@ -75,6 +75,7 @@ from src.main.config import (
 )
 from src.main.event_subscribers import EVENT_SUBSCRIBERS
 from src.main.tasks import build_broker
+from src.note.di import NoteProvider
 from src.system.di import SystemProvider
 from src.user.di import UserProvider
 
@@ -410,6 +411,7 @@ def build_container(
         BrokerProvider(),
         UserProvider(),
         BroadcastProvider(),
+        NoteProvider(),
         SystemProvider(),
         AiogramProvider(),
         *providers,

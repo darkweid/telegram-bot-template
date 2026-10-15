@@ -16,6 +16,12 @@ pull requests.
   finish.
 - `/start`, `/help` and `/language`, with a per-user language and a command
   menu published in every supported language.
+- A reference domain, `src/note`, to copy for new modules: `/note` writes a
+  note through a dialog with a Cancel button and `/cancel`, `/notes` lists
+  them five per page with keyset pagination in the buttons, and each note is
+  deleted after a confirmation. It has its own table, migration, use cases,
+  keyboards and the full set of tests (handlers on the real dispatcher, use
+  cases on fakes, the repository against PostgreSQL).
 - Users stored on their first private-chat update and kept fresh with
   minimal writes: a row is rewritten only when the Telegram profile changes
   or once per `USER_TOUCH_INTERVAL_SECONDS`.
@@ -355,6 +361,7 @@ src/core/           shared infrastructure: database, outbox, tasks, Redis, cache
 src/developer/      developer commands: status, test alert
 src/main/           entry points (bot, worker, scheduler), config, dependency
                     container, dispatcher, polling and webhook
+src/note/           notes, the reference domain: handlers, dialog, keyboards, use cases, repository
 src/system/         health checks behind the probes and /status
 src/user/           users: handlers, keyboards, middleware, use cases, repository
 tests/unit/         tests that need no Docker
