@@ -1,0 +1,38 @@
+name: Bug report
+description: Something in the template does not work as documented.
+labels: [bug]
+body:
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you did, what you expected and what you got instead.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: How to reproduce
+      description: Commands, the update you sent the bot, the setting you changed. Describe settings by name; never paste tokens or the contents of your `.env`.
+    validations:
+      required: true
+  - type: input
+    id: commit
+    attributes:
+      label: Commit or release
+      placeholder: v0.1.0 or the first 12 characters of the commit
+    validations:
+      required: true
+  - type: dropdown
+    id: mode
+    attributes:
+      label: Bot mode
+      options: [polling, webhook, both]
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Log lines
+      description: Remove tokens, passwords and anything your users wrote before pasting.
+      render: text
