@@ -213,9 +213,9 @@ services:
           memory: ${REDIS_MEMORY:-1G}
 
   # Webhook mode only (COMPOSE_PROFILES=webhook in .env): the one service the
-  # internet reaches. infra/nginx/entrypoint.sh renders the configuration for
-  # WEBHOOK_BASE_URL; the TLS server appears once certbot holds a certificate
-  # (`make cert-issue`).
+  # internet reaches. infra/nginx/render.sh renders the configuration for
+  # WEBHOOK_BASE_URL when it starts (entrypoint.sh) and on every webhook deploy;
+  # the TLS server appears once certbot holds a certificate (`make cert-issue`).
   nginx:
     image: nginx:1.31.6
     profiles: ["webhook"]
@@ -236,8 +236,10 @@ services:
     volumes:
       # The directory, never its files one by one: `git pull` on the box
       # replaces a changed file with a new inode, and a single-file bind mount
-      # stays on the old one, so a reload would serve the previous
-      # configuration while `nginx -t` passed the new one.
+      # stays on the old one, so render.sh would render, and the server blocks
+      # would include, the previous files while `nginx -t` passed the new ones.
+      # A reload reads what render.sh wrote into conf.d, which deploy.sh
+      # renders again in the running nginx before it reloads.
       - ./nginx:/etc/nginx/bot:ro
       # The bot upstream's servers, rewritten by infra/deploy/deploy.sh while it
       # rolls the bot. A volume, so the pin outlives a recreation of nginx.

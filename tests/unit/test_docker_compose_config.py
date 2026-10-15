@@ -365,8 +365,9 @@ def test_env_example_carries_the_subnets_nginx_defaults_to() -> None:
 
 
 def test_nginx_mounts_its_configuration_directory_whole() -> None:
-    """A single-file bind mount stays on the old inode after `git pull`, so a
-    reload would keep serving the previous configuration."""
+    """A single-file bind mount stays on the old inode after `git pull`, so the
+    re-render before a reload would read the previous files while `nginx -t`
+    passed the new ones."""
     volumes = _services()["nginx"]["volumes"]
     assert "./nginx:/etc/nginx/bot:ro" in volumes
     assert not any(volume.startswith("./nginx/") for volume in volumes)

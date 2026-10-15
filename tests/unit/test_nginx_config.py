@@ -14,7 +14,7 @@ NGINX_DIR = PROJECT_ROOT / "infra/nginx"
 # A comment, a quoted string, a brace or semicolon, or a bare word; a word may
 # carry a template's ${NAME}, whose braces are not blocks.
 _TOKEN = re.compile(r'#[^\n]*|"[^"]*"|[{};]|(?:\$\{[A-Z_]+\}|[^\s{};"#])+')
-# What entrypoint.sh hands envsubst; anything else in a template must reach
+# What render.sh hands envsubst; anything else in a template must reach
 # nginx untouched ($host, $remote_addr, ...).
 SUBSTITUTED = frozenset({"WEBHOOK_HOST", "WEBHOOK_PATH"})
 DEFAULT_TELEGRAM_SUBNETS = "149.154.160.0/20,91.108.4.0/22"
@@ -232,9 +232,9 @@ def test_the_bridge_gateway_is_carved_out_of_the_private_networks() -> None:
     assert entries[0] == ("default", ["0"])
     assert ("172.16.0.0/12", ["1"]) in entries
     assert ("include", ["/etc/nginx/generated/bridge_gateway.inc"]) in entries
-    entrypoint = (NGINX_DIR / "entrypoint.sh").read_text(encoding="utf-8")
-    assert "printf '%d.%d.%d.%d 0;\\n'" in entrypoint
-    assert '>"$generated/bridge_gateway.inc"' in entrypoint
+    render = (NGINX_DIR / "render.sh").read_text(encoding="utf-8")
+    assert "printf '%d.%d.%d.%d 0;\\n'" in render
+    assert '>"$generated/bridge_gateway.inc"' in render
 
 
 def test_only_telegram_subnets_reach_the_webhook() -> None:
@@ -263,8 +263,8 @@ def test_templates_use_only_the_substituted_variables() -> None:
     """envsubst is given an explicit list; a ${NAME} outside it would reach
     nginx literally and fail `nginx -t`, and an unrestricted envsubst would
     blank $host and every other nginx variable."""
-    entrypoint = (NGINX_DIR / "entrypoint.sh").read_text(encoding="utf-8")
-    listed = re.search(r"^variables='(.*)'$", entrypoint, re.MULTILINE)
+    render = (NGINX_DIR / "render.sh").read_text(encoding="utf-8")
+    listed = re.search(r"^variables='(.*)'$", render, re.MULTILINE)
     assert listed
     assert set(re.findall(r"\$\{([A-Z_]+)\}", listed.group(1))) == SUBSTITUTED
     for template in NGINX_DIR.glob("*.template"):
@@ -282,16 +282,14 @@ def test_ci_gates_the_image_on_the_nginx_check() -> None:
 
 
 def test_a_missing_certificate_names_the_command_that_issues_it() -> None:
-    """The deploy greps this line to tell a missing certificate from a broken
-    configuration, and an operator reads it as the next step to take."""
-    entrypoint = (NGINX_DIR / "entrypoint.sh").read_text(encoding="utf-8")
-    assert (
-        'certificate="/etc/letsencrypt/live/$WEBHOOK_HOST/fullchain.pem"' in entrypoint
-    )
+    """A deploy that stops on a missing certificate shows this line as its
+    reason, and an operator reads it as the next step to take."""
+    render = (NGINX_DIR / "render.sh").read_text(encoding="utf-8")
+    assert 'certificate="/etc/letsencrypt/live/$WEBHOOK_HOST/fullchain.pem"' in render
     assert (
         'echo "nginx: no certificate at $certificate; '
         'run make cert-issue DOMAIN=$WEBHOOK_HOST" >&2'
-    ) in entrypoint
+    ) in render
 
 
 def test_a_failed_reload_does_not_end_the_reload_loop() -> None:
@@ -351,3 +349,70 @@ def test_a_pin_without_a_server_is_dropped(tmp_path: Path) -> None:
     """A record with no server line (cut short, written by hand) would leave
     the upstream empty and every update answered with 502."""
     assert not _pin_is_live(tmp_path, "# nothing pinned\n", "bot")
+
+
+def _upstream_after(
+    tmp_path: Path, command: str, inc: str | None, applied: str | None
+) -> tuple[str | None, str | None]:
+    """Runs the entrypoint's upstream step for `command` on a volume holding
+    `inc` and `applied` (None: absent), and returns what the volume holds after."""
+    entrypoint = (NGINX_DIR / "entrypoint.sh").read_text(encoding="utf-8")
+    step = re.search(r"^upstream=.*?^fi\n", entrypoint, re.DOTALL | re.MULTILINE)
+    assert step
+    state = tmp_path / "upstream"
+    state.mkdir()
+    for name, content in (("bot_upstream.inc", inc), ("bot_upstream.applied", applied)):
+        if content is not None:
+            (state / name).write_text(content, encoding="utf-8")
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    getent = bin_dir / "getent"
+    getent.write_text(FAKE_GETENT, encoding="utf-8")
+    getent.chmod(0o755)
+    sh = shutil.which("sh")
+    assert sh is not None
+    subprocess.run(
+        [sh, "-c", f"set -eu\nset -- {command}\n{step.group(0)}"],
+        env={
+            "PATH": f"{bin_dir}{os.pathsep}/usr/bin{os.pathsep}/bin",
+            "KNOWN_HOSTS": "bot bot-blue",
+            "WEB_SERVER_PORT": "8080",
+            "state": str(state),
+        },
+        check=True,
+    )
+    after = [
+        path.read_text(encoding="utf-8") if path.exists() else None
+        for path in (state / "bot_upstream.inc", state / "bot_upstream.applied")
+    ]
+    return after[0], after[1]
+
+
+def test_a_configuration_test_leaves_the_running_pin_alone(tmp_path: Path) -> None:
+    """deploy.sh tests the new configuration in a container of its own that
+    shares the upstream volume with the running nginx; rewriting the pin there
+    would make the running nginx route somewhere else on its next reload, and
+    the record would no longer say where it routes."""
+    pin = "server bot-blue:8080 resolve;\n"
+    assert _upstream_after(tmp_path, "nginx -t", pin, pin) == (pin, pin)
+
+
+def test_a_configuration_test_on_an_empty_volume_names_the_service(
+    tmp_path: Path,
+) -> None:
+    """On a first deploy nothing has written the upstream yet, and the test's
+    include must resolve; the record stays for the nginx that will serve."""
+    assert _upstream_after(tmp_path, "nginx -t", None, None) == (
+        "server bot:8080 resolve;\n",
+        None,
+    )
+
+
+def test_a_starting_nginx_restores_the_pin(tmp_path: Path) -> None:
+    """The test run's exemption must not reach the serving nginx, which routes
+    where the record says after a restart in the middle of a roll."""
+    pin = "server bot-blue:8080 resolve;\n"
+    assert _upstream_after(tmp_path, "nginx -g 'daemon off;'", "stale", pin) == (
+        pin,
+        pin,
+    )

@@ -1,4 +1,4 @@
-# Rendered only once the certificate exists (entrypoint.sh). An unknown SNI
+# Rendered only once the certificate exists (render.sh). An unknown SNI
 # name is refused during the handshake, so a scanner walking the address space
 # never sees the certificate. A request that passed the handshake with the
 # webhook host's name but carries another Host lands here too, and is closed.
