@@ -40,6 +40,8 @@ COMMAND_SEPARATOR = re.compile(r"&&|\|\||;|\|")
 TREE_DRAWING = re.compile(r"[\u251c\u2514\u2502]")
 INLINE_CODE = re.compile(r"`([^`\n]+)`")
 HEADING = re.compile(r"^#{1,6}\s+(.+?)\s*#*\s*$")
+# GitHub slugs a heading's rendered text: a link keeps its label only.
+HEADING_LINK = re.compile(r"!?\[([^\]]*)\](?:\([^)]*\)|\[[^\]]*\])")
 # A call starts a line or follows a shell operator; "make targets" inside a
 # sentence of a layout tree is not one.
 MAKE_CALL = re.compile(
@@ -134,7 +136,7 @@ def split_code(text: str) -> tuple[str, list[str]]:
 
 
 def _slug(heading: str) -> str:
-    text = heading.strip().lower()
+    text = HEADING_LINK.sub(r"\1", heading).strip().lower()
     text = re.sub(r"[^\w\- ]", "", text)
     return text.replace(" ", "-")
 

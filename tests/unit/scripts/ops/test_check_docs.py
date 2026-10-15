@@ -268,6 +268,13 @@ def test_punctuation_is_dropped_from_an_anchor() -> None:
     assert heading_anchors("# Why? (and how)\n") == {"why-and-how"}
 
 
+def test_a_link_in_a_heading_leaves_only_its_label_in_the_anchor() -> None:
+    """GitHub slugs the rendered heading, so a link's destination is not part
+    of the anchor; keeping it would reject a valid link and pass a broken one."""
+    text = "# Read [the guide](docs/guide.md)\n\n## See [notes][ref]\n"
+    assert heading_anchors(text) == {"read-the-guide", "see-notes"}
+
+
 def test_a_link_to_a_file_deleted_from_the_working_tree_is_reported(
     tmp_path: Path,
 ) -> None:
