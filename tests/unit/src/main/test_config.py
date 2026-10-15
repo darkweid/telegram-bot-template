@@ -12,6 +12,7 @@ from src.main.config import (
     BroadcastConfig,
     CacheConfig,
     Config,
+    EmailConfig,
     HttpConfig,
     PostgresConfig,
     RedisConfig,
@@ -581,3 +582,42 @@ def test_the_s3_secret_stays_out_of_the_config_repr() -> None:
     bucket's secret key."""
     config = S3Config(S3_SECRET_ACCESS_KEY="example-secret-not-real")
     assert "example-secret-not-real" not in repr(config)
+
+
+def test_email_is_off_and_needs_no_settings_by_default() -> None:
+    """A bot that sends no email must start with no EMAIL_* keys in its .env."""
+    config = EmailConfig()
+    assert config.EMAIL_ENABLED is False
+    assert config.EMAIL_SERVER == ""
+
+
+def test_enabled_email_names_every_missing_setting() -> None:
+    with pytest.raises(ValidationError) as raised:
+        EmailConfig(EMAIL_ENABLED=True)
+    message = str(raised.value)
+    assert "EMAIL_SERVER" in message
+    assert "EMAIL_USER" in message
+    assert "EMAIL_FROM_NAME" in message
+
+
+def test_implicit_tls_and_starttls_are_exclusive() -> None:
+    """aiosmtplib refuses the pair on the first send, long after the deploy."""
+    with pytest.raises(ValidationError, match="EMAIL_USE_TLS"):
+        EmailConfig(
+            EMAIL_ENABLED=True,
+            EMAIL_SERVER="smtp.example.com",
+            EMAIL_USER="bot@example.com",
+            EMAIL_FROM_NAME="Example Bot",
+            EMAIL_USE_TLS=True,
+            EMAIL_STARTTLS=True,
+        )
+
+
+def test_an_email_port_out_of_range_fails_at_startup() -> None:
+    with pytest.raises(ValidationError):
+        EmailConfig(EMAIL_PORT=70000)
+
+
+def test_the_email_password_stays_out_of_the_config_repr() -> None:
+    config = EmailConfig(EMAIL_PASSWORD="example-password-not-real")
+    assert "example-password-not-real" not in repr(config)

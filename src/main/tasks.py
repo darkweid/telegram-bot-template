@@ -7,6 +7,7 @@ publish a name nobody runs.
 from taskiq import AsyncBroker, InMemoryBroker
 
 from src.broadcast.tasks import BROADCAST_TASKS
+from src.core.email.tasks import EMAIL_TASKS
 from src.core.outbox.sweeper import purge_outbox, sweep_outbox
 from src.core.tasks.broker import create_stream_broker
 from src.core.tasks.middlewares import TaskFailureAlertMiddleware
@@ -23,6 +24,7 @@ TASKS: tuple[TaskSpec, ...] = (
     *USER_TASKS,
     *BROADCAST_TASKS,
     *NOTE_TASKS,
+    *EMAIL_TASKS,
 )
 
 

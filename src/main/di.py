@@ -32,6 +32,10 @@ from src.core.cache.redis_cache import RedisCache
 from src.core.cache.serializer import JsonSerializer
 from src.core.database.engine import create_engine
 from src.core.database.uow import SQLAlchemyUnitOfWork
+from src.core.email.disabled import DisabledMailer
+from src.core.email.interface import Mailer
+from src.core.email.service import EmailService
+from src.core.email.smtp_mailer import SmtpMailer, SmtpSettings
 from src.core.events.registry import set_event_subscribers
 from src.core.http.user_agent import UserAgent, build_user_agent
 from src.core.i18n import LOCALES_DIR, build_i18n
@@ -69,6 +73,7 @@ from src.main.config import (
     BroadcastConfig,
     CacheConfig,
     Config,
+    EmailConfig,
     HttpConfig,
     PostgresConfig,
     RedisConfig,
@@ -136,6 +141,10 @@ class ConfigProvider(Provider):
     @provide
     def s3(self, config: Config) -> S3Config:
         return config.s3
+
+    @provide
+    def email(self, config: Config) -> EmailConfig:
+        return config.email
 
 
 class DatabaseProvider(Provider):
@@ -402,6 +411,33 @@ class S3Provider(Provider):
             yield adapter
 
 
+class EmailProvider(Provider):
+    scope = Scope.APP
+
+    @provide
+    def mailer(self, email: EmailConfig) -> Mailer:
+        if not email.EMAIL_ENABLED:
+            return DisabledMailer()
+        return SmtpMailer(
+            SmtpSettings(
+                host=email.EMAIL_SERVER,
+                port=email.EMAIL_PORT,
+                username=email.EMAIL_USER,
+                password=email.EMAIL_PASSWORD.get_secret_value(),
+                from_name=email.EMAIL_FROM_NAME,
+                use_tls=email.EMAIL_USE_TLS,
+                start_tls=email.EMAIL_STARTTLS,
+                validate_certs=email.EMAIL_VALIDATE_CERTS,
+            )
+        )
+
+    @provide
+    def service(self, mailer: Mailer, email: EmailConfig, s3: S3Config) -> EmailService:
+        return EmailService(
+            mailer, email_enabled=email.EMAIL_ENABLED, s3_enabled=s3.S3_ENABLED
+        )
+
+
 class BrokerProvider(Provider):
     """The bot's side of the task queue: it only sends.
 
@@ -453,6 +489,7 @@ def build_container(
         I18nProvider(),
         HttpProvider(),
         S3Provider(),
+        EmailProvider(),
         BrokerProvider(),
         UserProvider(),
         BroadcastProvider(),

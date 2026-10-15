@@ -516,6 +516,44 @@ class S3Config(BaseSettings):
         return self
 
 
+class EmailConfig(BaseSettings):
+    # Off: the mailer refuses every send with a clear error and EmailService
+    # refuses to queue one, so a bot that sends no email needs none of these.
+    EMAIL_ENABLED: bool = False
+    EMAIL_SERVER: str = ""
+    EMAIL_PORT: int = Field(587, ge=1, le=65535)
+    # The login and the From address.
+    EMAIL_USER: str = ""
+    # Empty skips authentication: a local catcher such as Mailpit.
+    EMAIL_PASSWORD: SecretStr = SecretStr("")
+    # Display name in From and in the footer of every template.
+    EMAIL_FROM_NAME: str = ""
+    EMAIL_USE_TLS: bool = False
+    EMAIL_STARTTLS: bool = True
+    EMAIL_VALIDATE_CERTS: bool = True
+
+    model_config = SettingsConfigDict(extra="ignore")
+
+    @model_validator(mode="after")
+    def check_enabled_settings(self) -> Self:
+        if not self.EMAIL_ENABLED:
+            return self
+        values = {
+            "EMAIL_SERVER": self.EMAIL_SERVER,
+            "EMAIL_USER": self.EMAIL_USER,
+            "EMAIL_FROM_NAME": self.EMAIL_FROM_NAME,
+        }
+        missing = [name for name, value in values.items() if not value]
+        if missing:
+            raise ValueError(f"EMAIL_ENABLED=true requires: {', '.join(missing)}")
+        if self.EMAIL_USE_TLS and self.EMAIL_STARTTLS:
+            raise ValueError(
+                "EMAIL_USE_TLS and EMAIL_STARTTLS are exclusive: TLS from the "
+                "first byte (port 465) or an upgraded connection (port 587)"
+            )
+        return self
+
+
 class Config(BaseModel):
     app: AppConfig
     bot: BotConfig
@@ -530,6 +568,7 @@ class Config(BaseModel):
     http: HttpConfig
     llm: LLMConfig
     s3: S3Config
+    email: EmailConfig
 
     model_config = ConfigDict(extra="ignore")
 
@@ -589,4 +628,5 @@ def get_settings() -> Config:
         http=HttpConfig(_env_file=env_file),
         llm=LLMConfig(_env_file=env_file),
         s3=S3Config(_env_file=env_file),
+        email=EmailConfig(_env_file=env_file),
     )
