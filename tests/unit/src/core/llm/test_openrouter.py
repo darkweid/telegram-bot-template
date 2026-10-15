@@ -7,7 +7,7 @@ import httpx2
 from pydantic import BaseModel, field_validator
 import pytest
 
-from src.core.llm.enums import LLMProviderName
+from src.core.llm.enums import LLMProviderName, ModelTier
 from src.core.llm.errors import (
     LLMOutputError,
     LLMRateLimited,
@@ -78,6 +78,12 @@ def summary_json(points: list[str]) -> str:
     return json.dumps({"title": "Week", "points": points})
 
 
+MODELS = {
+    ModelTier.STRONG: "google/gemini-3.8-flash",
+    ModelTier.FAST: "google/gemini-3.5-flash-lite",
+}
+
+
 def request(**overrides: Any) -> LLMRequest:
     fields: dict[str, Any] = {
         "purpose": "note_summary",
@@ -102,7 +108,7 @@ def make_client(
 ) -> OpenRouterLLMClient:
     return OpenRouterLLMClient(
         api_key="sk-or-not-real",
-        model="google/gemini-3.8-flash",
+        models=MODELS,
         app_url=app_url,
         app_title=app_title,
         timeout_seconds=7.0,
@@ -428,7 +434,7 @@ async def test_aclose_closes_the_http_client(server: ScriptedLLMServer) -> None:
     http_client = server.http_client()
     client = OpenRouterLLMClient(
         api_key="sk-or-not-real",
-        model="google/gemini-3.8-flash",
+        models=MODELS,
         app_url="",
         app_title="",
         timeout_seconds=7.0,
@@ -678,3 +684,14 @@ def test_combined_usage_adds_known_costs() -> None:
     )
 
     assert combined.cost_usd == Decimal("0.3")
+
+
+async def test_a_fast_request_calls_the_fast_model(server: ScriptedLLMServer) -> None:
+    """The fast tier exists to be cheaper; sending the strong model's id
+    would defeat it."""
+    server.reply(completion())
+    client = make_client(server)
+
+    await client.complete(request(tier=ModelTier.FAST))
+
+    assert server.bodies()[0]["model"] == "google/gemini-3.5-flash-lite"

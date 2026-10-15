@@ -370,9 +370,14 @@ class LLMConfig(BaseSettings):
     LLM_PROVIDER: LLMProviderName | None = None
     # Anthropic ids as they are; OpenRouter ids are "<vendor>/<model>".
     LLM_MODEL: str = "claude-sonnet-5-5"
+    # The model of ModelTier.FAST requests; empty means LLM_MODEL.
+    LLM_MODEL_FAST: str = ""
     # Takes over when the primary is unavailable, times out or is rate limited.
     LLM_FALLBACK_PROVIDER: LLMProviderName | None = None
     LLM_FALLBACK_MODEL: str = ""
+    # The fallback's model of ModelTier.FAST requests; empty means
+    # LLM_FALLBACK_MODEL.
+    LLM_FALLBACK_MODEL_FAST: str = ""
     ANTHROPIC_API_KEY: SecretStr = SecretStr("")
     OPENROUTER_API_KEY: SecretStr = SecretStr("")
     # OpenRouter's attribution headers (HTTP-Referer, X-Title); blank sends none.
@@ -429,6 +434,10 @@ class LLMConfig(BaseSettings):
                 )
             return self
         self._require_provider(self.LLM_PROVIDER, self.LLM_MODEL, "LLM_MODEL")
+        if self.LLM_MODEL_FAST:
+            _require_model_shape(
+                self.LLM_PROVIDER, self.LLM_MODEL_FAST, "LLM_MODEL_FAST"
+            )
         if self.LLM_FALLBACK_PROVIDER is None:
             return self
         if self.LLM_FALLBACK_PROVIDER == self.LLM_PROVIDER:
@@ -439,6 +448,12 @@ class LLMConfig(BaseSettings):
         self._require_provider(
             self.LLM_FALLBACK_PROVIDER, self.LLM_FALLBACK_MODEL, "LLM_FALLBACK_MODEL"
         )
+        if self.LLM_FALLBACK_MODEL_FAST:
+            _require_model_shape(
+                self.LLM_FALLBACK_PROVIDER,
+                self.LLM_FALLBACK_MODEL_FAST,
+                "LLM_FALLBACK_MODEL_FAST",
+            )
         return self
 
     def _require_provider(
@@ -455,17 +470,23 @@ class LLMConfig(BaseSettings):
             raise ValueError(f"{key_setting} is required when {provider} is used")
         if not model:
             raise ValueError(f"{model_setting} is required when {provider} is used")
-        vendor_prefixed = "/" in model
-        if provider is LLMProviderName.OPENROUTER and not vendor_prefixed:
-            raise ValueError(
-                f"{model_setting}={model}: OpenRouter model ids are "
-                "<vendor>/<model>, e.g. google/gemini-3.8-flash"
-            )
-        if provider is LLMProviderName.ANTHROPIC and vendor_prefixed:
-            raise ValueError(
-                f"{model_setting}={model}: Anthropic model ids carry no vendor "
-                "prefix, e.g. claude-sonnet-5-5"
-            )
+        _require_model_shape(provider, model, model_setting)
+
+
+def _require_model_shape(
+    provider: LLMProviderName, model: str, model_setting: str
+) -> None:
+    vendor_prefixed = "/" in model
+    if provider is LLMProviderName.OPENROUTER and not vendor_prefixed:
+        raise ValueError(
+            f"{model_setting}={model}: OpenRouter model ids are "
+            "<vendor>/<model>, e.g. google/gemini-3.8-flash"
+        )
+    if provider is LLMProviderName.ANTHROPIC and vendor_prefixed:
+        raise ValueError(
+            f"{model_setting}={model}: Anthropic model ids carry no vendor "
+            "prefix, e.g. claude-sonnet-5-5"
+        )
 
 
 class S3Config(BaseSettings):

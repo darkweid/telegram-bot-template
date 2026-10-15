@@ -34,6 +34,12 @@ GIT = (
     "commit.gpgsign=false",
     "-c",
     "core.hooksPath=/dev/null",
+    # Auto maintenance packs loose objects in the background and removes them
+    # while copytree is copying the scratch repository.
+    "-c",
+    "gc.auto=0",
+    "-c",
+    "maintenance.auto=false",
 )
 
 

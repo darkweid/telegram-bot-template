@@ -4,6 +4,7 @@ and released when the container closes."""
 from collections.abc import AsyncIterator, Mapping
 from contextlib import AsyncExitStack
 from datetime import timedelta
+from types import MappingProxyType
 from typing import assert_never
 
 from aiogram import Bot
@@ -46,7 +47,7 @@ from src.core.i18n import LOCALES_DIR, build_i18n
 from src.core.limiter.limiter import RateLimiter
 from src.core.llm.anthropic import AnthropicLLMClient
 from src.core.llm.disabled import DisabledLLMClient
-from src.core.llm.enums import LLMProviderName
+from src.core.llm.enums import LLMProviderName, ModelTier
 from src.core.llm.fallback import FallbackLLMClient
 from src.core.llm.interface import LLMClient
 from src.core.llm.openrouter import OpenRouterLLMClient
@@ -326,8 +327,17 @@ def _required(value: str, key: str) -> str:
     return value
 
 
+def _tier_models(strong: str, fast: str) -> Mapping[ModelTier, str]:
+    # An empty fast model means the strong one: a bot that sets one model
+    # calls it for every tier.
+    return MappingProxyType({ModelTier.STRONG: strong, ModelTier.FAST: fast or strong})
+
+
 def _build_adapter(
-    name: LLMProviderName, model: str, llm: LLMConfig, pricing: PricingTable
+    name: LLMProviderName,
+    models: Mapping[ModelTier, str],
+    llm: LLMConfig,
+    pricing: PricingTable,
 ) -> AnthropicLLMClient | OpenRouterLLMClient:
     match name:
         case LLMProviderName.ANTHROPIC:
@@ -335,7 +345,7 @@ def _build_adapter(
                 api_key=_required(
                     llm.ANTHROPIC_API_KEY.get_secret_value(), "ANTHROPIC_API_KEY"
                 ),
-                model=model,
+                models=models,
                 pricing=pricing,
                 timeout_seconds=llm.LLM_TIMEOUT_SECONDS,
                 max_retries=llm.LLM_MAX_RETRIES,
@@ -345,7 +355,7 @@ def _build_adapter(
                 api_key=_required(
                     llm.OPENROUTER_API_KEY.get_secret_value(), "OPENROUTER_API_KEY"
                 ),
-                model=model,
+                models=models,
                 app_url=llm.OPENROUTER_APP_URL,
                 app_title=llm.OPENROUTER_APP_TITLE,
                 timeout_seconds=llm.LLM_TIMEOUT_SECONDS,
@@ -357,19 +367,19 @@ def _build_adapter(
 
 def _recorded_adapter(
     name: LLMProviderName,
-    model: str,
+    models: Mapping[ModelTier, str],
     llm: LLMConfig,
     pricing: PricingTable,
     recorder: LLMUsageRecorder,
     adapters: AsyncExitStack,
 ) -> RecordingLLMClient:
-    adapter = _build_adapter(name, model, llm, pricing)
+    adapter = _build_adapter(name, models, llm, pricing)
     adapters.push_async_callback(adapter.aclose)
     return RecordingLLMClient(
         adapter,
         recorder,
         provider=name,
-        default_model=model,
+        models=models,
         log_content=llm.LLM_LOG_CONTENT,
     )
 
@@ -407,14 +417,22 @@ class LLMProvider(Provider):
         # when the fallback cannot be built.
         async with AsyncExitStack() as adapters:
             primary = _recorded_adapter(
-                llm.LLM_PROVIDER, llm.LLM_MODEL, llm, pricing, recorder, adapters
+                llm.LLM_PROVIDER,
+                _tier_models(llm.LLM_MODEL, llm.LLM_MODEL_FAST),
+                llm,
+                pricing,
+                recorder,
+                adapters,
             )
             if llm.LLM_FALLBACK_PROVIDER is None:
                 yield primary
                 return
             fallback = _recorded_adapter(
                 llm.LLM_FALLBACK_PROVIDER,
-                _required(llm.LLM_FALLBACK_MODEL, "LLM_FALLBACK_MODEL"),
+                _tier_models(
+                    _required(llm.LLM_FALLBACK_MODEL, "LLM_FALLBACK_MODEL"),
+                    llm.LLM_FALLBACK_MODEL_FAST,
+                ),
                 llm,
                 pricing,
                 recorder,

@@ -7,6 +7,7 @@ import pytest
 
 from src.core.llm.anthropic import AnthropicLLMClient
 from src.core.llm.disabled import DisabledLLMClient
+from src.core.llm.enums import ModelTier
 from src.core.llm.errors import LLMNotConfigured
 from src.core.llm.fallback import FallbackLLMClient
 from src.core.llm.interface import LLMClient
@@ -16,7 +17,7 @@ from src.core.llm.recording import RecordingLLMClient
 from src.core.llm.repository import LLMUsageRepository
 from src.core.llm.types import LLMMessage, LLMRequest, LLMUsage
 from src.main.config import Config
-from src.main.di import build_container
+from src.main.di import _tier_models, build_container
 from tests.fakes.llm import FakeLLMClient
 from tests.fakes.telegram import FakeTelegramSession
 from tests.helpers.llm import record_closing, with_llm
@@ -96,6 +97,30 @@ async def test_a_fallback_provider_records_each_provider_apart(
     assert sorted(closed) == ["AnthropicLLMClient", "OpenRouterLLMClient"]
 
 
+async def test_each_provider_gets_a_model_per_tier(
+    settings: Config, i18n: I18n
+) -> None:
+    """An empty fast model means the strong one; a fallback keeps the tier
+    with its own models, since a model in the request is the primary's id."""
+    config = with_llm(settings, **WITH_FALLBACK, LLM_MODEL_FAST="claude-haiku-5-5")
+    container = build_container(config, SessionOnly(FakeTelegramSession(), i18n))
+    try:
+        client = await container.get(LLMClient)
+        assert isinstance(client, FallbackLLMClient)
+        assert isinstance(client.primary, RecordingLLMClient)
+        assert isinstance(client.fallback, RecordingLLMClient)
+        assert dict(client.primary.models) == {
+            ModelTier.STRONG: "claude-sonnet-5-5",
+            ModelTier.FAST: "claude-haiku-5-5",
+        }
+        assert dict(client.fallback.models) == {
+            ModelTier.STRONG: "vendor/fallback-model",
+            ModelTier.FAST: "vendor/fallback-model",
+        }
+    finally:
+        await container.close()
+
+
 async def test_one_price_table_with_the_overrides_serves_the_adapter(
     settings: Config, i18n: I18n
 ) -> None:
@@ -158,3 +183,20 @@ async def test_handler_tests_get_the_fake_client(settings: Config, i18n: I18n) -
         assert isinstance(await container.get(LLMClient), FakeLLMClient)
     finally:
         await container.close()
+
+
+def test_an_empty_fast_model_falls_back_to_the_strong_one() -> None:
+    """A bot that sets one model must get it for every tier."""
+    assert dict(_tier_models("a", "")) == {ModelTier.STRONG: "a", ModelTier.FAST: "a"}
+
+
+def test_a_fast_model_takes_the_fast_tier_only() -> None:
+    assert dict(_tier_models("a", "b")) == {ModelTier.STRONG: "a", ModelTier.FAST: "b"}
+
+
+def test_the_tier_mapping_is_read_only() -> None:
+    """Both adapters and the recorder share one mapping; a write would change
+    the model of every later call."""
+    models = _tier_models("a", "b")
+    with pytest.raises(TypeError):
+        models[ModelTier.FAST] = "c"  # type: ignore[index]

@@ -28,6 +28,11 @@ class FallbackLLMClient:
     The fallback answers with its own default model: a model named in the
     request is the primary vendor's id. Developers hear of the switch from
     the alerter, which sends the same failure once per cooldown.
+
+    The history goes over as it is: each adapter reads the neutral blocks and
+    drops the other provider's. A switch in the middle of a tool loop on a
+    model that thinks may still be refused, since the last assistant turn lost
+    its own reasoning; that is an `LLMUnavailable` from the fallback.
     """
 
     def __init__(

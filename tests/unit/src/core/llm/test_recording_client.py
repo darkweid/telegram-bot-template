@@ -4,11 +4,17 @@ from unittest.mock import AsyncMock
 from pydantic import BaseModel
 import pytest
 
-from src.core.llm.enums import LLMProviderName
+from src.core.llm.enums import LLMProviderName, ModelTier
 from src.core.llm.errors import LLMOutputError, LLMTimeout, LLMUnavailable
 from src.core.llm.recording import LLMUsageRecorder, RecordingLLMClient
-from src.core.llm.types import LLMMessage, LLMRequest
-from tests.fakes.llm import FakeLLMClient, llm_response
+from src.core.llm.types import (
+    ImageBlock,
+    LLMMessage,
+    LLMRequest,
+    ProviderBlock,
+    ToolResultBlock,
+)
+from tests.fakes.llm import FakeLLMClient, llm_response, tool_call
 from tests.helpers.logs import captured_logs
 
 REQUEST = LLMRequest(
@@ -30,7 +36,10 @@ def _client(
         inner,
         recorder,
         provider=LLMProviderName.ANTHROPIC,
-        default_model="claude-sonnet-5-5",
+        models={
+            ModelTier.STRONG: "claude-sonnet-5-5",
+            ModelTier.FAST: "claude-haiku-5-5",
+        },
         log_content=log_content,
     )
     return client, recorder
@@ -129,3 +138,63 @@ async def test_log_content_shows_the_exchange_for_local_debugging() -> None:
     assert "be brief" in message
     assert "secret note" in message
     assert "the answer" in message
+
+
+async def test_a_failed_fast_call_is_recorded_under_the_fast_model() -> None:
+    """A failure has no response to name its model; recording it under the
+    strong one would put the fast tier's errors on the wrong line of /stats."""
+    inner = FakeLLMClient()
+    inner.queue(LLMTimeout("slow", provider=LLMProviderName.ANTHROPIC))
+    client, recorder = _client(inner)
+
+    with pytest.raises(LLMTimeout):
+        await client.complete(replace(REQUEST, tier=ModelTier.FAST))
+
+    assert recorder.record.await_args.kwargs["model"] == "claude-haiku-5-5"
+
+
+async def test_log_content_names_images_and_provider_blocks_without_their_bytes() -> (
+    None
+):
+    """The log line is for reading the exchange; image bytes would flood it,
+    and a provider block is opaque anyway."""
+    inner = FakeLLMClient()
+    inner.queue_tool_calls(tool_call("lookup", {"query": "rice"}, id="call_9"))
+    client, _ = _client(inner, log_content=True)
+    request = replace(
+        REQUEST,
+        messages=[
+            LLMMessage(
+                role="user",
+                content=[
+                    ImageBlock(media_type="image/png", data=b"\x89PNG-secret-bytes")
+                ],
+            ),
+            LLMMessage(
+                role="assistant",
+                content=[
+                    ProviderBlock(
+                        provider=LLMProviderName.ANTHROPIC,
+                        data={"thinking": "private"},
+                    )
+                ],
+            ),
+            LLMMessage(
+                role="user",
+                content=[
+                    ToolResultBlock(
+                        tool_use_id="call_8", content="found", is_error=True
+                    )
+                ],
+            ),
+        ],
+    )
+    with captured_logs("src.core.llm.recording") as records:
+        await client.complete(request)
+    message = records[0].getMessage()
+    assert "<image image/png 17 bytes>" in message
+    assert "PNG-secret" not in message
+    assert "<provider anthropic" in message
+    assert "private" not in message
+    assert "<tool_result call_8 error found>" in message
+    assert '<tool_use lookup {"query": "rice"}>' in message

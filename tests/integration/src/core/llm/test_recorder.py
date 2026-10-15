@@ -11,7 +11,13 @@ from src.core.llm.enums import LLMCallStatus, LLMProviderName
 from src.core.llm.models import LLMUsageRecord
 from src.core.llm.recording import LLMUsageRecorder
 from src.core.llm.repository import LLMUsageRepository
-from src.core.llm.types import LLMMessage, LLMRequest, LLMResponse, LLMUsage
+from src.core.llm.types import (
+    LLMMessage,
+    LLMRequest,
+    LLMResponse,
+    LLMUsage,
+    TextBlock,
+)
 from src.core.update_context import UpdateContext, bind_update_context
 from tests.integration.conftest import new_user_id
 
@@ -33,10 +39,11 @@ async def test_a_recorded_call_is_committed_on_its_own(
         purpose=purpose, messages=[LLMMessage(role="user", content="hi")]
     )
     response = LLMResponse(
-        text="hello",
+        content=(TextBlock("hello"),),
         usage=LLMUsage(input_tokens=7, output_tokens=3, cost_usd=Decimal("0.00004200")),
         model="claude-sonnet-5-5",
         provider=LLMProviderName.ANTHROPIC,
+        stop="end",
         stop_reason="end_turn",
         latency_ms=321,
     )

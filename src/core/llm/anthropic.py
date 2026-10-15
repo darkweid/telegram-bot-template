@@ -1,14 +1,38 @@
+import base64
+from collections.abc import Mapping
 import dataclasses
 from functools import partial
 import time
+from typing import Literal, cast
 
 import anthropic
 from anthropic import AsyncAnthropic, Omit, omit, transform_schema
-from anthropic.types import Message, MessageParam, OutputConfigParam, TextBlockParam
+from anthropic.types import (
+    Base64ImageSourceParam,
+    CacheControlEphemeralParam,
+    ContentBlock as AnthropicContentBlock,
+    ContentBlockParam,
+    ImageBlockParam,
+    JSONOutputFormatParam,
+    Message,
+    MessageParam,
+    OutputConfigParam,
+    RedactedThinkingBlock as AnthropicRedactedThinkingBlock,
+    TextBlock as AnthropicTextBlock,
+    TextBlockParam,
+    ThinkingBlock as AnthropicThinkingBlock,
+    ToolChoiceAutoParam,
+    ToolChoiceNoneParam,
+    ToolChoiceParam,
+    ToolParam,
+    ToolResultBlockParam,
+    ToolUseBlock as AnthropicToolUseBlock,
+    ToolUseBlockParam,
+)
 import httpx2
-from pydantic import BaseModel
+from pydantic import BaseModel, JsonValue
 
-from src.core.llm.enums import LLMProviderName
+from src.core.llm.enums import LLMProviderName, ModelTier
 from src.core.llm.errors import (
     LLMError,
     LLMOutputError,
@@ -20,11 +44,38 @@ from src.core.llm.errors import (
 from src.core.llm.pricing import PricingTable
 from src.core.llm.reporting import report_llm_call
 from src.core.llm.structured import validated_with_repair
-from src.core.llm.types import LLMRequest, LLMResponse, LLMUsage, StructuredResponse
+from src.core.llm.types import (
+    AnswerBlock,
+    ContentBlock,
+    ImageBlock,
+    LLMRequest,
+    LLMResponse,
+    LLMStop,
+    LLMUsage,
+    ProviderBlock,
+    StructuredResponse,
+    TextBlock,
+    ToolResultBlock,
+    ToolUseBlock,
+)
 
 ANTHROPIC_BASE_URL = "https://api.anthropic.com"
 
 _PROVIDER = LLMProviderName.ANTHROPIC
+
+# Must list what IMAGE_MEDIA_TYPES does (test_the_image_types_match_...).
+type ImageMediaType = Literal["image/jpeg", "image/png", "image/gif", "image/webp"]
+
+_STOPS: Mapping[str, LLMStop] = {
+    "tool_use": "tool_use",
+    "max_tokens": "max_tokens",
+    "model_context_window_exceeded": "max_tokens",
+}
+
+
+def _stop(reason: str | None) -> LLMStop:
+    # end_turn, stop_sequence, pause_turn: the turn is over either way.
+    return _STOPS.get(reason or "", "end")
 
 
 class AnthropicLLMClient:
@@ -35,17 +86,25 @@ class AnthropicLLMClient:
     LLM_TIMEOUT_SECONDS. The cost is computed from the response's usage with
     the price table: the API does not return one.
 
+    The model is the request's own or the configured one of its tier, and the
+    call is priced by that id.
+
     `structured` asks for JSON through `output_config.format`, not forced
     tool use: claude-sonnet-5-5 and claude-opus-5-5 reject `tool_choice`
     "tool" and "any" with a 400. `LLMRequest.temperature` is not sent: the current
     models reject sampling parameters and the SDK no longer accepts them.
+
+    Tools go out strict with `disable_parallel_tool_use`; `tool_choice` "any"
+    and "tool" are not offered, for the same 400. Thinking is not requested:
+    the current models think on their own, and their signed blocks come back
+    as `ProviderBlock`s.
     """
 
     def __init__(
         self,
         *,
         api_key: str,
-        model: str,
+        models: Mapping[ModelTier, str],
         pricing: PricingTable,
         timeout_seconds: float,
         max_retries: int,
@@ -60,17 +119,17 @@ class AnthropicLLMClient:
             max_retries=max_retries,
             http_client=http_client,
         )
-        self._model = model
+        self._models = models
         self._pricing = pricing
 
     async def aclose(self) -> None:
         await self._client.close()
 
     async def complete(self, request: LLMRequest) -> LLMResponse:
-        model = request.model or self._model
+        model = request.model or self._models[request.tier]
         started = time.perf_counter()
         try:
-            response = await self._send(request, model=model, output_config=omit)
+            response = await self._send(request, model=model, output_format=None)
         except LLMError as error:
             self._report(request, model, started, None, error)
             raise
@@ -80,14 +139,15 @@ class AnthropicLLMClient:
     async def structured[T: BaseModel](
         self, request: LLMRequest, output: type[T]
     ) -> StructuredResponse[T]:
-        model = request.model or self._model
+        model = request.model or self._models[request.tier]
         # transform_schema makes the pydantic schema strict (no extra keys)
         # and drops constraints the API cannot enforce; pydantic still checks
         # them on the answer.
-        output_config: OutputConfigParam = {
-            "format": {"type": "json_schema", "schema": transform_schema(output)}
+        output_format: JSONOutputFormatParam = {
+            "type": "json_schema",
+            "schema": transform_schema(output),
         }
-        send = partial(self._send, model=model, output_config=output_config)
+        send = partial(self._send, model=model, output_format=output_format)
         started = time.perf_counter()
         try:
             result = await validated_with_repair(send, request, output, _PROVIDER)
@@ -102,7 +162,7 @@ class AnthropicLLMClient:
         request: LLMRequest,
         *,
         model: str,
-        output_config: OutputConfigParam | Omit,
+        output_format: JSONOutputFormatParam | None,
     ) -> LLMResponse:
         started = time.perf_counter()
         try:
@@ -110,11 +170,17 @@ class AnthropicLLMClient:
                 model=model,
                 max_tokens=request.max_tokens,
                 system=_system(request),
-                messages=[
-                    MessageParam(role=item.role, content=item.content)
-                    for item in request.messages
-                ],
-                output_config=output_config,
+                messages=_messages(request),
+                tools=_tools(request),
+                tool_choice=_tool_choice(request),
+                output_config=_output_config(request, output_format),
+                # With the system breakpoint, a second one at the end of the
+                # history: a tool loop resends all of it every step.
+                cache_control=(
+                    CacheControlEphemeralParam(type="ephemeral")
+                    if request.cache_system
+                    else omit
+                ),
             )
         except anthropic.APITimeoutError:
             raise LLMTimeout(
@@ -143,7 +209,7 @@ class AnthropicLLMClient:
             return self._response(
                 message,
                 model=model,
-                structured=not isinstance(output_config, Omit),
+                structured=output_format is not None,
                 latency_ms=latency_ms,
             )
         except (AttributeError, TypeError):
@@ -175,21 +241,46 @@ class AnthropicLLMClient:
                 provider=_PROVIDER,
                 usage=usage,
             )
-        if structured and message.stop_reason == "max_tokens":
+        stop = _stop(message.stop_reason)
+        # Decided from the raw blocks, before they are parsed: the arguments
+        # of a cut call may not even be an object.
+        cut_call = stop == "max_tokens" and any(
+            item.type == "tool_use" for item in message.content
+        )
+        if stop == "max_tokens" and (structured or cut_call):
             # Truncated JSON fails validation again on a repair attempt that
-            # has even less room left, so it is not attempted. The answer was
-            # billed.
+            # has even less room left, and a cut tool call carries half its
+            # arguments, so neither is attempted. The answer was billed.
             raise LLMOutputError(
-                "structured output cut at max_tokens", provider=_PROVIDER, usage=usage
+                (
+                    "tool call cut at max_tokens"
+                    if cut_call
+                    else "structured output cut at max_tokens"
+                ),
+                provider=_PROVIDER,
+                usage=usage,
             )
+        try:
+            content = [
+                block
+                for block in (_answer_block(item) for item in message.content)
+                if block is not None
+            ]
+        except (AttributeError, TypeError):
+            # A tool call whose input is not an object, or a block the SDK
+            # built without a field it needs: nothing in the answer can be
+            # used, but it was billed.
+            raise LLMUnavailable(
+                "Anthropic returned a malformed content block",
+                provider=_PROVIDER,
+                usage=usage,
+            ) from None
         return LLMResponse(
-            # Thinking blocks are the model's reasoning, not the answer.
-            text="".join(
-                block.text for block in message.content if block.type == "text"
-            ),
+            content=content,
             usage=usage,
             model=message.model,
             provider=_PROVIDER,
+            stop=stop,
             stop_reason=message.stop_reason,
             latency_ms=latency_ms,
         )
@@ -234,3 +325,125 @@ def _describe(error: anthropic.AnthropicError) -> str:
             f"request_id={error.request_id}"
         )
     return type(error).__name__
+
+
+def _messages(request: LLMRequest) -> list[MessageParam]:
+    rendered: list[MessageParam] = []
+    for message in request.messages:
+        if isinstance(message.content, str):
+            # An answer with no blocks is an empty string turn, and the API
+            # refuses an empty assistant message that is not the last.
+            if message.content or message.role == "user":
+                rendered.append(
+                    MessageParam(role=message.role, content=message.content)
+                )
+            continue
+        items = message.content
+        if message.role == "user":
+            # The API answers 400 to a user turn whose tool results do not
+            # come first; the sort is stable, so each group keeps its order.
+            items = sorted(
+                items, key=lambda item: not isinstance(item, ToolResultBlock)
+            )
+        blocks = [
+            block for block in (_block(item) for item in items) if block is not None
+        ]
+        # A turn of the other provider's reasoning or of empty text alone is
+        # left with nothing, and the API refuses an empty one.
+        if blocks:
+            rendered.append(MessageParam(role=message.role, content=blocks))
+    return rendered
+
+
+def _block(block: ContentBlock) -> ContentBlockParam | None:
+    match block:
+        case TextBlock(text=text):
+            # The API refuses an empty text block, and an answer can carry one
+            # next to a tool call.
+            return TextBlockParam(type="text", text=text) if text else None
+        case ImageBlock(media_type=media_type, data=data):
+            return ImageBlockParam(
+                type="image",
+                source=Base64ImageSourceParam(
+                    type="base64",
+                    media_type=cast(ImageMediaType, media_type),
+                    data=base64.b64encode(data).decode("ascii"),
+                ),
+            )
+        case ToolUseBlock(id=call_id, name=name, input=arguments):
+            return ToolUseBlockParam(
+                type="tool_use",
+                id=call_id,
+                name=name,
+                # The param type is invariant in dict; the values are JSON.
+                input=cast(dict[str, object], arguments),
+            )
+        case ToolResultBlock(tool_use_id=call_id, content=content, is_error=is_error):
+            return ToolResultBlockParam(
+                type="tool_result",
+                tool_use_id=call_id,
+                content=content,
+                is_error=is_error,
+            )
+        case ProviderBlock(provider=provider, data=data):
+            # Thinking is signed by the API and accepted back only unchanged;
+            # the other provider's reasoning means nothing here.
+            return cast(ContentBlockParam, data) if provider is _PROVIDER else None
+
+
+def _answer_block(block: AnthropicContentBlock) -> AnswerBlock | None:
+    match block:
+        case AnthropicTextBlock():
+            return TextBlock(block.text)
+        case AnthropicToolUseBlock():
+            if not isinstance(block.input, dict):
+                # Caught in _response, which keeps the answer's usage.
+                raise TypeError("tool_use input is not an object")
+            return ToolUseBlock(
+                id=block.id,
+                name=block.name,
+                input=cast(dict[str, JsonValue], block.input),
+            )
+        case AnthropicThinkingBlock() | AnthropicRedactedThinkingBlock():
+            return ProviderBlock(
+                provider=_PROVIDER,
+                data=cast(JsonValue, block.model_dump(mode="json", exclude_none=True)),
+            )
+        case _:
+            # Server tools and other kinds this client never asks for.
+            return None
+
+
+def _tools(request: LLMRequest) -> list[ToolParam] | Omit:
+    if not request.tools:
+        return omit
+    return [
+        ToolParam(
+            name=tool.name,
+            description=tool.description,
+            input_schema=transform_schema(tool.args),
+            strict=True,
+        )
+        for tool in request.tools
+    ]
+
+
+def _tool_choice(request: LLMRequest) -> ToolChoiceParam | Omit:
+    if not request.tools:
+        return omit
+    if request.tool_choice == "none":
+        return ToolChoiceNoneParam(type="none")
+    # "any" and "tool" are not offered: claude-sonnet-5-5 answers them with a
+    # 400. One call per answer keeps the loop's steps one decision each.
+    return ToolChoiceAutoParam(type="auto", disable_parallel_tool_use=True)
+
+
+def _output_config(
+    request: LLMRequest, output_format: JSONOutputFormatParam | None
+) -> OutputConfigParam | Omit:
+    config: OutputConfigParam = {}
+    if request.effort is not None:
+        config["effort"] = request.effort
+    if output_format is not None:
+        config["format"] = output_format
+    return config or omit

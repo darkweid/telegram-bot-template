@@ -1,5 +1,7 @@
 """Writing one `llm_usage` row per provider call."""
 
+from collections.abc import Mapping, Sequence
+import json
 import time
 from typing import Any
 
@@ -10,11 +12,22 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from loggers import get_logger
 from src.core.database.uow import SQLAlchemyUnitOfWork
 from src.core.errors.scrubbed import reportable
-from src.core.llm.enums import LLMCallStatus, LLMProviderName
+from src.core.llm.enums import LLMCallStatus, LLMProviderName, ModelTier
 from src.core.llm.errors import LLMError
 from src.core.llm.interface import LLMClient
 from src.core.llm.repository import LLMUsageRepository
-from src.core.llm.types import LLMRequest, LLMResponse, LLMUsage, StructuredResponse
+from src.core.llm.types import (
+    ContentBlock,
+    ImageBlock,
+    LLMRequest,
+    LLMResponse,
+    LLMUsage,
+    ProviderBlock,
+    StructuredResponse,
+    TextBlock,
+    ToolResultBlock,
+    ToolUseBlock,
+)
 from src.core.update_context import get_update_context
 from src.core.utils.datetime_utils import get_utc_now
 
@@ -91,7 +104,7 @@ class RecordingLLMClient:
     calls included, and with the exchange logged under LLM_LOG_CONTENT.
 
     Wraps one adapter, not the fallback pair: every attempt is a call the
-    provider may bill, and only here are its provider and default model known
+    provider may bill, and only here are its provider and models known
     when it fails.
     """
 
@@ -101,13 +114,13 @@ class RecordingLLMClient:
         recorder: LLMUsageRecorder,
         *,
         provider: LLMProviderName,
-        default_model: str,
+        models: Mapping[ModelTier, str],
         log_content: bool = False,
     ) -> None:
         self.inner = inner
         self._recorder = recorder
         self._provider = provider
-        self._default_model = default_model
+        self.models = models
         self._log_content = log_content
 
     async def complete(self, request: LLMRequest) -> LLMResponse:
@@ -138,7 +151,7 @@ class RecordingLLMClient:
                 "LLM exchange for %s: %r -> %r",
                 request.purpose,
                 _transcript(request),
-                response.text,
+                _rendered(response.content),
             )
         await self._recorder.record(
             request,
@@ -164,11 +177,38 @@ class RecordingLLMClient:
             None,
             error,
             provider=self._provider,
-            model=request.model or self._default_model,
+            model=request.model or self.models[request.tier],
             latency_ms=int((time.perf_counter() - started) * 1000),
         )
 
 
-def _transcript(request: LLMRequest) -> list[tuple[str, str]]:
-    system = [("system", request.system)] if request.system else []
-    return system + [(message.role, message.content) for message in request.messages]
+def _transcript(request: LLMRequest) -> list[tuple[str, str | list[str]]]:
+    system: list[tuple[str, str | list[str]]] = (
+        [("system", request.system)] if request.system else []
+    )
+    return system + [
+        (message.role, _rendered(message.content)) for message in request.messages
+    ]
+
+
+def _rendered(content: str | Sequence[ContentBlock]) -> str | list[str]:
+    if isinstance(content, str):
+        return content
+    return [_rendered_block(block) for block in content]
+
+
+def _rendered_block(block: ContentBlock) -> str:
+    # Image bytes would flood the line, and a provider block is opaque: both
+    # are named by their size only.
+    match block:
+        case TextBlock(text=text):
+            return text
+        case ImageBlock(media_type=media_type, data=data):
+            return f"<image {media_type} {len(data)} bytes>"
+        case ToolUseBlock(name=name, input=arguments):
+            return f"<tool_use {name} {json.dumps(arguments, ensure_ascii=False)}>"
+        case ToolResultBlock(tool_use_id=call_id, content=text, is_error=is_error):
+            return f"<tool_result {call_id}{' error' if is_error else ''} {text}>"
+        case ProviderBlock(provider=provider, data=data):
+            # The size is that of the block's JSON dump.
+            return f"<provider {provider} {len(json.dumps(data))} bytes>"

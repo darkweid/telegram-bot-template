@@ -153,8 +153,10 @@ The layer itself is described in [the LLM guide](llm.md).
 |---|---|---|
 | `LLM_PROVIDER` | empty | `anthropic` or `openrouter`. Empty leaves the layer off: every LLM feature answers "not available". |
 | `LLM_MODEL` | `claude-sonnet-5-5` | Model of the primary provider. Anthropic ids as they are, OpenRouter ids as `<vendor>/<model>`; a wrong shape is refused. |
+| `LLM_MODEL_FAST` | empty | Model of requests marked `ModelTier.FAST`, same provider and id shape as `LLM_MODEL`; empty means `LLM_MODEL`. `.env.example` sets `claude-haiku-5-5`. |
 | `LLM_FALLBACK_PROVIDER` | empty | The other provider, tried when the primary is unavailable, times out or is rate limited. The same provider twice, or a fallback without a primary, is refused. |
 | `LLM_FALLBACK_MODEL` | empty | Model of the fallback provider; required with it. |
+| `LLM_FALLBACK_MODEL_FAST` | empty | The fallback's model for `ModelTier.FAST`; empty means `LLM_FALLBACK_MODEL`. |
 | `ANTHROPIC_API_KEY` | empty | Required when Anthropic is the primary or the fallback. |
 | `OPENROUTER_API_KEY` | empty | Required when OpenRouter is the primary or the fallback. |
 | `OPENROUTER_APP_URL` | empty | Public URL OpenRouter credits the calls to (`HTTP-Referer`); printable ASCII, blank sends nothing. |

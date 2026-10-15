@@ -45,7 +45,12 @@ and every failure reaches it as an `LLMError` subclass from
 
 `LLMClient` has two calls: `complete(request)` returns an `LLMResponse` with
 the text, and `structured(request, Model)` returns a `StructuredResponse`
-whose `output` is an instance of a pydantic model. An `LLMRequest` carries:
+whose `output` is an instance of a pydantic model. An `LLMResponse` holds
+`content`: text blocks, tool calls and provider blocks, in the order the model
+produced them. `text` joins the text blocks, `tool_calls` lists the calls,
+`stop` says why the answer ended (`end`, `tool_use`, `max_tokens`; the
+provider's own value stays in `stop_reason`), and `assistant_turn` is the
+answer as the next request's history needs it. An `LLMRequest` carries:
 
 - `purpose` - a domain constant naming the caller (`NOTE_SUMMARY_PURPOSE`),
   at most 64 characters, never text a user typed. It is the key of the usage
@@ -54,7 +59,18 @@ whose `output` is an instance of a pydantic model. An `LLMRequest` carries:
 - `max_tokens` (1024 by default), `model` (None takes the configured one),
   `temperature` (None sends none; the Anthropic adapter never sends one,
   since the current models reject a non-default value), `cache_system` (asks
-  Anthropic to cache a long system prompt reused within minutes).
+  Anthropic to cache a long system prompt reused within minutes; it also
+  caches the history up to the last message, which pays off in a tool loop.
+  On OpenRouter only the system prompt of an `anthropic/*` model is marked,
+  the other vendors cache repeated prefixes on their own);
+- `tier` - `ModelTier.STRONG` (default) or `ModelTier.FAST`: the domain names
+  the kind of work, the configuration names the model (`LLM_MODEL`,
+  `LLM_MODEL_FAST`). A fallback keeps the tier and takes its own model of it;
+- `effort` - `low`, `medium` or `high`, how hard the model reasons; None
+  leaves the model's default. Anthropic gets it in `output_config`,
+  OpenRouter as `reasoning.effort`. Keep it fixed across the calls of one
+  conversation: a change drops the provider's cache;
+- `tools` and `tool_choice` - see [Tools](#tools).
 
 A malformed request (no purpose, no messages, a purpose too long) raises
 `ValueError` when it is built: it is a bug in the caller, not an outage to
@@ -105,6 +121,25 @@ response = await self._llm.structured(request, NoteSummary)
   user needs other words: `SummarizeNotesUseCase` raises
   `NoteSummaryFailedError` for `LLMOutputError`.
 
+## Model tiers
+
+A request names the kind of work with `tier`, not a model id.
+`ModelTier.STRONG` is the default and uses `LLM_MODEL`; `ModelTier.FAST`
+uses `LLM_MODEL_FAST` and suits cheap, frequent calls such as routing or
+short parsing. An empty `LLM_MODEL_FAST` means the strong model of the same
+provider. Each `llm_usage` row stores the model: the one that answered, or
+the one asked for when the call failed. `/stats` groups spending by purpose
+and by user, not by model or tier.
+
+## Effort
+
+`effort` (`low`, `medium`, `high`) sets how hard the model reasons before it
+answers; None sends nothing and leaves the model's default. Anthropic gets it
+as `output_config.effort`, OpenRouter as `reasoning.effort`. A higher effort
+costs output tokens, so raise `max_tokens` with it. The provider's cache is
+keyed by the request prefix, so keep the value fixed across the calls of one
+conversation.
+
 ## Structured output
 
 `structured()` holds the provider to the output model's JSON schema:
@@ -126,6 +161,68 @@ give `max_tokens` room for the longest valid answer; only the tokens produced
 are billed. `SUMMARY_MAX_TOKENS` is twice the longest valid summary for that
 reason.
 
+## Tools
+
+A tool is an `LLMTool(name, description, args)`, where `args` is a pydantic
+model. Both APIs get its schema in strict mode, so every field is required
+(an optional one is `T | None` with no default) and no other key is
+accepted; put length limits in `field_validator`s, as for structured output.
+Names match `^[a-zA-Z0-9_-]{1,64}$` and are unique within a request.
+
+The model answers with `stop == "tool_use"` and one or more `ToolUseBlock`s
+in `response.tool_calls`; Anthropic is asked for one call per answer, while
+OpenRouter may return several. The caller validates each call's `input` with
+`args.model_validate`, runs the tool and sends the result back in the next
+request: the history gains `response.assistant_turn` unchanged and a user
+message of `ToolResultBlock`s, one per call, with `is_error=True` for a call
+that failed, so the model can correct itself. `tool_choice="none"` keeps the
+tools in the prompt and forbids calls.
+
+`run` below is the domain's tool dispatcher: it finds the tool by
+`call.name`, validates `call.input` with `tool.args.model_validate` and
+returns the result text.
+
+```python
+response = await llm.complete(request)
+if response.stop == "tool_use":
+    results = [
+        ToolResultBlock(tool_use_id=call.id, content=await run(call))
+        for call in response.tool_calls
+    ]
+    request = replace(
+        request,
+        messages=[*request.messages, response.assistant_turn,
+                  LLMMessage(role="user", content=results)],
+    )
+    response = await llm.complete(request)
+```
+
+A tool call cut at `max_tokens` raises `LLMOutputError`: its arguments are
+incomplete. Models that reason spend output tokens on it, so a request with
+tools needs a `max_tokens` well above the longest answer. `structured()`
+takes no tools and refuses a request that has them with `ValueError`.
+A call whose arguments are not a JSON object raises `LLMUnavailable`, which
+still records what the answer cost.
+
+An answer that carries tool calls reads `stop == "tool_use"` even when a
+provider behind OpenRouter reports `stop`; `stop_reason` keeps the raw
+value. Both adapters send a user turn's tool results ahead of its text and
+images, as the APIs require, and leave out empty text blocks.
+
+**Provider blocks.** Anthropic signs its thinking and OpenRouter returns
+`reasoning_details`; both arrive as `ProviderBlock`s and must go back in the
+history unchanged, which `assistant_turn` does. An adapter drops the other
+provider's blocks.
+
+## Images
+
+`ImageBlock(media_type, data)` goes into a user message next to text:
+JPEG, PNG, GIF or WebP, at most 3,932,160 bytes (`MAX_IMAGE_BYTES`), so
+that even the base64 form, 4/3 of the bytes, stays under Anthropic's 5 MiB
+limit. Anything else raises `ValueError` when the block is built; shrinking
+a photo is the domain's job. The log under `LLM_LOG_CONTENT` names an image by type and
+size, never its bytes.
+
 ## Fallback
 
 With `LLM_FALLBACK_PROVIDER` and `LLM_FALLBACK_MODEL` set, `FallbackLLMClient`
@@ -135,6 +232,13 @@ times out (`LLMTimeout`) or is rate limited (`LLMRateLimited`). The fallback
 answers with `LLM_FALLBACK_MODEL`: a model named in the request is the
 primary vendor's id. A refusal or an unreadable answer does not switch: the
 other vendor would most likely repeat it, and be paid for twice.
+
+The fallback answers at the request's tier with its own models
+(`LLM_FALLBACK_MODEL`, `LLM_FALLBACK_MODEL_FAST`). A history with tool calls
+goes over as it is, minus the primary's provider blocks; on a model that
+reasons, a switch in the middle of a tool loop may still be refused, since
+the last assistant turn lost its own reasoning. That surfaces as
+`LLMUnavailable` from the fallback.
 
 The fallback must be the other provider, so that one vendor's outage cannot
 stop both paths; config refuses the same provider twice.

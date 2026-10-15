@@ -11,9 +11,9 @@ class LLMError(CoreException):
     provider was reached; it goes to the log line with `detail`.
 
     `usage` is what the provider billed before the call failed: a refusal, an
-    answer that failed validation, or the first answer of a repair whose
-    request then failed. llm_usage and the log line record the failure with
-    it; None when nothing was billed.
+    answer that failed validation, an answer whose tool call cannot be read,
+    or the first answer of a repair whose request then failed. llm_usage and
+    the log line record the failure with it; None when nothing was billed.
     """
 
     message_key = N_("The language model could not answer. Please try again later.")
