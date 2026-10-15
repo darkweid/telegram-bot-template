@@ -171,7 +171,7 @@ class RecordingLLMClient:
                 _transcript(request),
                 _rendered(response.content),
             )
-        await self._recorder.record(
+        await self._record_through_cancel(
             request,
             response,
             None,
@@ -190,7 +190,7 @@ class RecordingLLMClient:
                 _transcript(request),
                 type(error).__name__,
             )
-        await self._recorder.record(
+        await self._record_through_cancel(
             request,
             None,
             error,
@@ -198,6 +198,47 @@ class RecordingLLMClient:
             model=request.model or self.models[request.tier],
             latency_ms=int((time.perf_counter() - started) * 1000),
         )
+
+    async def _record_through_cancel(
+        self,
+        request: LLMRequest,
+        response: LLMResponse | None,
+        error: LLMError | None,
+        *,
+        provider: LLMProviderName,
+        model: str,
+        latency_ms: int,
+    ) -> None:
+        """Write the row of a call that ended. A cancel landing during the
+        write (a deadline, a shutdown) writes it again under the cancelled
+        call's bound and goes on as it came: the call is over and may be
+        billed, so its row is not dropped."""
+        try:
+            await self._recorder.record(
+                request,
+                response,
+                error,
+                provider=provider,
+                model=model,
+                latency_ms=latency_ms,
+            )
+        except asyncio.CancelledError:
+            try:
+                async with asyncio.timeout(CANCELLED_RECORD_SECONDS):
+                    await self._recorder.record(
+                        request,
+                        response,
+                        error,
+                        provider=provider,
+                        model=model,
+                        latency_ms=latency_ms,
+                    )
+            except (Exception, asyncio.CancelledError) as failure:
+                logger.warning(
+                    "LLM call cut while recorded, not recorded: %s",
+                    type(failure).__name__,
+                )
+            raise
 
     async def _record_cancel(self, request: LLMRequest, started: float) -> None:
         """Never raises: the cancel the caller is waiting for goes on as it
