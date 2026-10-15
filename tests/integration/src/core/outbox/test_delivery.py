@@ -254,6 +254,111 @@ async def test_a_row_of_an_unregistered_task_is_failed_at_once(
     ).status == OutboxMessageStatus.FAILED
 
 
+async def _pending_for(
+    engine: AsyncEngine, ids: list[UUID], age: timedelta, **kwargs: Any
+) -> UUID:
+    """A pending row created `age` ago, as if its send had always failed."""
+    down = await _broker(UnreachableBroker(await_inplace=True), Received())
+    try:
+        message_id = await _enqueue(engine, ids, down, **kwargs)
+    finally:
+        await down.shutdown()
+    async with AsyncSession(engine) as session, session.begin():
+        await session.execute(
+            update(OutboxMessage)
+            .where(OutboxMessage.id == message_id)
+            .values(created_at=get_utc_now() - age)
+        )
+    return message_id
+
+
+async def test_a_row_pending_past_retention_is_failed_not_sent(
+    integration_engine: AsyncEngine, committed_ids: list[UUID]
+) -> None:
+    """Its send may have gone out with only mark_published lost; the worker's
+    completion marker lives no longer than the window, so a send now could
+    run the task a second time."""
+    message_id = await _pending_for(
+        integration_engine,
+        committed_ids,
+        timedelta(days=PUBLISHED_RETENTION_DAYS, hours=1),
+        user_id=424242,
+    )
+    received = Received()
+    up = await _broker(InMemoryBroker(await_inplace=True), received)
+    try:
+        with captured_logs("src.core.outbox.sweeper") as records:
+            await _sweep(integration_engine, up)
+    finally:
+        await up.shutdown()
+    assert received.kwargs == []
+    row = await _row(integration_engine, message_id)
+    assert (row.status, row.attempts, row.last_error) == (
+        OutboxMessageStatus.FAILED,
+        0,
+        sweeper_module.EXPIRED_ERROR,
+    )
+    [critical] = [r for r in records if r.levelno == logging.CRITICAL]
+    line = critical.getMessage()
+    assert str(message_id) in line
+    assert TASK in line
+    assert "424242" not in line
+
+
+async def test_a_row_pending_just_inside_retention_is_still_sent(
+    integration_engine: AsyncEngine, committed_ids: list[UUID]
+) -> None:
+    """Its completion marker, if the task ever ran, is still there to drop a
+    second run, so the delivery is still owed."""
+    message_id = await _pending_for(
+        integration_engine,
+        committed_ids,
+        timedelta(days=PUBLISHED_RETENTION_DAYS) - timedelta(hours=1),
+        user_id=7,
+    )
+    received = Received()
+    up = await _broker(InMemoryBroker(await_inplace=True), received)
+    try:
+        await _sweep(integration_engine, up)
+    finally:
+        await up.shutdown()
+    assert received.kwargs == [{"user_id": 7}]
+    assert (
+        await _row(integration_engine, message_id)
+    ).status == OutboxMessageStatus.PUBLISHED
+
+
+async def test_expired_rows_beyond_one_batch_are_never_sent(
+    integration_engine: AsyncEngine,
+    committed_ids: list[UUID],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The fail step is bounded by the batch size; an expired row it did not
+    reach this run must wait for the next one, not fall into the send batch."""
+    monkeypatch.setattr(sweeper_module, "SWEEPER_BATCH_SIZE", 1)
+    age = timedelta(days=PUBLISHED_RETENTION_DAYS, hours=1)
+    first = await _pending_for(integration_engine, committed_ids, age)
+    second = await _pending_for(integration_engine, committed_ids, age)
+    received = Received()
+    up = await _broker(InMemoryBroker(await_inplace=True), received)
+    try:
+        await _sweep(integration_engine, up)
+        assert received.kwargs == []
+        statuses = {
+            (await _row(integration_engine, message_id)).status
+            for message_id in (first, second)
+        }
+        assert statuses == {OutboxMessageStatus.FAILED, OutboxMessageStatus.PENDING}
+        await _sweep(integration_engine, up)
+    finally:
+        await up.shutdown()
+    assert received.kwargs == []
+    for message_id in (first, second):
+        assert (
+            await _row(integration_engine, message_id)
+        ).status == OutboxMessageStatus.FAILED
+
+
 async def test_purge_deletes_published_rows_past_retention_in_batches(
     integration_engine: AsyncEngine,
     committed_ids: list[UUID],

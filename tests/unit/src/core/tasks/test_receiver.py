@@ -7,7 +7,7 @@ from taskiq.acks import AckController
 from taskiq.receiver import Receiver
 from taskiq.result import TaskiqResult
 
-from src.core.outbox.sweeper import PUBLISHED_RETENTION_DAYS
+from src.core.outbox.sweeper import RETENTION
 from src.core.tasks import receiver as receiver_module
 from src.core.tasks.broker import STREAM_IDLE_TIMEOUT_SECONDS, create_stream_broker
 from src.core.tasks.receiver import (
@@ -24,10 +24,10 @@ from tests.fakes.redis import InMemoryRedis
 
 def test_a_completion_marker_outlives_a_long_database_outage() -> None:
     """A send that went out while mark_published failed is republished by the
-    sweeper under the same task id when PostgreSQL returns; an hour-long
-    marker would let a day-long outage run the task, and its side effect,
-    twice."""
-    assert IDEMPOTENCY_MARKER_TTL_SECONDS >= PUBLISHED_RETENTION_DAYS * 24 * 3600
+    sweeper under the same task id when PostgreSQL returns, as long as the row
+    is younger than the sweeper's retention window; a shorter marker would let
+    a long outage run the task, and its side effect, twice."""
+    assert IDEMPOTENCY_MARKER_TTL_SECONDS >= RETENTION.total_seconds()
 
 
 def make_receiver(marker_client: AsyncMock | InMemoryRedis) -> IdempotencyReceiver:

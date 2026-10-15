@@ -18,23 +18,29 @@ class OutboxRepository(BaseRepository[OutboxMessage]):
     model = OutboxMessage
 
     async def get_batch_for_publish(
-        self, session: AsyncSession, limit: int, *, min_age: timedelta
+        self,
+        session: AsyncSession,
+        limit: int,
+        *,
+        min_age: timedelta,
+        max_age: timedelta,
     ) -> Sequence[OutboxMessage]:
         """
-        Lock a FIFO batch of pending rows older than `min_age`; SKIP LOCKED keeps
-        concurrent sweeps disjoint.
+        Lock a FIFO batch of pending rows older than `min_age` and younger than
+        `max_age`; SKIP LOCKED keeps concurrent sweeps disjoint.
 
         A younger row may still be in its after-commit publish, which sends the
         task and marks the row published in two steps: taking it here would
         publish it a second time. Age is measured on the database clock, the
         same one that stamped `created_at`, so app-server skew cannot shrink the
-        window.
+        window. A row past `max_age` is never sent again: `fail_expired` takes it.
         """
         query = (
             select(self.model)
             .where(
                 self.model.status == OutboxMessageStatus.PENDING,
                 self.model.created_at < func.now() - min_age,
+                self.model.created_at >= func.now() - max_age,
             )
             .order_by(self.model.created_at)
             .limit(limit)
@@ -42,6 +48,37 @@ class OutboxRepository(BaseRepository[OutboxMessage]):
         )
         result = await session.execute(query)
         return result.scalars().all()
+
+    async def fail_expired(
+        self, session: AsyncSession, max_age: timedelta, error: str, *, limit: int
+    ) -> Sequence[tuple[UUID, str]]:
+        """Move at most `limit` pending rows created more than `max_age` ago to
+        FAILED; returns the id and task name of each.
+
+        The rows are locked with SKIP LOCKED like a publish batch, so a row in
+        another sweep's batch is left to the next run. Age is measured on the
+        database clock, as in `get_batch_for_publish`.
+        """
+        expired = (
+            select(self.model.id)
+            .where(
+                self.model.status == OutboxMessageStatus.PENDING,
+                self.model.created_at < func.now() - max_age,
+            )
+            .order_by(self.model.created_at)
+            .limit(limit)
+            .with_for_update(skip_locked=True)
+        )
+        result = await session.execute(
+            update(self.model)
+            .where(self.model.id.in_(expired))
+            .values(
+                status=OutboxMessageStatus.FAILED,
+                last_error=error[:LAST_ERROR_MAX_LENGTH],
+            )
+            .returning(self.model.id, self.model.task_name)
+        )
+        return [(row.id, row.task_name) for row in result]
 
     async def mark_published(self, session: AsyncSession, message_id: UUID) -> None:
         await session.execute(

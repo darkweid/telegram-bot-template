@@ -213,7 +213,10 @@ change is refused. Right after commit the bot sends the task to the queue. If
 that send fails, the `outbox.sweep` task, which runs every minute, sends the row
 within a minute or two; the row id is the task id, so a row sent twice runs
 once. `outbox.purge` deletes published rows older than
-`PUBLISHED_RETENTION_DAYS` (7) every day at 03:00 UTC.
+`PUBLISHED_RETENTION_DAYS` (7) every day at 03:00 UTC. A row still pending
+after that many days is never sent: the sweeper marks it failed and logs it at
+CRITICAL, since the worker remembers a finished task only as long and a late
+send could run it twice.
 
 Every task is registered in one place: a `TaskSpec` in `TASKS`
 (`src/main/tasks.py`), with its name, function, optional cron schedule and
