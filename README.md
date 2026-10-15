@@ -754,7 +754,7 @@ there would override the commit baked into the image.
 
 ## Adding a language
 
-1. `make i18n-init LOCALE=de` starts `locales/de/LC_MESSAGES/messages.po`.
+1. `make i18n-init LOCALE=de` starts `locales/<locale>/LC_MESSAGES/messages.po`.
 2. Add `"de"` to `SUPPORTED_LOCALES` in `src/core/locales.py`.
 3. Add the language's own name to `LANGUAGE_NAMES` in `src/user/keyboards.py`,
    for example `"de": "Deutsch"`.
