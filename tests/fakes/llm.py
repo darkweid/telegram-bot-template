@@ -4,11 +4,13 @@ Bot API."""
 from collections import deque
 from collections.abc import Sequence
 from decimal import Decimal
-import itertools
+import hashlib
+import json
 
 from pydantic import BaseModel, JsonValue
 
 from src.core.llm.enums import LLMProviderName
+from src.core.llm.structured import refuse_tools
 from src.core.llm.types import (
     AnswerBlock,
     LLMRequest,
@@ -19,8 +21,6 @@ from src.core.llm.types import (
     TextBlock,
     ToolUseBlock,
 )
-
-_call_ids = itertools.count(1)
 
 
 def llm_response(
@@ -53,7 +53,12 @@ def llm_response(
 def tool_call(
     name: str, input: dict[str, JsonValue], *, id: str | None = None
 ) -> ToolUseBlock:
-    return ToolUseBlock(id=id or f"call_{next(_call_ids)}", name=name, input=input)
+    """The default id is derived from the name and the input, so it does not
+    depend on test order; two identical calls in one answer need explicit ids."""
+    if id is None:
+        digest = hashlib.sha256(json.dumps([name, input], sort_keys=True).encode())
+        id = f"call_{digest.hexdigest()[:12]}"
+    return ToolUseBlock(id=id, name=name, input=input)
 
 
 type _Queued = LLMResponse | StructuredResponse[BaseModel] | BaseException
@@ -105,6 +110,7 @@ class FakeLLMClient:
     async def structured[T: BaseModel](
         self, request: LLMRequest, output: type[T]
     ) -> StructuredResponse[T]:
+        refuse_tools(request)
         self.calls.append(request)
         if not self._queued:
             raise AssertionError(f"structured({output.__name__}) with nothing queued")

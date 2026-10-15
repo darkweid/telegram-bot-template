@@ -2,15 +2,18 @@
 provider sends, before any adapter reads it."""
 
 import json
-from typing import Any
 
-ANTHROPIC_USAGE = {
+from pydantic import JsonValue
+
+type JsonObject = dict[str, JsonValue]
+
+ANTHROPIC_USAGE: JsonObject = {
     "input_tokens": 1000,
     "output_tokens": 200,
     "cache_read_input_tokens": 0,
     "cache_creation_input_tokens": 0,
 }
-OPENROUTER_USAGE = {
+OPENROUTER_USAGE: JsonObject = {
     "prompt_tokens": 120,
     "completion_tokens": 30,
     "total_tokens": 150,
@@ -18,34 +21,35 @@ OPENROUTER_USAGE = {
 }
 
 
-def anthropic_text(text: str) -> dict[str, Any]:
+def anthropic_text(text: str) -> JsonObject:
     return {"type": "text", "text": text}
 
 
 def anthropic_tool_use(
-    name: str, input: dict[str, Any], *, id: str = "toolu_1"
-) -> dict[str, Any]:
+    name: str, input: JsonObject, *, id: str = "toolu_1"
+) -> JsonObject:
     return {"type": "tool_use", "id": id, "name": name, "input": input}
 
 
 def anthropic_thinking(
     thinking: str = "Weighing the options.", *, signature: str = "sig-1"
-) -> dict[str, Any]:
+) -> JsonObject:
     return {"type": "thinking", "thinking": thinking, "signature": signature}
 
 
 def anthropic_message(
-    *content: dict[str, Any],
+    *content: JsonObject,
     stop_reason: str = "end_turn",
     model: str = "claude-sonnet-5-5",
-    usage: dict[str, Any] | None = None,
-) -> dict[str, Any]:
+    usage: JsonObject | None = None,
+) -> JsonObject:
+    blocks: list[JsonValue] = [*content]
     return {
         "id": "msg_1",
         "type": "message",
         "role": "assistant",
         "model": model,
-        "content": list(content),
+        "content": blocks,
         "stop_reason": stop_reason,
         "stop_sequence": None,
         "stop_details": None,
@@ -54,8 +58,8 @@ def anthropic_message(
 
 
 def openrouter_tool_call(
-    name: str, arguments: dict[str, Any] | str, *, id: str = "call_1"
-) -> dict[str, Any]:
+    name: str, arguments: JsonObject | str, *, id: str = "call_1"
+) -> JsonObject:
     """A string `arguments` goes out as it is, for a malformed call."""
     return {
         "id": id,
@@ -72,13 +76,13 @@ def openrouter_tool_call(
 def openrouter_completion(
     content: str | None = "Hello",
     *,
-    tool_calls: list[dict[str, Any]] | None = None,
-    reasoning_details: list[dict[str, Any]] | None = None,
+    tool_calls: list[JsonValue] | None = None,
+    reasoning_details: list[JsonValue] | None = None,
     finish_reason: str = "stop",
     model: str = "anthropic/claude-sonnet-5.5",
-    usage: dict[str, Any] | None = None,
-) -> dict[str, Any]:
-    message: dict[str, Any] = {"role": "assistant", "content": content, "refusal": None}
+    usage: JsonObject | None = None,
+) -> JsonObject:
+    message: JsonObject = {"role": "assistant", "content": content, "refusal": None}
     if tool_calls is not None:
         message["tool_calls"] = tool_calls
     if reasoning_details is not None:
