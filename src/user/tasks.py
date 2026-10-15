@@ -22,8 +22,9 @@ async def drop_user_snapshot(user_id: int, cache: FromDishka[Cache]) -> None:
 
 
 USER_TASKS: tuple[TaskSpec, ...] = (
-    # No retry: a retry would repeat the notice to every admin who already got it.
-    TaskSpec(NOTIFY_ADMINS_OF_NEW_USER, notify_admins_of_new_user),
+    # Never run twice: a retry, or a delivery reclaimed from a worker that
+    # stopped midway, would repeat the notice to every admin who already got it.
+    TaskSpec(NOTIFY_ADMINS_OF_NEW_USER, notify_admins_of_new_user, at_most_once=True),
     # A second delete changes nothing, so retrying is safe.
     TaskSpec(DROP_USER_SNAPSHOT, drop_user_snapshot, retry_on_error=True),
 )

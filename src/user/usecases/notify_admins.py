@@ -31,8 +31,9 @@ class NotifyAdminsOfNewUserUseCase:
     /language choice, then their Telegram language, then DEFAULT_LOCALE. An
     admin with no stored row is skipped (Telegram refuses a bot's first
     message), and so is one marked unreachable (they blocked the bot). A
-    failed delivery to one admin is logged and the rest still get theirs; the
-    task is not retried, so nobody gets the notice twice.
+    failed delivery to one admin is logged and the rest still get theirs. The
+    task runs at most once, so nobody gets the notice twice; a worker that
+    stops midway leaves the admins after it without one.
     """
 
     def __init__(

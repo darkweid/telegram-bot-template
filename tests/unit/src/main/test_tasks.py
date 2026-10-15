@@ -66,9 +66,11 @@ def test_the_notice_task_is_registered() -> None:
     assert NOTIFY_ADMINS_OF_NEW_USER in {spec.name for spec in TASKS}
 
 
-def test_the_notice_is_never_retried() -> None:
-    """A retry would repeat the notice to every admin who already got it."""
+def test_the_notice_never_runs_twice() -> None:
+    """A retry, or a delivery reclaimed from a worker that stopped midway, would
+    repeat the notice to every admin who already got it."""
     [spec] = [spec for spec in TASKS if spec.name == NOTIFY_ADMINS_OF_NEW_USER]
+    assert spec.at_most_once is True
     assert spec.retry_on_error is False
 
 

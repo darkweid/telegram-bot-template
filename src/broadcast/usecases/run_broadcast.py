@@ -57,10 +57,10 @@ TRANSIENT_RETRY_DELAYS_SECONDS: tuple[float, ...] = (1, 2, 4, 8)
 # Telegram's answer when the broadcast's source message is gone: no copy can
 # succeed, so it fails the broadcast rather than one recipient.
 SOURCE_MISSING_ERROR = "message to copy not found"
-# A report call that failed with one of these may get through on a later try,
-# so the report stays unsent and the resume task sends it again. Any other
+# A report edit that failed with one of these may get through on a later try,
+# so the report stays unrecorded and the resume task edits again. Any other
 # refusal (the progress message deleted, the admin blocked the bot) would only
-# repeat: the report counts as sent.
+# repeat: the report counts as done.
 REPORT_RETRY_ERRORS = (TelegramNetworkError, TelegramServerError, TelegramRetryAfter)
 
 
@@ -401,17 +401,22 @@ class RunBroadcastUseCase:
         await self._edit(run, text, markup)
 
     async def _report(self, run: _Run, status: BroadcastStatus) -> None:
-        """Edit the progress message, then notify the admin, and record the
-        report once neither call is worth repeating; otherwise the resume task
-        has it sent again."""
+        """Edit the progress message, record the report, then notify the admin.
+
+        An edit that may get through later leaves the report unrecorded, and
+        the resume task has it sent again. The notice goes out only after the
+        record, at most once: a worker stopping between the two would otherwise
+        have the resume task send it a second time, and the edited message
+        already carries the result.
+        """
         with self._i18n.context(), self._i18n.use_locale(run.locale):
             text = progress_text(run.progress(status))
         # The edit drops the Stop button; the new message notifies the admin,
         # which an edit does not. A resent edit that finds the text already in
         # place is refused as not modified, which counts as done.
         if not await self._edit(run, text, None):
-            # The notice waits for the edit: sent now, it would go out again
-            # with every retry of an edit that keeps failing.
+            return
+        if not await self._mark_reported(run):
             return
         try:
             await self._bot.send_message(
@@ -423,13 +428,9 @@ class RunBroadcastUseCase:
                 run.id,
                 type(error).__name__,
             )
-            notified = not isinstance(error, REPORT_RETRY_ERRORS)
-        else:
-            notified = True
-        if notified:
-            await self._mark_reported(run)
 
-    async def _mark_reported(self, run: _Run) -> None:
+    async def _mark_reported(self, run: _Run) -> bool:
+        """False when another run has already reported the broadcast."""
         async with (
             self._sessionmaker() as session,
             SQLAlchemyUnitOfWork(session) as uow,
@@ -440,6 +441,7 @@ class RunBroadcastUseCase:
             await uow.commit()
         if not marked:
             logger.warning("Broadcast %s was reported by another run", run.id)
+        return marked
 
     async def _edit(
         self, run: _Run, text: str, reply_markup: InlineKeyboardMarkup | None

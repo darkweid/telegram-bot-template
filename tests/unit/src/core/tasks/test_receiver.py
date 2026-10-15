@@ -19,6 +19,7 @@ from src.core.tasks.receiver import (
     build_idempotency_marker_key,
     build_running_claim_key,
 )
+from src.core.tasks.registry import AT_MOST_ONCE_LABEL
 from tests.fakes.redis import InMemoryRedis
 
 
@@ -36,10 +37,15 @@ def make_receiver(marker_client: AsyncMock | InMemoryRedis) -> IdempotencyReceiv
     )
 
 
-def make_message(task_id: str = "row-uuid") -> TaskiqMessage:
+def make_message(
+    task_id: str = "row-uuid", labels: dict[str, object] | None = None
+) -> TaskiqMessage:
     return TaskiqMessage(
-        task_id=task_id, task_name="probe", labels={}, args=[], kwargs={}
+        task_id=task_id, task_name="probe", labels=labels or {}, args=[], kwargs={}
     )
+
+
+AT_MOST_ONCE = {AT_MOST_ONCE_LABEL: True}
 
 
 def success_result() -> TaskiqResult:
@@ -300,3 +306,52 @@ def test_a_redis_broker_lends_its_pool_to_the_markers() -> None:
     broker = create_stream_broker("redis://localhost:6379/1")
     receiver = IdempotencyReceiver(broker=broker, run_startup=False)
     assert receiver._marker_client.connection_pool is broker.connection_pool
+
+
+async def test_an_at_most_once_task_is_done_before_it_runs() -> None:
+    """Marked only after the run, a worker stopping midway would leave no
+    marker, and the reclaimed delivery would repeat what the run already sent."""
+    client = InMemoryRedis()
+    receiver = make_receiver(client)
+    seen: list[int] = []
+
+    async def run(*_args: object, **_kwargs: object) -> TaskiqResult:
+        seen.append(await client.exists(build_idempotency_marker_key("row-uuid")))
+        return success_result()
+
+    with patch.object(Receiver, "run_task", new=run):
+        await receiver.run_task(MagicMock(), make_message(labels=AT_MOST_ONCE))
+
+    assert seen == [1]
+
+
+async def test_an_at_most_once_task_cut_off_midway_is_not_run_again() -> None:
+    """The admins notified before the stop would hear the same notice twice."""
+    client = InMemoryRedis()
+    receiver = make_receiver(client)
+
+    with (
+        patch.object(
+            Receiver, "run_task", new=AsyncMock(side_effect=asyncio.CancelledError)
+        ),
+        pytest.raises(asyncio.CancelledError),
+    ):
+        await receiver.run_task(MagicMock(), make_message(labels=AT_MOST_ONCE))
+
+    with patch.object(Receiver, "run_task", new=AsyncMock()) as super_run:
+        await receiver.run_task(MagicMock(), make_message(labels=AT_MOST_ONCE))
+
+    super_run.assert_not_awaited()
+
+
+async def test_a_failed_at_most_once_task_is_not_run_again() -> None:
+    """A failed run may have sent part of its messages before the error."""
+    client = InMemoryRedis()
+    receiver = make_receiver(client)
+
+    with patch.object(Receiver, "run_task", new=AsyncMock(return_value=error_result())):
+        await receiver.run_task(MagicMock(), make_message(labels=AT_MOST_ONCE))
+    with patch.object(Receiver, "run_task", new=AsyncMock()) as super_run:
+        await receiver.run_task(MagicMock(), make_message(labels=AT_MOST_ONCE))
+
+    super_run.assert_not_awaited()

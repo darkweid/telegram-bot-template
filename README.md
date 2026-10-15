@@ -223,7 +223,10 @@ send could run it twice.
 Every task is registered in one place: a `TaskSpec` in `TASKS`
 (`src/main/tasks.py`), with its name, function, optional cron schedule and
 retry flag. A name missing there is never run, and the sweeper marks its rows
-failed.
+failed. A task runs at least once by default: a worker that stops midway leaves
+it to be run again. `at_most_once=True` records it as done before it runs, for
+a message a person reads, where a lost message beats a repeated one; it cannot
+be combined with a retry.
 
 A domain event is the other way to start a task. A use case publishes it
 inside its unit of work (`uow.publish`); the event's subscribers, mapped in
@@ -232,8 +235,8 @@ tasks. The reference path is the new-user notice: `TouchUserUseCase` publishes
 `UserRegistered` when the upsert inserted the user, `enqueue_new_user_notice`
 stores `user.notify_admins_of_new_user` in the outbox, and the worker sends
 every admin in `ADMIN_IDS` who has opened the bot a message in that admin's
-language. The task is not retried: a retry would repeat the message to the
-admins who already got it. `NOTIFY_ADMINS_ON_NEW_USER=false` keeps the event
+language. The task runs at most once: run again, it would repeat the message
+to the admins who already got it. `NOTIFY_ADMINS_ON_NEW_USER=false` keeps the event
 and the task and sends nothing.
 
 ## Alerts
@@ -294,12 +297,14 @@ Telegram allows about 30 to different users) and saves its position every
 every user who blocked the bot. If the worker stops mid-broadcast, a scheduled
 task resumes it within about five minutes from the last saved position, so up
 to `BROADCAST_CHECKPOINT_EVERY` users may get the message twice. Stop takes effect at the next save, within
-about a minute, flood waits included. The final report is recorded once
-Telegram has taken it, or refused it for good (a deleted progress message, a
-blocked bot). If the worker stops after a broadcast finished but before its
-report went out, or the report met a network error, the same task sends the
-report about five minutes later, from the stored counts; the admin may then
-get the report message twice.
+about a minute, flood waits included. The final report edits the
+progress message, and is recorded once Telegram has taken the edit or refused
+it for good (a deleted progress message, a blocked bot). If the worker stops
+after a broadcast finished but before the edit landed, or the edit met a
+network error, the same task edits it about five minutes later, from the stored
+counts. The report message that notifies the admin goes out after the record,
+at most once: a worker that stops in between leaves the edited progress message
+as the only report.
 
 A user who blocked the bot is counted as unreachable and marked so; a chat
 Telegram cannot find counts as failed. Network errors are retried. Anything

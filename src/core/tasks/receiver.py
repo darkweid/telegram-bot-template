@@ -22,6 +22,7 @@ from taskiq_redis.redis_broker import BaseRedisBroker
 
 from loggers import get_logger
 from src.core.outbox.sweeper import RETENTION
+from src.core.tasks.registry import AT_MOST_ONCE_LABEL
 
 logger = get_logger(__name__)
 
@@ -74,6 +75,10 @@ class IdempotencyReceiver(Receiver):
     lasts, and a failed run releases it so a retry can take it. Dedup is
     best-effort: on any Redis error the receiver fails open and executes -
     the baseline semantics stay at-least-once.
+
+    A task labelled `at_most_once` gets its marker before it runs instead: a
+    worker that stops midway leaves the marker, and the reclaimed delivery is
+    dropped rather than repeating what the first run already did.
     """
 
     def __init__(
@@ -122,10 +127,13 @@ class IdempotencyReceiver(Receiver):
             await self._release_claim(message.task_id, claim_token)
             return _skipped()
 
+        at_most_once = bool(message.labels.get(AT_MOST_ONCE_LABEL))
+        if at_most_once:
+            await self._mark_done(message.task_id)
         heartbeat = asyncio.create_task(self._keep_claim(message.task_id, claim_token))
         try:
             result = await super().run_task(target, message, ack_controller)
-            if not result.is_err:
+            if not result.is_err and not at_most_once:
                 await self._mark_done(message.task_id)
         finally:
             heartbeat.cancel()

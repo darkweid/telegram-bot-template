@@ -754,7 +754,7 @@ async def test_a_report_cut_off_by_a_stop_is_sent_by_the_next_run(
     with "in progress" and a Stop button forever: the broadcast is finished,
     so a redelivered run cannot claim it, and only the report run can tell."""
     telegram = FakeTelegramSession()
-    telegram.queue(SendMessage, asyncio.CancelledError())
+    _queue_for_the_report(telegram, EditMessageText, asyncio.CancelledError())
     broadcasts = _broadcasts()
     with pytest.raises(asyncio.CancelledError):
         await _run(settings, i18n, telegram, broadcasts).execute(BROADCAST_ID)
@@ -793,26 +793,73 @@ async def test_a_reported_broadcast_is_not_reported_again(
 
 
 @pytest.mark.parametrize(
-    ("method", "error"),
+    "error",
     [
-        (SendMessage, TelegramNetworkError(method=REPORT_SEND, message="timeout")),
-        (SendMessage, TelegramServerError(method=REPORT_SEND, message="Bad Gateway")),
-        (
-            SendMessage,
-            TelegramRetryAfter(method=REPORT_SEND, message="", retry_after=90),
-        ),
-        (EditMessageText, TelegramNetworkError(method=REPORT_EDIT, message="timeout")),
+        TelegramNetworkError(method=REPORT_EDIT, message="timeout"),
+        TelegramServerError(method=REPORT_EDIT, message="Bad Gateway"),
+        TelegramRetryAfter(method=REPORT_EDIT, message="", retry_after=90),
     ],
 )
-async def test_a_report_that_may_get_through_later_stays_unrecorded(
-    settings: Config, i18n: I18n, method: type[Any], error: Exception
+async def test_a_report_edit_that_may_get_through_later_stays_unrecorded(
+    settings: Config, i18n: I18n, error: Exception
 ) -> None:
     """The request may never have reached Telegram; the resume task tries again."""
     telegram = FakeTelegramSession()
-    _queue_for_the_report(telegram, method, error)
+    _queue_for_the_report(telegram, EditMessageText, error)
     broadcasts = _broadcasts()
     await _run(settings, i18n, telegram, broadcasts).execute(BROADCAST_ID)
     broadcasts.mark_reported.assert_not_awaited()
+
+
+async def test_the_report_is_recorded_before_the_notice_goes_out(
+    settings: Config, i18n: I18n
+) -> None:
+    """Recorded after it, a worker stopping in between would have the resume
+    task send the admin the same notice again."""
+    telegram = FakeTelegramSession()
+    broadcasts = _broadcasts()
+    notices_when_recorded: list[int] = []
+
+    async def record(*_args: object, **_kwargs: object) -> bool:
+        notices_when_recorded.append(len(telegram.sent(SendMessage)))
+        return True
+
+    broadcasts.mark_reported.side_effect = record
+    await _run(settings, i18n, telegram, broadcasts).execute(BROADCAST_ID)
+    assert notices_when_recorded == [0]
+    assert len(telegram.sent(SendMessage)) == 1
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        TelegramNetworkError(method=REPORT_SEND, message="timeout"),
+        TelegramServerError(method=REPORT_SEND, message="Bad Gateway"),
+        TelegramRetryAfter(method=REPORT_SEND, message="", retry_after=90),
+    ],
+)
+async def test_a_failed_notice_is_not_sent_again(
+    settings: Config, i18n: I18n, error: Exception
+) -> None:
+    """A timed-out notice may have reached the admin; the edited progress
+    message carries the result either way."""
+    telegram = FakeTelegramSession()
+    telegram.queue(SendMessage, error)
+    broadcasts = _broadcasts()
+    status = await _run(settings, i18n, telegram, broadcasts).execute(BROADCAST_ID)
+    assert status == BroadcastStatus.COMPLETED
+    broadcasts.mark_reported.assert_awaited_once()
+
+
+async def test_a_report_recorded_by_another_run_sends_no_notice(
+    settings: Config, i18n: I18n
+) -> None:
+    """The run that recorded it sends the notice; a second would repeat it."""
+    telegram = FakeTelegramSession()
+    broadcasts = _broadcasts()
+    broadcasts.mark_reported.return_value = False
+    await _run(settings, i18n, telegram, broadcasts).execute(BROADCAST_ID)
+    assert telegram.sent(SendMessage) == []
 
 
 async def test_the_notice_waits_for_an_edit_that_may_get_through_later(

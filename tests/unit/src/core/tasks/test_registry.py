@@ -1,8 +1,9 @@
+import pytest
 from sqlalchemy.exc import DBAPIError
 from taskiq import InMemoryBroker
 
 from src.core.errors.scrubbed import ScrubbedError
-from src.core.tasks.registry import TaskSpec, register_tasks
+from src.core.tasks.registry import AT_MOST_ONCE_LABEL, TaskSpec, register_tasks
 
 
 def _chain(error: BaseException) -> list[BaseException]:
@@ -49,6 +50,21 @@ async def test_a_registered_task_carries_its_name_schedule_and_retry_label() -> 
     assert task.labels == {"schedule": [{"cron": "* * * * *"}], "retry_on_error": True}
     plain = broker.find_task("test.plain")
     assert plain is not None and plain.labels == {}
+
+
+async def test_an_at_most_once_task_carries_its_label() -> None:
+    """The worker's receiver reads the label to mark the task done up front."""
+    broker = InMemoryBroker(await_inplace=True)
+    register_tasks(broker, [TaskSpec("test.once", ping, at_most_once=True)])
+    task = broker.find_task("test.once")
+    assert task is not None and task.labels == {AT_MOST_ONCE_LABEL: True}
+
+
+def test_an_at_most_once_task_cannot_be_retried() -> None:
+    """A retry carries the same task id, so the marker written before the first
+    run would drop it: the retry flag would promise what never happens."""
+    with pytest.raises(ValueError, match="at_most_once"):
+        TaskSpec("test.both", ping, retry_on_error=True, at_most_once=True)
 
 
 async def test_a_task_error_leaves_the_task_already_scrubbed() -> None:
