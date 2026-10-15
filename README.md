@@ -7,7 +7,8 @@ dishka, from the database session down to the use case a handler calls.
 English and Russian work out of the box, and adding a language is a catalog
 and two lines of code. Unit tests run against a fake Bot API, integration
 tests against a real PostgreSQL and Redis, and GitHub Actions runs both on
-pull requests.
+pull requests. Ansible prepares a fresh Ubuntu server, and CD deploys every
+push that passes CI once you switch it on.
 
 ## Features
 
@@ -50,14 +51,18 @@ pull requests.
   the outbox backlog, the task queue and the scheduler heartbeat.
 - Strict typing (mypy), import-layer contracts (import-linter), a fake Bot
   API for tests and a 90% coverage gate.
-- GitHub Actions CI on pull requests and pushes to `main`: pre-commit hooks,
-  a single Alembic head, unit tests with coverage, integration tests against
-  PostgreSQL and Redis, Bandit, pip-audit and Gitleaks. A push to `main` that
-  passes them builds the image and pushes it to GHCR, tagged `latest` and
-  `sha-` plus the first 12 characters of the commit. A change that touches
-  only documentation runs the lint and Gitleaks jobs alone.
-- Continuous deployment to a server over SSH after CI, one workflow per
-  environment, off until a repository variable turns it on.
+- GitHub Actions CI on pull requests and pushes to `main` and `stage`:
+  pre-commit hooks, a single Alembic head, unit tests with coverage,
+  integration tests against PostgreSQL and Redis, `nginx -t` on the webhook
+  config, Bandit, pip-audit and Gitleaks. A push that passes them builds the
+  image and pushes it to GHCR, tagged `sha-` plus the first 12 characters of
+  the commit and `latest` (`main`) or `stage` (`stage`). A change that
+  touches only documentation runs the lint and Gitleaks jobs alone.
+- Deployment to your own server: Ansible roles for a fresh Ubuntu box (the
+  firewall opens 80 and 443 only in webhook mode), nginx with Let's Encrypt
+  certificates in webhook mode, `infra/deploy/deploy.sh` with migrations
+  before the new code and a rollback to the previous image, CD after CI behind
+  a per-environment switch, and releases that tag the image CI already built.
 
 ## Architecture
 
@@ -159,6 +164,29 @@ twice a day and nginx reloads every six hours, so a renewed certificate is in
 use within six hours. `make clean` keeps the certificate volume: Let's Encrypt
 issues a certificate for the same host at most five times a week.
 
+## Server provisioning
+
+`infra/ansible` turns a fresh Ubuntu 24.04 server into one that runs the
+stack: a `deploy` user for CD and an `ops` user for you, SSH on a port of your
+choice with keys only, a firewall, Docker, and the checkout in
+`/srv/<app_name>`. `bot_mode` in the inventory must match `BOT_MODE` in the
+server's `.env`: webhook opens ports 80 and 443, polling opens nothing, and
+provisioning stops when the two disagree (the check is skipped on the first
+run, before `.env` exists).
+
+```bash
+make ansible-deps                                  # Ansible in its own virtualenv
+make server-bootstrap ENV=production               # once, as root
+make server-provision ENV=production CHECK=1       # preview the changes
+make server-provision ENV=production               # apply
+```
+
+The inventory, the variables and what each role does are in
+`infra/ansible/README.md`. The first deploy is by hand on the server: put
+`.env` in `/srv/<app_name>`, run `make check-env`, in webhook mode
+`make cert-issue DOMAIN=<host of WEBHOOK_BASE_URL>`, then
+`infra/deploy/deploy.sh`.
+
 ## Deployment
 
 On the box, from the checkout:
@@ -170,16 +198,21 @@ configuration and refuses to go on without a certificate (`make cert-issue`).
 Then it builds the Postgres image, builds the bot image or pulls `BOT_IMAGE`,
 starts Postgres and Redis, applies the migrations, and replaces the bot, the
 worker and the scheduler. A failed check or migration stops it with the
-previous stack still running.
+previous stack still running. Any failure ends with exit code 1 and a
+`[deploy] ...` line saying what failed.
 
 - In webhook mode the new bot starts beside the old one and nginx moves to it
   once it is healthy, so no update is refused. In polling mode the bot is
   replaced in place: two pollers on one token conflict.
 - When the new bot, worker or scheduler never turns healthy, the stack goes
-  back to the image it ran before. Migrations stay applied.
+  back to the image it ran before and the deploy fails. Migrations stay
+  applied, so the previous code runs against the new schema. The very first
+  deploy has no previous image and just fails.
 - `BUILD=1` builds the image on the box (the default without `BOT_IMAGE`);
-  `BUILD=0` pulls `BOT_IMAGE`, the image CI pushed:
+  `BUILD=0` pulls `BOT_IMAGE`, the image CI pushed (the default with it):
   `BUILD=0 BOT_IMAGE=ghcr.io/<owner>/<repo>:sha-<12> bash infra/deploy/deploy.sh`.
+  `BUILD=1` with `BOT_IMAGE` set is refused. Both variables accept only `0`
+  or `1`.
 - At the end it removes images and build cache unused for a week, on Linux
   only; `PRUNE=0` keeps them.
 
@@ -458,14 +491,17 @@ you do).
 ## Project layout
 
 ```text
-.github/            CI, deploy, release, Ansible and update workflows, the
-                    Dependabot config, the docs-only change action
+.github/            CI, CD, release, Ansible and update workflows, Dependabot,
+                    the docs-only change action
 infra/              Dockerfiles, compose files, Postgres and Redis config, requirements
+infra/ansible/      server provisioning: inventory example, playbooks, roles
+infra/deploy/       deploy.sh, run on the server by CD or by hand
+infra/nginx/        the webhook nginx: config templates and the reload loop
 locales/            gettext catalogs, one directory per language
 loggers/            logging setup: plain-text or JSON lines on stdout
 migrations/         Alembic environment and revisions
 models/             every SQLAlchemy model, imported for Alembic autogenerate
-scripts/ops/        helpers behind make targets and pre-commit hooks
+scripts/ops/        .env checker and helpers behind make targets and pre-commit hooks
 src/admin/          admin commands: ban, unban, statistics
 src/broadcast/      broadcasts: model, use cases, tasks, the draft dialog
 src/core/           shared infrastructure: database, outbox, tasks, Redis, cache,
