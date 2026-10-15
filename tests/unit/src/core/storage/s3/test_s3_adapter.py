@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime
 import io
 from unittest.mock import AsyncMock, Mock
@@ -19,7 +20,7 @@ class FakePaginator:
         self._pages = pages
         self.paginate_calls: list[dict] = []
 
-    async def paginate(self, **kwargs):  # type: ignore[no-untyped-def]
+    async def paginate(self, **kwargs):
         self.paginate_calls.append(kwargs)
         for page in self._pages:
             yield page
@@ -737,3 +738,158 @@ async def test_parts_grow_so_the_largest_upload_fits_into_the_part_limit(
 
     bodies = [call.kwargs["Body"] for call in client.upload_part.await_args_list]
     assert bodies == [b"0123456789ABCDE", b"FGHIJ"]
+
+
+class TrickleFile:
+    """A raw stream: every read returns at most `step` bytes, like a pipe."""
+
+    def __init__(self, data: bytes, step: int = 2) -> None:
+        self._inner = io.BytesIO(data)
+        self._step = step
+        self.reads = 0
+
+    def read(self, size: int = -1) -> bytes:
+        self.reads += 1
+        return self._inner.read(min(size, self._step) if size >= 0 else self._step)
+
+
+async def test_a_stream_that_returns_short_reads_is_stored_whole(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A pipe answers read(n) with whatever has arrived; taking that for the end
+    of the file would store a truncated object without any error."""
+    adapter, client = small_part_adapter(monkeypatch)
+
+    async with adapter:
+        await adapter.upload_stream(
+            "k", TrickleFile(b"01234"), part_size_bytes=5  # type: ignore[arg-type]
+        )
+
+    assert client.put_object.await_args.kwargs["Body"] == b"01234"
+    client.create_multipart_upload.assert_not_awaited()
+
+
+async def test_short_reads_still_make_full_multipart_parts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """S3 refuses an undersized part that is not the last one, after the upload
+    has begun."""
+    adapter, client = small_part_adapter(monkeypatch)
+
+    async with adapter:
+        await adapter.upload_stream(
+            "k", TrickleFile(b"0123456789AB"), part_size_bytes=5  # type: ignore[arg-type]
+        )
+
+    bodies = [call.kwargs["Body"] for call in client.upload_part.await_args_list]
+    assert bodies == [b"01234", b"56789", b"AB"]
+
+
+async def test_the_limit_counts_the_total_over_short_reads(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter, client = small_part_adapter(monkeypatch, max_upload_size_bytes=8)
+
+    async with adapter:
+        with pytest.raises(S3ObjectTooLarge):
+            await adapter.upload_stream(
+                "k", TrickleFile(b"012345678"), part_size_bytes=10  # type: ignore[arg-type]
+            )
+
+    client.put_object.assert_not_awaited()
+
+
+async def test_a_stream_of_exactly_the_limit_is_accepted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The limit is inclusive: a file of exactly S3_MAX_UPLOAD_SIZE_BYTES is
+    allowed, one byte more is not."""
+    adapter, client = small_part_adapter(monkeypatch, max_upload_size_bytes=12)
+
+    async with adapter:
+        await adapter.upload_stream("k", io.BytesIO(b"0123456789AB"), part_size_bytes=5)
+
+    complete = client.complete_multipart_upload.await_args.kwargs
+    assert len(complete["MultipartUpload"]["Parts"]) == 3
+
+
+async def test_a_cancelled_upload_still_aborts_and_stays_cancelled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A stopping worker cancels the task mid-upload; the open multipart upload
+    would otherwise sit in the bucket, billed."""
+    adapter, client = small_part_adapter(monkeypatch)
+    client.upload_part.side_effect = asyncio.CancelledError
+
+    async with adapter:
+        with pytest.raises(asyncio.CancelledError):
+            await adapter.upload_stream(
+                "k", io.BytesIO(b"0123456789"), part_size_bytes=5
+            )
+
+    client.abort_multipart_upload.assert_awaited_once()
+
+
+async def test_a_failed_abort_does_not_hide_the_upload_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The developer needs the reason the upload failed, not the failure of the
+    cleanup that followed it."""
+    adapter, client = small_part_adapter(monkeypatch)
+    client.upload_part.side_effect = ClientError(
+        {"Error": {"Code": "InternalError"}}, "UploadPart"
+    )
+    client.abort_multipart_upload.side_effect = ClientError(
+        {"Error": {"Code": "AccessDenied"}}, "AbortMultipartUpload"
+    )
+
+    async with adapter:
+        with pytest.raises(ClientError) as raised:
+            await adapter.upload_stream(
+                "k", io.BytesIO(b"0123456789"), part_size_bytes=5
+            )
+
+    assert raised.value.operation_name == "UploadPart"
+    assert "abort_multipart_upload failed: ClientError" in raised.value.__notes__
+
+
+async def test_outside_the_context_the_stream_is_left_unread(
+    s3_mocks: tuple[S3Adapter, AsyncMock, FakeBotoClientContext],
+) -> None:
+    """A caller that forgot `async with` must not lose the first part of its
+    stream to a failed call."""
+    adapter, _, _ = s3_mocks
+    stream = io.BytesIO(b"payload")
+
+    with pytest.raises(RuntimeError, match="async with"):
+        await adapter.upload_stream("k", stream)
+
+    assert stream.tell() == 0
+
+
+async def test_a_key_starting_with_http_is_not_a_url(
+    s3_mocks: tuple[S3Adapter, AsyncMock, FakeBotoClientContext],
+) -> None:
+    """`httpd/conf` is a legitimate key; only a scheme separator marks a URL."""
+    adapter, client, _ = s3_mocks
+    client.generate_presigned_url = Mock(return_value="https://presigned")
+
+    async with adapter:
+        assert await adapter.generate_presigned_get_url("httpd/conf")
+
+
+async def test_list_keys_passes_the_cap_to_the_paginator(
+    s3_mocks: tuple[S3Adapter, AsyncMock, FakeBotoClientContext],
+) -> None:
+    """Without MaxItems a cap of 5 would still walk a bucket of millions."""
+    adapter, client, _ = s3_mocks
+    paginator = FakePaginator([{"Contents": [{"Key": "a"}]}])
+    client.get_paginator = Mock(return_value=paginator)
+
+    async with adapter:
+        await adapter.list_keys(prefix="p", max_keys=5)
+
+    assert paginator.paginate_calls[0]["PaginationConfig"] == {
+        "MaxItems": 5,
+        "PageSize": 5,
+    }

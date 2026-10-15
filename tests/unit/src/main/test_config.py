@@ -577,5 +577,7 @@ def test_an_unknown_retry_mode_fails_at_startup() -> None:
 
 
 def test_the_s3_secret_stays_out_of_the_config_repr() -> None:
+    """A config dumped into a log or an error report must not hand out the
+    bucket's secret key."""
     config = S3Config(S3_SECRET_ACCESS_KEY="example-secret-not-real")
     assert "example-secret-not-real" not in repr(config)

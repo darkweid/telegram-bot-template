@@ -2,11 +2,14 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 import hashlib
+import inspect
 import io
 
 from botocore.exceptions import ClientError
 import pytest
 
+from src.core.storage.s3.errors import S3ObjectTooLarge
+from src.core.storage.s3.interface import S3Client
 from tests.fakes import s3 as s3_fake_module
 from tests.fakes.s3 import InMemoryS3Client
 
@@ -132,4 +135,47 @@ async def test_fake_upload_stream_stores_what_the_stream_holds() -> None:
     await s3.upload_stream("doc", io.BytesIO(b"payload"), content_type="text/plain")
 
     assert s3.objects == {"doc": b"payload"}
-    assert s3.content_types["doc"] == "text/plain"
+    assert s3.content_types[("test-bucket", "doc")] == "text/plain"
+
+
+async def test_fake_refuses_a_stream_over_its_limit_and_takes_one_at_it() -> None:
+    """Code that handles S3ObjectTooLarge needs the fake to raise it exactly
+    where the adapter does."""
+    s3 = InMemoryS3Client(max_upload_size_bytes=4)
+
+    await s3.upload_stream("ok", io.BytesIO(b"1234"))
+    with pytest.raises(S3ObjectTooLarge):
+        await s3.upload_stream("big", io.BytesIO(b"12345"))
+
+    assert list(s3.objects) == ["ok"]
+
+
+async def test_fake_keeps_content_types_per_bucket() -> None:
+    s3 = InMemoryS3Client()
+    await s3.upload_bytes("k", b"a", content_type="text/plain")
+    await s3.upload_bytes("k", b"b", bucket="other", content_type="image/png")
+
+    assert s3.content_types == {
+        ("test-bucket", "k"): "text/plain",
+        ("other", "k"): "image/png",
+    }
+
+
+def test_fake_has_the_signature_of_every_protocol_method() -> None:
+    """A method added to S3Client but not to the fake would fail only in a
+    downstream bot's tests; this fails here, where the protocol changes."""
+    methods = [
+        name
+        for name, member in inspect.getmembers(S3Client)
+        if not name.startswith("_") and callable(member)
+    ]
+    assert methods
+    for name in methods:
+        protocol = inspect.signature(getattr(S3Client, name))
+        fake = inspect.signature(getattr(InMemoryS3Client, name))
+        assert list(fake.parameters) == list(protocol.parameters), name
+        for parameter_name, parameter in protocol.parameters.items():
+            assert fake.parameters[parameter_name].default == parameter.default, (
+                name,
+                parameter_name,
+            )

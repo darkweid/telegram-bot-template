@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock
 from botocore.exceptions import ClientError
 
 from src.core.storage.s3.adapter import MAX_LIST_PAGE_SIZE
+from src.core.storage.s3.errors import S3ObjectTooLarge
 from src.core.storage.s3.interface import DEFAULT_PART_SIZE_BYTES, StoredObject
 from src.core.utils.datetime_utils import get_utc_now
 
@@ -47,11 +48,18 @@ class InMemoryS3Client:
     """The S3Client protocol over dicts, one per bucket. Timestamps come from
     `get_utc_now`, which a test monkeypatches through this module."""
 
-    def __init__(self, default_bucket: str = "test-bucket") -> None:
+    def __init__(
+        self,
+        default_bucket: str = "test-bucket",
+        *,
+        max_upload_size_bytes: int | None = None,
+    ) -> None:
         self._default_bucket = default_bucket
+        self._max_upload_size_bytes = max_upload_size_bytes
         self._buckets: dict[str, dict[str, bytes]] = {}
         self._modified: dict[str, dict[str, datetime]] = {}
-        self.content_types: dict[str, str | None] = {}
+        # Keyed by (bucket, key): two buckets may hold one key.
+        self.content_types: dict[tuple[str, str], str | None] = {}
         self.closed = False
 
     def _get_modified(self, bucket: str | None) -> dict[str, datetime]:
@@ -94,7 +102,7 @@ class InMemoryS3Client:
     ) -> None:
         self._get_bucket(bucket)[key] = data
         self._get_modified(bucket)[key] = get_utc_now()
-        self.content_types[key] = content_type
+        self.content_types[(bucket or self._default_bucket, key)] = content_type
 
     async def upload_stream(
         self,
@@ -106,9 +114,14 @@ class InMemoryS3Client:
         bucket: str | None = None,
         part_size_bytes: int = DEFAULT_PART_SIZE_BYTES,
     ) -> None:
+        # The adapter refuses a stream over the limit; so does the fake.
+        limit = self._max_upload_size_bytes
+        data = stream.read() if limit is None else stream.read(limit + 1)
+        if limit is not None and len(data) > limit:
+            raise S3ObjectTooLarge(f"Upload exceeds S3_MAX_UPLOAD_SIZE_BYTES={limit}")
         await self.upload_bytes(
             key,
-            stream.read(),
+            data,
             bucket=bucket,
             content_type=content_type,
             cache_control=cache_control,

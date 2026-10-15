@@ -31,7 +31,10 @@ class S3Adapter(S3Client):
         await s3.upload_bytes("key", b"data")
 
     `upload_stream` takes a file of any size up to `max_upload_size_bytes`,
-    a part at a time; `download_bytes` holds the whole object in memory.
+    a part at a time; `download_bytes` holds the whole object in memory. One
+    call can take minutes (read timeout times retries), longer than the 60 s
+    event-isolation lock and the shutdown timeout: run large transfers in a
+    background task, not in a handler.
     """
 
     def __init__(
@@ -93,8 +96,7 @@ class S3Adapter(S3Client):
         }
         if self._endpoint_url:
             client_kwargs["endpoint_url"] = self._endpoint_url
-        if self._client_config:
-            client_kwargs["config"] = self._client_config
+        client_kwargs["config"] = self._client_config
         if self._ca_bundle:
             client_kwargs["verify"] = self._ca_bundle
         else:
@@ -124,15 +126,14 @@ class S3Adapter(S3Client):
         read_timeout_seconds: int,
         retry_max_attempts: int,
         retry_mode: str,
-    ) -> Config | None:
+    ) -> Config:
         config_kwargs: dict[str, Any] = {}
         config_kwargs["signature_version"] = signature_version
         resolved_addressing_style = self._resolve_addressing_style(
             addressing_style=addressing_style,
             endpoint_url=endpoint_url,
         )
-        if resolved_addressing_style:
-            config_kwargs["s3"] = {"addressing_style": resolved_addressing_style}
+        config_kwargs["s3"] = {"addressing_style": resolved_addressing_style}
         config_kwargs["connect_timeout"] = connect_timeout_seconds
         config_kwargs["read_timeout"] = read_timeout_seconds
         config_kwargs["retries"] = {
@@ -207,6 +208,8 @@ class S3Adapter(S3Client):
         """
         if part_size_bytes < MIN_MULTIPART_PART_SIZE_BYTES:
             raise ValueError("Multipart part size must be at least 5 MiB.")
+        # Before the first read: outside `async with` nothing may be consumed.
+        self._ensure_client()
         part_size = max(part_size_bytes, self._min_part_size_bytes)
         first = await self._read_part(stream, part_size, received=0)
         second = (
@@ -234,13 +237,27 @@ class S3Adapter(S3Client):
         )
 
     async def _read_part(self, stream: BinaryIO, size: int, *, received: int) -> bytes:
-        # In a thread: reading a file on disk would otherwise block the loop.
-        chunk = await asyncio.to_thread(stream.read, size)
-        if received + len(chunk) > self._max_upload_size_bytes:
-            raise S3ObjectTooLarge(
-                f"Upload exceeds S3_MAX_UPLOAD_SIZE_BYTES={self._max_upload_size_bytes}"
-            )
-        return chunk
+        """Read `size` bytes, fewer only at the end of the stream.
+
+        A raw or unbuffered stream (a pipe, a socket file) may return less than
+        asked on any read, so one `read(size)` would cut an upload short or send
+        an undersized part. The limit is checked on the running total.
+        """
+        chunks: list[bytes] = []
+        length = 0
+        while length < size:
+            # In a thread: reading a file on disk would otherwise block the loop.
+            chunk = await asyncio.to_thread(stream.read, size - length)
+            if not chunk:
+                break
+            length += len(chunk)
+            if received + length > self._max_upload_size_bytes:
+                raise S3ObjectTooLarge(
+                    "Upload exceeds "
+                    f"S3_MAX_UPLOAD_SIZE_BYTES={self._max_upload_size_bytes}"
+                )
+            chunks.append(chunk)
+        return b"".join(chunks)
 
     async def _upload_multipart(
         self,
@@ -287,13 +304,29 @@ class S3Adapter(S3Client):
                 UploadId=upload_id,
                 MultipartUpload={"Parts": parts},
             )
-        except Exception:
+        except BaseException as error:
             # An unfinished multipart upload keeps its parts, and S3 bills
-            # them, until it is aborted.
-            await client.abort_multipart_upload(
-                Bucket=bucket_name, Key=key, UploadId=upload_id
-            )
+            # them, until it is aborted. BaseException: a cancelled task (a
+            # stopping worker or bot) leaves the same orphan.
+            await self._abort_multipart(client, bucket_name, key, upload_id, error)
             raise
+
+    async def _abort_multipart(
+        self, client: Any, bucket: str, key: str, upload_id: str, error: BaseException
+    ) -> None:
+        """Abort without ever replacing `error`: a failed abort is attached to it
+        as a note (the class name only) and the caller re-raises the original."""
+        try:
+            # Shielded: the cancellation that got us here must not cut the abort.
+            await asyncio.shield(
+                client.abort_multipart_upload(
+                    Bucket=bucket, Key=key, UploadId=upload_id
+                )
+            )
+        except Exception as abort_error:
+            error.add_note(
+                f"abort_multipart_upload failed: {type(abort_error).__name__}"
+            )
 
     async def download_bytes(self, key: str, *, bucket: str | None = None) -> bytes:
         """Download an object into memory (small files only)."""
@@ -382,7 +415,7 @@ class S3Adapter(S3Client):
         content_type: str | None,
     ) -> str:
         client = self._ensure_client()
-        if "://" in key or key.startswith("http"):
+        if "://" in key:
             raise ValueError("S3 object key must not be a URL or contain a scheme.")
         params = {"Bucket": self._get_bucket(bucket), "Key": key}
         if content_type:
