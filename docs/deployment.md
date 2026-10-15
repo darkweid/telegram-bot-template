@@ -3,9 +3,8 @@
 How the bot gets onto a server and stays up to date there: webhook mode
 behind nginx, provisioning a fresh server, what `infra/deploy/deploy.sh` does
 step by step, the CI that builds the image, continuous deployment from GitHub
-Actions, and releases. Open
-it before the first deploy, and again when a deploy fails and you need to
-know what state it left behind. Every key named here is described in
+Actions, and releases. Open it before the first deploy, and again when a
+deploy fails and you need to know what state it left behind. Every key named here is described in
 [the configuration reference](configuration.md).
 
 ## Webhook mode
@@ -217,13 +216,15 @@ Two paths skip work:
 - **Documentation only.** A change that touches nothing but `docs/`,
   `README.md`, `LICENSE`, `SECURITY.md`, `.github/ISSUE_TEMPLATE` and the pull
   request template (`scripts/ops/docs_only_change.py`; any other path counts as
-  code) runs Lint and Gitleaks alone, builds no image and so deploys nothing.
-  With Coveralls on, a push of it still gets a coverage report
-  ([coverage](testing.md#coverage)).
+  code) runs Lint and Gitleaks, builds no image and so deploys nothing.
 - **A tree that already passed.** A squash merge lands a commit whose tree is
   the one its pull request was tested on. When CI finds a passing run of the
   same tree, the push skips every check but Gitleaks and goes straight to the
   image build.
+
+On a push down either path, with Coveralls on, the unit tests still run when
+no coverage report of that tree can be carried over, so every commit gets one
+([coverage](testing.md#coverage)).
 
 ## Continuous deployment
 
