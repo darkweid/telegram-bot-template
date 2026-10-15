@@ -50,8 +50,8 @@ The order matters; it is set in `create_dispatcher`. Outer middlewares on
    snapshot from the cache and goes to the database only when the snapshot is
    missing or `needs_write` (`src/user/services.py`) says the row is due: the
    profile changed, the user was marked unreachable, or the row was last
-   written more than `USER_TOUCH_INTERVAL_SECONDS` ago. It skips bots, groups, channels and
-   `my_chat_member` updates.
+   written more than `USER_TOUCH_INTERVAL_SECONDS` ago. It skips bots, groups,
+   channels and `my_chat_member` updates.
 4. `UserLocaleMiddleware` picks the reply language (see
    [marking strings](i18n.md#marking-strings)).
 5. `BanMiddleware` drops a banned user's updates without an answer, unless
@@ -141,7 +141,7 @@ answer) and the rest are dropped. A handler that raises `SkipHandler` passes
 the update to the next matching one, and aiogram runs the inner middlewares
 again, so such an update counts once per handler reached. Counters live in
 Redis; while Redis is down each process counts in its own memory, so the limit
-holds.
+holds per process.
 
 ## Errors and alerts
 
@@ -175,17 +175,17 @@ is the base for a dependency that failed: it logs at error and goes to Sentry.
 
 Developer alerts (`DeveloperAlerter`, `src/core/telegram/alerts.py`) are sent
 when a handler raises an unexpected error, when a task fails for good, when the
-LLM client switches to its fallback provider, and when Redis goes down under
-the cache or the throttle limiter, and again when it recovers. They go to
+LLM client switches to its fallback provider, and when Redis goes down under the
+cache or the throttle limiter, and again when it recovers. They go to
 `DEV_ALERT_CHAT_ID` when it is set, otherwise to every developer in private,
-through a `Bot` of their own on a session of its own. The same failure (error class, origin and the innermost project frame)
-is alerted once per `ALERT_COOLDOWN_SECONDS` (300), and a task id once in 24
-hours however often it is redelivered. An alert carries ids, the origin, the
-error class and where it was raised; the error message only for a
-`CoreException` or a scrubbed driver or validation error, since any other
-message can quote what the user sent. A failed delivery is logged and never
-raised into the code being reported on. `/test_alert` sends a test through the
-same path, past the cooldown.
+through a `Bot` of their own on a session of its own. The same failure (error
+class, origin and the innermost project frame) is alerted once per
+`ALERT_COOLDOWN_SECONDS` (300), and a task id once in 24 hours however often it
+is redelivered. An alert carries ids, the origin, the error class and where it
+was raised; the error message only for a `CoreException` or a scrubbed driver or
+validation error, since any other message can quote what the user sent. A failed
+delivery is logged and never raised into the code being reported on.
+`/test_alert` sends a test through the same path, past the cooldown.
 
 ## Health
 

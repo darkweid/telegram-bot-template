@@ -54,6 +54,101 @@ and `src/main` binds the implementation: `UnreachableUserRecorder`
 (`src/core/i18n/middleware.py`), `TaskPublisher` (`src/core/outbox/interface.py`)
 and `DegradationNotifier` (`src/core/redis/degradation.py`).
 
+### Project layout
+
+Top level:
+
+- `src/` - the application: `src/main` (composition root), `src/core`
+  (infrastructure) and one package per domain.
+- `loggers/` - `get_logger` and `setup_logging`: text or JSON lines on stdout,
+  stamped with the update context.
+- `models/` - imports every model, so Alembic autogenerate sees the whole
+  schema; a model missing there produces an empty migration.
+- `migrations/` - Alembic environment and revisions under `migrations/versions`.
+- `locales/` - gettext catalogs, one directory per language (`locales/en`,
+  `locales/ru`); compiled `.mo` files are build output and stay out of git.
+- `infra/` - everything that runs the code:
+  - `infra/docker` - the production image and the dev image;
+  - `infra/docker-compose.yml` (the stack), `infra/docker-compose.override.yml`
+    (the dev overlay) and `infra/docker-compose.test.yml` (the integration
+    suite's PostgreSQL and Redis);
+  - `infra/deploy/deploy.sh` - the deploy run on the server;
+  - `infra/nginx` - the webhook profile's TLS front: entrypoint, configuration
+    templates and `infra/nginx/render.sh`;
+  - `infra/ansible` - server provisioning: inventory, playbooks, roles and their
+    own `infra/ansible/README.md`;
+  - `infra/postgres` (image and `postgresql.conf`), `infra/redis.conf`, and
+    `infra/requirements` (the `.in` files and their lockfiles).
+- `scripts/ops/` - helpers behind make targets and pre-commit hooks: the
+  deploy-time `.env` check (`scripts/ops/check_env.py`), the documentation
+  check, the migration heads check, catalog normalizing and requirements
+  sorting.
+- `.github/` - workflows (CI, CD, releases, the Ansible check), a local action
+  that tells a documentation-only change apart, and the Dependabot
+  configuration.
+- `tests/` - the test suite, see below.
+- `docs/` - these documents.
+
+`src/core` holds no domain knowledge:
+
+- `src/core/database` - engine, unit of work, base repositories, list queries,
+  advisory locks, `detached_read` and `delete_in_batches`;
+- `src/core/events` - `DomainEvent`, `Actor` and the subscriber registry;
+- `src/core/outbox` - the outbox table, its publisher, sweeper and purge;
+- `src/core/tasks` - the taskiq broker, the task registry, the idempotent
+  receiver, the Sentry and alert middlewares and the scheduler heartbeat;
+- `src/core/redis` - the Redis client factory and the outage reporter;
+- `src/core/cache` - the versioned Redis cache;
+- `src/core/limiter` - the Redis rate limiter and the local pacer;
+- `src/core/storage/s3` - the S3 client protocol, its adapter and the disabled
+  client;
+- `src/core/email` - the mailer protocol, the SMTP mailer, the email service,
+  the email tasks and the Jinja2 templates;
+- `src/core/http` - the HTTP client for third-party APIs;
+- `src/core/llm` - the LLM client contract, the provider adapters, the fallback
+  and the usage accounting;
+- `src/core/errors` - `CoreException` and the scrubbing helpers;
+- `src/core/i18n` - `build_i18n`, `N_` and the locale middleware;
+- `src/core/telegram` - the error handler, the Bot API session middlewares,
+  roles, developer alerts, the update middlewares, FSM storage and
+  `safe_edit_text`;
+- `src/core/utils` - `get_utc_now`, the application clock;
+- `src/core/locales.py` - the supported locales, free of aiogram;
+- `src/core/update_context.py` - the ids of the update being handled, for logs
+  and Sentry.
+
+A domain package, with `src/note` as the example, splits by role:
+
+- `models.py` - the SQLAlchemy model;
+- `repositories.py` - all of the domain's SQL;
+- `services.py` - pure domain rules, no I/O;
+- `usecases/` - one use case per file (`src/note/usecases/create_note.py`);
+- `schemas.py` - the data a use case returns to a handler;
+- `handlers.py` - the router factory and the handlers;
+- `keyboards.py`, `callbacks.py`, `texts.py` - the reply markup, the
+  `CallbackData` classes and the message texts;
+- `states.py` - the FSM states of the domain's dialogs;
+- `commands.py` - the commands the domain adds to the menu;
+- `enums.py`, `exceptions.py` - the domain's enumerations and its
+  `CoreException` subclasses;
+- `events.py`, `subscribers.py`, `tasks.py` - the domain events, the
+  subscribers that react to them and the background tasks;
+- `prompts.py` - the LLM prompts and the schemas of their answers;
+- `di.py` - the domain's dishka provider.
+
+`tests/` mirrors the source:
+
+- `tests/unit` - no Docker; `tests/unit/src` follows the `src/` tree;
+- `tests/integration` - against a real PostgreSQL and Redis, deselected by
+  default;
+- `tests/fakes` - stand-ins for the network and the stores: the Telegram
+  session, the database, Redis, HTTP, LLM, S3, email, and the `docker` command
+  of the deploy tests (`tests/fakes/docker_cli.py`);
+- `tests/factories` - builders for updates and users;
+- `tests/helpers` - `running_bot` (`tests/helpers/dispatcher.py`), provider
+  overrides (`tests/helpers/providers.py`), log capture and the scripted LLM
+  server.
+
 ## Dependency injection
 
 The container is [dishka](https://dishka.readthedocs.io/), built by
@@ -179,9 +274,11 @@ duplicate deliveries) is in [the outbox](background-jobs.md#the-outbox).
 
 A new domain package goes into `core-is-independent`'s `forbidden_modules`, its
 handlers module into `handlers-skip-repositories`' `source_modules`, and its
-repository module into that contract's `forbidden_modules`. import-linter fails
-when a contract names a module that does not exist, so a removed domain leaves
-these lists in the same change.
+repository module into that contract's `forbidden_modules`. A removed domain
+leaves all three lists in the same change. Only the `source_modules` entry is
+enforced: import-linter fails when a source module does not exist, but skips a
+missing forbidden module without a word, so a stale `forbidden_modules` entry
+passes the check.
 
 ## Adding a module
 
