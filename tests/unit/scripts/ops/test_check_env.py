@@ -87,12 +87,20 @@ def test_every_key_in_the_example_is_known() -> None:
     assert sorted(set(names) - KNOWN_KEYS) == []
 
 
-@pytest.mark.parametrize(
-    "token",
-    ["", "replace-with-the-token-from-BotFather", "1234:" + "A" * 35, TOKEN + "!"],
-)
+@pytest.mark.parametrize("token", ["", "1234:" + "A" * 35, TOKEN + "!"])
 def test_a_malformed_token_is_refused(token: str) -> None:
     assert _errors(BOT_TOKEN=token) == ["BOT_TOKEN is not a token @BotFather issued"]
+
+
+def test_the_token_placeholder_the_example_ships_is_refused() -> None:
+    """Read from .env.example itself, so a reworded placeholder is still
+    proven unusable: a bot started with it fails only at its first Bot API
+    call."""
+    placeholder = parse_env(ENV_EXAMPLE.read_text(encoding="utf-8"))["BOT_TOKEN"]
+    assert placeholder
+    assert "BOT_TOKEN is not a token @BotFather issued" in _errors(
+        BOT_TOKEN=placeholder
+    )
 
 
 def test_an_unknown_mode_is_refused() -> None:
