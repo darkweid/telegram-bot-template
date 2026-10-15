@@ -52,6 +52,8 @@ class OpenRouterLLMClient:
     is not sent: the non-Anthropic models this adapter is meant for cache
     repeated prompt prefixes on their own. The cost comes from OpenRouter's
     `usage.cost`, so no price table is needed here.
+
+    The model is the request's own or the configured one of its tier.
     """
 
     def __init__(

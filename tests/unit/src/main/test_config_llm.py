@@ -367,3 +367,19 @@ def test_a_fast_model_of_the_wrong_shape_is_refused_by_its_key(
     OpenRouter would fail every fast call; startup names the key instead."""
     with pytest.raises(ValidationError, match=key):
         LLMConfig(_env_file=None, **values)
+
+
+def test_a_fast_model_of_the_right_shape_is_accepted() -> None:
+    """The shape check must not refuse the pair .env.example ships."""
+    config = LLMConfig(
+        _env_file=None,
+        LLM_PROVIDER="anthropic",
+        ANTHROPIC_API_KEY="sk-ant-not-real",
+        LLM_MODEL_FAST="claude-haiku-5-5",
+        LLM_FALLBACK_PROVIDER="openrouter",
+        OPENROUTER_API_KEY="sk-or-not-real",
+        LLM_FALLBACK_MODEL="vendor/model",
+        LLM_FALLBACK_MODEL_FAST="vendor/model-lite",
+    )
+    assert config.LLM_MODEL_FAST == "claude-haiku-5-5"
+    assert config.LLM_FALLBACK_MODEL_FAST == "vendor/model-lite"

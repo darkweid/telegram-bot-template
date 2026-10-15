@@ -17,7 +17,7 @@ from src.core.llm.recording import RecordingLLMClient
 from src.core.llm.repository import LLMUsageRepository
 from src.core.llm.types import LLMMessage, LLMRequest, LLMUsage
 from src.main.config import Config
-from src.main.di import build_container
+from src.main.di import _tier_models, build_container
 from tests.fakes.llm import FakeLLMClient
 from tests.fakes.telegram import FakeTelegramSession
 from tests.helpers.llm import record_closing, with_llm
@@ -183,3 +183,20 @@ async def test_handler_tests_get_the_fake_client(settings: Config, i18n: I18n) -
         assert isinstance(await container.get(LLMClient), FakeLLMClient)
     finally:
         await container.close()
+
+
+def test_an_empty_fast_model_falls_back_to_the_strong_one() -> None:
+    """A bot that sets one model must get it for every tier."""
+    assert dict(_tier_models("a", "")) == {ModelTier.STRONG: "a", ModelTier.FAST: "a"}
+
+
+def test_a_fast_model_takes_the_fast_tier_only() -> None:
+    assert dict(_tier_models("a", "b")) == {ModelTier.STRONG: "a", ModelTier.FAST: "b"}
+
+
+def test_the_tier_mapping_is_read_only() -> None:
+    """Both adapters and the recorder share one mapping; a write would change
+    the model of every later call."""
+    models = _tier_models("a", "b")
+    with pytest.raises(TypeError):
+        models[ModelTier.FAST] = "c"  # type: ignore[index]
