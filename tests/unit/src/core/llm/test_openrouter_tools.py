@@ -492,3 +492,32 @@ async def test_an_empty_text_block_is_not_sent(server: ScriptedLLMServer) -> Non
 
     roles = [message["role"] for message in server.bodies()[0]["messages"]]
     assert roles == ["user", "assistant", "tool"]
+
+
+async def test_a_reasoning_only_turn_goes_back_with_its_reasoning(
+    server: ScriptedLLMServer,
+) -> None:
+    """An answer cut while still reasoning holds nothing but reasoning_details;
+    dropping the turn would lose what a continuation needs."""
+    server.reply(
+        openrouter_completion(None, reasoning_details=REASONING, finish_reason="length")
+    )
+    server.reply(openrouter_completion("Done."))
+    client = make_client(server)
+    first = await client.complete(request())
+
+    await client.complete(
+        request(
+            messages=[
+                ASK,
+                first.assistant_turn,
+                LLMMessage(role="user", content="go on"),
+            ]
+        )
+    )
+
+    assert server.bodies()[1]["messages"][1] == {
+        "role": "assistant",
+        "content": "",
+        "reasoning_details": REASONING,
+    }

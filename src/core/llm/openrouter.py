@@ -309,11 +309,15 @@ def _assistant_turn(blocks: Sequence[ContentBlock]) -> list[ChatCompletionMessag
         for block in blocks
         if isinstance(block, ProviderBlock) and block.provider is _PROVIDER
     ]
-    # A turn of the other provider's reasoning alone is left with nothing,
-    # and an assistant message needs text or calls.
-    if not text and not calls:
+    # A turn left with nothing (the other provider's reasoning alone) is
+    # dropped. Our own reasoning alone, an answer cut while reasoning, goes
+    # back with empty content: a continuation needs it.
+    if not text and not calls and not reasoning:
         return []
-    message: dict[str, object] = {"role": "assistant", "content": text or None}
+    message: dict[str, object] = {
+        "role": "assistant",
+        "content": text or (None if calls else ""),
+    }
     if calls:
         message["tool_calls"] = calls
     if reasoning:
