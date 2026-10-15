@@ -19,12 +19,29 @@
 # the previous stack still running.
 set -euo pipefail
 
+# Every failure leaves with exit 1 and a [deploy] line: a step that fails under
+# errexit gets the generic line here, a refusal with its own message (die) is
+# not repeated.
+reported=0
+die() {
+  echo "$1"
+  reported=1
+  exit 1
+}
+report_failure() {
+  local status=$?
+  if [ "$status" -ne 0 ]; then
+    [ "$reported" = 1 ] || echo "[deploy] the deploy failed (exit ${status})"
+    exit 1
+  fi
+}
+trap report_failure EXIT
+
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$REPO_ROOT"
 
 test -f .env || {
-  echo "[deploy] .env is missing on the box - copy .env.example and fill it in"
-  exit 1
+  die "[deploy] .env is missing on the box - copy .env.example and fill it in"
 }
 python3 scripts/ops/check_env.py .env
 
@@ -43,15 +60,16 @@ else
 fi
 PRUNE="${PRUNE:-1}"
 
+case "$BUILD" in 0 | 1) ;; *) die "[deploy] BUILD must be 0 or 1, not '${BUILD}'" ;; esac
+case "$PRUNE" in 0 | 1) ;; *) die "[deploy] PRUNE must be 0 or 1, not '${PRUNE}'" ;; esac
+
 if [ "$BUILD" = "0" ] && [ -z "$BOT_IMAGE" ]; then
-  echo "[deploy] BUILD=0 requires BOT_IMAGE - the local tag exists in no registry"
-  exit 1
+  die "[deploy] BUILD=0 requires BOT_IMAGE - the local tag exists in no registry"
 fi
 if [ "$BUILD" = "1" ] && [ -n "$BOT_IMAGE" ]; then
   # A build would put this checkout's code under the pinned tag, and the next
   # pull of that tag would silently replace it.
-  echo "[deploy] BUILD=1 builds the local image; unset BOT_IMAGE, or deploy it with BUILD=0"
-  exit 1
+  die "[deploy] BUILD=1 builds the local image; unset BOT_IMAGE, or deploy it with BUILD=0"
 fi
 # infra/docker-compose.yml's default for BOT_IMAGE, and LOCAL_BOT_IMAGE in the
 # Makefile (tests/unit/test_deploy_script.py).
@@ -66,6 +84,7 @@ COMPOSE=(docker compose --env-file .env -f infra/docker-compose.yml)
 # healthcheck in infra/docker-compose.yml reports one that never answers
 # unhealthy sooner (start_period plus retries x interval, 70s).
 BOT_HEALTHY_TIMEOUT_SECONDS=120
+ROLLBACK_FAILED="[deploy] rollback failed; the bot, worker or scheduler may still run the new image beside the previous one - check 'docker compose ps' and the logs, then deploy the previous image again"
 # How long the nginx workers retired by a reload get to finish the requests
 # they still carry to the old bot.
 NGINX_DRAIN_TIMEOUT_SECONDS=60
@@ -207,8 +226,9 @@ serving_bot_ids() {
 # each update reaches exactly one of them through nginx. A new container that
 # never turns healthy is removed without having served anything.
 #
-# Callers test it in an `if`, which switches errexit off for everything inside,
-# so every step that must not be skipped checks its own status.
+# Callers test it in an `if` or after `||`, which switches errexit off for
+# everything inside, so every step that must not be skipped checks its own
+# status.
 roll_bot() {
   local image="$1"
   local all_ids old_ids leftover_ids new_id new_name id count=1
@@ -228,6 +248,8 @@ roll_bot() {
     done
     # nginx is pinned before any leftover stops: an interrupted deploy may have
     # reloaded nginx onto a container without recording it as applied.
+    # On a switch from polling, the old container pins nginx until the cutover;
+    # updates in between get a 404 and Telegram retries them.
     # shellcheck disable=SC2046,SC2086  # container ids and names, one word each
     route_bot_to $(container_names $old_ids) || return 1
     if [ -n "$leftover_ids" ]; then
@@ -375,8 +397,7 @@ if [ "$BOT_MODE" = "webhook" ]; then
   "${COMPOSE[@]}" up -d --no-deps nginx certbot
   echo "[deploy] rolling the bot"
   if ! roll_bot "$BOT_IMAGE"; then
-    echo "[deploy] rolling the bot failed; the previous one keeps serving and the deploy failed"
-    exit 1
+    die "[deploy] rolling the bot failed; the previous one keeps serving and the deploy failed"
   fi
 else
   # Left from webhook mode: nginx would keep ports 80 and 443 open with no bot
@@ -385,13 +406,13 @@ else
   echo "[deploy] replacing the bot"
   if ! replace_polling_bot; then
     if [ -z "$PREVIOUS_IMAGE" ]; then
-      echo "[deploy] the bot did not become healthy and there is no previous image to go back to"
-      exit 1
+      die "[deploy] the bot did not become healthy and there is no previous image to go back to"
     fi
     echo "[deploy] the bot did not become healthy; going back to ${PREVIOUS_IMAGE}"
-    BOT_IMAGE="$PREVIOUS_IMAGE" replace_polling_bot
-    echo "[deploy] rolled back; the deploy failed"
-    exit 1
+    if BOT_IMAGE="$PREVIOUS_IMAGE" replace_polling_bot; then
+      die "[deploy] rolled back; the deploy failed"
+    fi
+    die "$ROLLBACK_FAILED"
   fi
 fi
 
@@ -403,18 +424,22 @@ fi
 echo "[deploy] replacing the worker and the scheduler"
 if ! "${COMPOSE[@]}" up -d --no-deps --wait worker scheduler; then
   if [ -z "$PREVIOUS_IMAGE" ]; then
-    echo "[deploy] the worker or the scheduler did not become healthy and there is no previous image to go back to"
-    exit 1
+    die "[deploy] the worker or the scheduler did not become healthy and there is no previous image to go back to"
   fi
   echo "[deploy] the worker or the scheduler did not become healthy; going back to ${PREVIOUS_IMAGE}"
-  BOT_IMAGE="$PREVIOUS_IMAGE" "${COMPOSE[@]}" up -d --no-deps --wait worker scheduler
+  # Every step is tried even when an earlier one failed: the bot must not stay
+  # on the new image beside a worker that went back.
+  rollback_failed=0
+  BOT_IMAGE="$PREVIOUS_IMAGE" "${COMPOSE[@]}" up -d --no-deps --wait worker scheduler || rollback_failed=1
   if [ "$BOT_MODE" = "webhook" ]; then
-    roll_bot "$PREVIOUS_IMAGE"
+    roll_bot "$PREVIOUS_IMAGE" || rollback_failed=1
   else
-    BOT_IMAGE="$PREVIOUS_IMAGE" replace_polling_bot
+    BOT_IMAGE="$PREVIOUS_IMAGE" replace_polling_bot || rollback_failed=1
   fi
-  echo "[deploy] rolled back; the deploy failed"
-  exit 1
+  if [ "$rollback_failed" = 0 ]; then
+    die "[deploy] rolled back; the deploy failed"
+  fi
+  die "$ROLLBACK_FAILED"
 fi
 
 # Every BUILD=0 deploy leaves a tagged sha- image behind, and plain

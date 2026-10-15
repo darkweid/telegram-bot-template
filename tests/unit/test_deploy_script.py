@@ -155,7 +155,7 @@ def test_webhook_deploy_demands_a_certificate(tmp_path: Path) -> None:
     """Without one, nginx would serve port 80 only and Telegram, which calls
     HTTPS, would deliver nothing; the deploy stops before anything changes."""
     deploy = _deploy(tmp_path, WEBHOOK_ENV, STUB_FAIL_ON="NGINX_REQUIRE_TLS=1")
-    assert deploy.returncode != 0
+    assert deploy.returncode == 1
     assert deploy.calls == [
         f"{LOCAL_IMAGE} | {COMPOSE} run --rm --no-deps -e NGINX_REQUIRE_TLS=1 "
         "nginx nginx -t"
@@ -163,6 +163,8 @@ def test_webhook_deploy_demands_a_certificate(tmp_path: Path) -> None:
 
 
 def test_an_invalid_env_stops_the_deploy_before_docker(tmp_path: Path) -> None:
+    """A malformed .env caught after the build would leave a half-started stack;
+    the checker runs before the first docker call."""
     deploy = _deploy(tmp_path, {**POLLING_ENV, "BOT_TOKEN": "nope"})
     assert deploy.returncode == 1
     assert "BOT_TOKEN is not a token" in deploy.output
@@ -181,6 +183,7 @@ def test_build_1_refuses_a_pinned_image(tmp_path: Path) -> None:
     """A build would put this checkout's code under the pinned tag."""
     deploy = _deploy(tmp_path, POLLING_ENV, BUILD="1", BOT_IMAGE=PINNED_IMAGE)
     assert deploy.returncode == 1
+    assert "BUILD=1 builds the local image" in deploy.output
     assert deploy.calls == []
 
 
@@ -220,6 +223,8 @@ def test_a_failing_worker_takes_the_stack_back(tmp_path: Path) -> None:
 def test_a_failing_polling_bot_goes_back_to_the_previous_image(
     tmp_path: Path,
 ) -> None:
+    """Updates must keep being taken: a bot that never turns healthy gives way
+    to the image that was running, and the worker is left alone."""
     deploy = _deploy(
         tmp_path,
         POLLING_ENV,
@@ -281,3 +286,58 @@ def test_the_local_image_name_agrees_everywhere() -> None:
         assert services[name]["image"] == f"${{BOT_IMAGE:-{LOCAL_IMAGE}}}", name
     makefile = (PROJECT_ROOT / "Makefile").read_text(encoding="utf-8")
     assert re.search(rf"^LOCAL_BOT_IMAGE = {re.escape(LOCAL_IMAGE)}$", makefile, re.M)
+
+
+def test_a_failed_migration_exits_1_with_a_deploy_line(tmp_path: Path) -> None:
+    """Every failure must be visible to the CD job as exit 1 and say why, and no
+    new code may start behind a migration that did not apply."""
+    deploy = _deploy(tmp_path, POLLING_ENV, STUB_FAIL_ON="run --rm --no-deps migrate")
+    assert deploy.returncode == 1
+    assert "[deploy] the deploy failed (exit 1)" in deploy.output
+    assert not any(" bot" in call and "force-recreate" in call for call in deploy.calls)
+
+
+def test_a_failed_rollback_still_rolls_the_bot_back(tmp_path: Path) -> None:
+    """When the worker will not go back either, the bot must still leave the new
+    image, or two versions of the code keep running together."""
+    deploy = _deploy(
+        tmp_path,
+        POLLING_ENV,
+        STUB_BOT_ID="c1",
+        STUB_FAIL_ON="--wait worker scheduler",
+    )
+    assert deploy.returncode == 1
+    assert "[deploy] rollback failed" in deploy.output
+    assert deploy.calls[-1] == (
+        f"sha256:previous | {COMPOSE} up -d --no-deps --force-recreate --wait "
+        "--wait-timeout 120 bot"
+    )
+
+
+@pytest.mark.parametrize("variable", ["BUILD", "PRUNE"])
+def test_build_and_prune_accept_only_0_or_1(tmp_path: Path, variable: str) -> None:
+    """A typo such as PRUNE=yes would otherwise read as "off" or "on" by
+    accident of the comparison."""
+    deploy = _deploy(tmp_path, POLLING_ENV, **{variable: "yes"})
+    assert deploy.returncode == 1
+    assert f"{variable} must be 0 or 1" in deploy.output
+    assert deploy.calls == []
+
+
+@pytest.mark.parametrize(
+    ("fail_on", "message"),
+    [
+        ("force-recreate", "the bot did not become healthy and there is no previous"),
+        ("--wait worker scheduler", "the worker or the scheduler did not become"),
+    ],
+)
+def test_a_first_deploy_has_nothing_to_go_back_to(
+    tmp_path: Path, fail_on: str, message: str
+) -> None:
+    """With no earlier container there is no image to restore; the deploy must
+    say so instead of attempting a rollback to nothing."""
+    deploy = _deploy(tmp_path, POLLING_ENV, STUB_FAIL_ON=fail_on)
+    assert deploy.returncode == 1
+    assert message in deploy.output
+    assert "no previous image to go back to" in deploy.output
+    assert not any(call.startswith("sha256:") for call in deploy.calls)
