@@ -17,7 +17,7 @@ import yaml
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = PROJECT_ROOT / "infra/deploy/deploy.sh"
-LOCAL_IMAGE = "tg-bot-template-bot:latest"
+LOCAL_IMAGE = "telegram-bot-template-bot:latest"
 PINNED_IMAGE = "ghcr.io/owner/repo:sha-0123456789ab"
 COMPOSE = "compose --env-file .env -f infra/docker-compose.yml"
 TOKEN = "123456789:" + "A" * 35
@@ -370,7 +370,7 @@ def _container(
 ) -> dict[str, Any]:
     return {
         "id": f"{service}{number}",
-        "name": f"tg-bot-template-{service}-{number}",
+        "name": f"telegram-bot-template-{service}-{number}",
         "service": service,
         "image": image,
         "status": "running",
@@ -392,8 +392,8 @@ def _position(events: list[str], event: str) -> int:
     return events.index(event)
 
 
-NEW_BOT = "tg-bot-template-bot-2"
-OLD_BOT = "tg-bot-template-bot-1"
+NEW_BOT = "telegram-bot-template-bot-2"
+OLD_BOT = "telegram-bot-template-bot-1"
 
 
 def test_a_first_webhook_deploy_starts_nginx_and_routes_to_the_new_bot(
@@ -413,8 +413,8 @@ def test_a_first_webhook_deploy_starts_nginx_and_routes_to_the_new_bot(
         "write bot",
         "test",
         "reload bot",
-        f"start tg-bot-template-worker-1 {LOCAL_IMAGE}",
-        f"start tg-bot-template-scheduler-1 {LOCAL_IMAGE}",
+        f"start telegram-bot-template-worker-1 {LOCAL_IMAGE}",
+        f"start telegram-bot-template-scheduler-1 {LOCAL_IMAGE}",
     ]
     assert deploy.running("bot") == [OLD_BOT]
 
@@ -569,9 +569,9 @@ def test_containers_left_by_an_interrupted_roll_are_stopped_first(
     assert (
         _position(events, f"reload {NEW_BOT}")
         < _position(events, f"stop {OLD_BOT}")
-        < _position(events, f"start tg-bot-template-bot-3 {LOCAL_IMAGE}")
+        < _position(events, f"start telegram-bot-template-bot-3 {LOCAL_IMAGE}")
     )
-    assert deploy.running("bot") == ["tg-bot-template-bot-3"]
+    assert deploy.running("bot") == ["telegram-bot-template-bot-3"]
 
 
 def test_a_worker_with_no_container_rolls_the_stack_back(tmp_path: Path) -> None:
@@ -583,8 +583,8 @@ def test_a_worker_with_no_container_rolls_the_stack_back(tmp_path: Path) -> None
     assert deploy.returncode == 1
     assert "worker has no container 15s after it started" in deploy.output
     assert "rolled back; the deploy failed" in deploy.output
-    assert deploy.running("worker") == ["tg-bot-template-worker-1"]
-    assert deploy.running("bot") == ["tg-bot-template-bot-3"]
+    assert deploy.running("worker") == ["telegram-bot-template-worker-1"]
+    assert deploy.running("bot") == ["telegram-bot-template-bot-3"]
 
 
 def test_a_failing_worker_rolls_the_webhook_bot_back(tmp_path: Path) -> None:
@@ -597,25 +597,27 @@ def test_a_failing_worker_rolls_the_webhook_bot_back(tmp_path: Path) -> None:
     assert "worker is restarting 2 15s after it started" in deploy.output
     assert "rolled back; the deploy failed" in deploy.output
     rollback = deploy.events[
-        _position(deploy.events, "start tg-bot-template-worker-1 sha256:previous") :
+        _position(
+            deploy.events, "start telegram-bot-template-worker-1 sha256:previous"
+        ) :
     ]
     assert rollback == [
-        "start tg-bot-template-worker-1 sha256:previous",
-        "start tg-bot-template-scheduler-1 sha256:previous",
+        "start telegram-bot-template-worker-1 sha256:previous",
+        "start telegram-bot-template-scheduler-1 sha256:previous",
         f"write {NEW_BOT}",
         "test",
         f"reload {NEW_BOT}",
-        "start tg-bot-template-bot-3 sha256:previous",
-        "write tg-bot-template-bot-3",
+        "start telegram-bot-template-bot-3 sha256:previous",
+        "write telegram-bot-template-bot-3",
         "test",
-        "reload tg-bot-template-bot-3",
+        "reload telegram-bot-template-bot-3",
         f"stop {NEW_BOT}",
         f"remove {NEW_BOT}",
         "write bot",
         "test",
         "reload bot",
     ]
-    assert deploy.running("bot") == ["tg-bot-template-bot-3"]
+    assert deploy.running("bot") == ["telegram-bot-template-bot-3"]
     assert {
         container["image"]
         for container in deploy.state["containers"]

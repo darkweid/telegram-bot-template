@@ -8,11 +8,11 @@ services:
     build:
       context: ..
       dockerfile: infra/docker/dev.Dockerfile
-    image: tg-bot-template-bot-dev:latest
+    image: telegram-bot-template-bot-dev:latest
 
   bot:
     restart: "no"
-    image: tg-bot-template-bot-dev:latest
+    image: telegram-bot-template-bot-dev:latest
     # Local runs always poll: a webhook needs a public HTTPS URL. watchfiles
     # restarts the bot on every change under the watched packages; it stops it
     # with SIGINT, which the bot handles like SIGTERM. Migrations run first so
@@ -31,12 +31,12 @@ services:
   # The dev bot migrates on its own start from the mounted tree, so this
   # one-shot service only has to exit, and must not need the production image.
   migrate:
-    image: tg-bot-template-bot-dev:latest
+    image: telegram-bot-template-bot-dev:latest
     command: ["true"]
 
   worker:
     restart: "no"
-    image: tg-bot-template-bot-dev:latest
+    image: telegram-bot-template-bot-dev:latest
     # Restarted on any change under the watched packages, like the bot.
     command: >-
       watchfiles --filter python
@@ -57,7 +57,7 @@ services:
 
   scheduler:
     restart: "no"
-    image: tg-bot-template-bot-dev:latest
+    image: telegram-bot-template-bot-dev:latest
     volumes:
       - ..:/app
       - /app/.venv

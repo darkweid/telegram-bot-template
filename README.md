@@ -1,4 +1,4 @@
-# tg-bot-template
+# telegram-bot-template
 
 A template for Telegram bots on aiogram 3. One codebase runs in polling or
 webhook mode, chosen by a single setting. PostgreSQL stores the users and Redis
@@ -113,7 +113,7 @@ You need Docker with Compose v2, Python 3.13 for the tooling, and a bot token
 from [@BotFather](https://t.me/BotFather).
 
 ```bash
-git clone https://github.com/darkweid/tg-bot-template.git my-bot && cd my-bot
+git clone https://github.com/darkweid/telegram-bot-template.git my-bot && cd my-bot
 python3.13 -m venv .venv && source .venv/bin/activate
 pip install -r infra/requirements/dev.txt
 cp .env.example .env          # set BOT_TOKEN; the LLM stays off until LLM_PROVIDER is set

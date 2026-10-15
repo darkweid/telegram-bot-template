@@ -74,7 +74,7 @@ if [ "$BUILD" = "1" ] && [ -n "$BOT_IMAGE" ]; then
 fi
 # infra/docker-compose.yml's default for BOT_IMAGE, and LOCAL_BOT_IMAGE in the
 # Makefile (tests/unit/test_deploy_script.py).
-BOT_IMAGE="${BOT_IMAGE:-tg-bot-template-bot:latest}"
+BOT_IMAGE="${BOT_IMAGE:-telegram-bot-template-bot:latest}"
 # Consumed by infra/docker-compose.yml for bot-builder, migrate, bot, worker
 # and scheduler; the shell's value wins over .env.
 export BOT_IMAGE

@@ -34,7 +34,7 @@ import sys
 from typing import Any
 
 COMPOSE_PREFIX = ["compose", "--env-file", ".env", "-f", "infra/docker-compose.yml"]
-PROJECT = "tg-bot-template"
+PROJECT = "telegram-bot-template"
 PORT = "8080"
 
 

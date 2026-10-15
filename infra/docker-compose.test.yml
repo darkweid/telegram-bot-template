@@ -6,7 +6,7 @@
 # chain applies to a clean one.
 #
 # Its own compose project name is passed on the command line
-# (`-p tg-bot-template-test-$$`, see the Makefile), not written here, so two
+# (`-p telegram-bot-template-test-$$`, see the Makefile), not written here, so two
 # runs - a second developer, CI beside a local run - never share containers.
 # Nothing is named with `container_name:` either: that key bypasses the compose
 # project and registers the name globally on the daemon, which would reintroduce
@@ -21,7 +21,7 @@
 # The image is built from infra/postgres/Dockerfile - the same definition the
 # dev stack uses - so extensions and server settings match what the application
 # really runs against. It carries its own tag, though: sharing
-# `tg-bot-template-postgres:18` would let a build from either stack silently
+# `telegram-bot-template-postgres:18` would let a build from either stack silently
 # replace the image the other one is about to start.
 #
 # Redis runs the deployed image with no password and no persistence: the suite
@@ -33,7 +33,7 @@ services:
     build:
       context: ..
       dockerfile: infra/postgres/Dockerfile
-    image: tg-bot-template-postgres-test:18
+    image: telegram-bot-template-postgres-test:18
     environment:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}

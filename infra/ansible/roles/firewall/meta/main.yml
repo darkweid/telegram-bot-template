@@ -1,6 +1,6 @@
 ---
 galaxy_info:
-  author: tg-bot-template
+  author: telegram-bot-template
   description: ufw for host listeners, DOCKER-USER for published container ports
   license: MIT
   min_ansible_version: "2.17"
