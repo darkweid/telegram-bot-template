@@ -40,7 +40,9 @@ def test_the_healthcheck_never_loads_aiogram() -> None:
             "import src.main.heartbeat, sys; print('aiogram' in sys.modules)",
         ],
         cwd=root,
-        env={**os.environ, "TESTING": "true"},
+        # Built from scratch: a variable exported in the developer's shell must
+        # not decide what the import loads.
+        env={"PATH": os.environ["PATH"]},
         capture_output=True,
         text=True,
         check=True,
