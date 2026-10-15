@@ -1,6 +1,9 @@
+import asyncio
+from typing import Any
 from unittest.mock import AsyncMock
 
-from aiogram.methods import SendMessage
+from aiogram import Bot
+from aiogram.methods import SendMessage, TelegramMethod
 from pydantic import BaseModel
 import pytest
 
@@ -56,9 +59,29 @@ def _alerter(session: FakeTelegramSession | None = None) -> DeveloperAlerter:
 
 def _client(
     session: FakeTelegramSession | None = None,
+    alerter: DeveloperAlerter | None = None,
 ) -> tuple[FallbackLLMClient, FakeLLMClient, FakeLLMClient]:
     primary, fallback = FakeLLMClient(), FakeLLMClient()
-    return FallbackLLMClient(primary, fallback, _alerter(session)), primary, fallback
+    client = FallbackLLMClient(primary, fallback, alerter or _alerter(session))
+    return client, primary, fallback
+
+
+class _StalledTelegramSession(FakeTelegramSession):
+    """Holds every message until `release` is set: an alert stuck in flood
+    control or on a slow network."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.release = asyncio.Event()
+
+    async def make_request(
+        self,
+        bot: Bot,
+        method: TelegramMethod[Any],
+        timeout: int | None = None,  # noqa: ASYNC109 - signature fixed by BaseSession
+    ) -> Any:
+        await self.release.wait()
+        return await super().make_request(bot, method, timeout)
 
 
 @pytest.mark.parametrize("error_type", [LLMUnavailable, LLMTimeout, LLMRateLimited])
@@ -112,17 +135,39 @@ async def test_developers_hear_of_a_switch_once_per_cooldown() -> None:
     """During an outage every call switches: one alert per cooldown is news,
     one per call is noise."""
     session = FakeTelegramSession()
-    client, primary, fallback = _client(session)
+    alerter = _alerter(session)
+    client, primary, fallback = _client(alerter=alerter)
     context = UpdateContext(update_id=1, update_type="message", user_id=42, chat_id=42)
     with bind_update_context(context):
         for _ in range(3):
             primary.queue(LLMUnavailable("down", provider=LLMProviderName.ANTHROPIC))
             await client.complete(REQUEST)
+    await alerter.drain()
     assert len(fallback.calls) == 3
     [alert] = session.sent(SendMessage)
     assert "LLMUnavailable" in alert.text
     assert "llm anthropic" in alert.text
     assert "user 42" in alert.text
+
+
+async def test_a_slow_alert_does_not_hold_up_the_fallbacks_answer() -> None:
+    """The user is already waiting out the primary's timeout and retries; an
+    alert stuck in flood control must not add to it."""
+    session = _StalledTelegramSession()
+    alerter = _alerter(session)
+    client, primary, fallback = _client(alerter=alerter)
+    primary.queue(LLMUnavailable("down", provider=LLMProviderName.ANTHROPIC))
+    answer = _fallback_answer()
+    fallback.queue(answer)
+
+    async with asyncio.timeout(1):
+        assert await client.complete(REQUEST) is answer
+
+    assert session.sent(SendMessage) == []
+    session.release.set()
+    await alerter.drain()
+    [alert] = session.sent(SendMessage)
+    assert "LLMUnavailable" in alert.text
 
 
 async def test_when_both_fail_the_fallbacks_error_is_raised() -> None:

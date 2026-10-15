@@ -41,7 +41,7 @@ class FallbackLLMClient:
         try:
             return await self.primary.complete(request)
         except _SWITCH_ON as error:
-            await self._switching(request, error)
+            self._switching(request, error)
         return await self.fallback.complete(replace(request, model=None))
 
     async def structured[T: BaseModel](
@@ -50,10 +50,10 @@ class FallbackLLMClient:
         try:
             return await self.primary.structured(request, output)
         except _SWITCH_ON as error:
-            await self._switching(request, error)
+            self._switching(request, error)
         return await self.fallback.structured(replace(request, model=None), output)
 
-    async def _switching(self, request: LLMRequest, error: LLMError) -> None:
+    def _switching(self, request: LLMRequest, error: LLMError) -> None:
         provider = error.provider or "primary"
         logger.warning(
             "LLM %s failed for %s with %s, using the fallback",
@@ -62,9 +62,10 @@ class FallbackLLMClient:
             type(error).__name__,
         )
         context = get_update_context()
-        # Sent before the fallback is tried, so it leaves even when the
-        # fallback fails as well.
-        await self._alerter.alert_error(
+        # Queued before the fallback is tried, so it leaves even when the
+        # fallback fails as well, and sent in the background, so the user's
+        # answer does not wait for it.
+        self._alerter.alert_error_soon(
             Alert(
                 reportable(error),
                 origin=f"llm {provider}",
