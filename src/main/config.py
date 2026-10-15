@@ -1,7 +1,7 @@
 from functools import lru_cache
 import os
 import re
-from typing import Literal, Self
+from typing import Annotated, Literal, Self
 from urllib.parse import quote, urlsplit
 
 from pydantic import (
@@ -12,7 +12,7 @@ from pydantic import (
     field_validator,
     model_validator,
 )
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 from src.core.i18n import SUPPORTED_LOCALES
 
@@ -21,12 +21,32 @@ class RedisConfig(BaseSettings):
     REDIS_HOST: str
     REDIS_PORT: int = Field(ge=1, le=65535)
     REDIS_PASSWORD: str
-    REDIS_DATABASE: str
-    REDIS_FSM_DATABASE: str = "2"
+    REDIS_DATABASE: int = Field(ge=0)
+    REDIS_FSM_DATABASE: int = Field(2, ge=0)
+    REDIS_TASKS_DATABASE: int = Field(1, ge=0)
 
     model_config = SettingsConfigDict(extra="ignore")
 
-    def _dsn(self, database: str) -> str:
+    @model_validator(mode="after")
+    def each_role_has_its_own_database(self) -> Self:
+        # Two roles on one database mix their keys: a cache flush takes the
+        # task queue or the FSM state with it. Compared as numbers, so "01"
+        # and "1" are caught as the one database they are.
+        databases = {
+            "REDIS_DATABASE": self.REDIS_DATABASE,
+            "REDIS_FSM_DATABASE": self.REDIS_FSM_DATABASE,
+            "REDIS_TASKS_DATABASE": self.REDIS_TASKS_DATABASE,
+        }
+        names = list(databases)
+        for index, name in enumerate(names):
+            for other in names[index + 1 :]:
+                if databases[name] == databases[other]:
+                    raise ValueError(
+                        f"{name} and {other} must differ, both are {databases[name]}"
+                    )
+        return self
+
+    def _dsn(self, database: int) -> str:
         # quote(safe="") because generated passwords routinely contain @ / % :
         # and every URL parser downstream would silently misread the DSN.
         return (
@@ -44,6 +64,32 @@ class RedisConfig(BaseSettings):
     @property
     def fsm_dsn(self) -> str:
         return self._dsn(self.REDIS_FSM_DATABASE)
+
+    @property
+    def tasks_dsn(self) -> str:
+        return self._dsn(self.REDIS_TASKS_DATABASE)
+
+
+class CacheConfig(BaseSettings):
+    # Off: every read misses and nothing is written; the bot keeps working,
+    # every update just reads the database.
+    CACHE_ENABLED: bool = True
+    CACHE_DEFAULT_TTL: int = Field(60, gt=0)
+    # How long a namespace's version counter lives. A cached value never
+    # outlives it: a TTL above it is rejected when the value is written.
+    CACHE_VERSION_TTL: int = Field(604_800, gt=0)
+    CACHE_KEY_PREFIX: str = "cache"
+
+    model_config = SettingsConfigDict(extra="ignore")
+
+    @model_validator(mode="after")
+    def default_ttl_fits_the_version_ttl(self) -> Self:
+        # Checked at startup: otherwise every write without an explicit TTL
+        # raises when the update runs, and the cache fails every update that
+        # touches it.
+        if self.CACHE_DEFAULT_TTL > self.CACHE_VERSION_TTL:
+            raise ValueError("CACHE_DEFAULT_TTL must not exceed CACHE_VERSION_TTL")
+        return self
 
 
 class SentryConfig(BaseSettings):
@@ -115,6 +161,9 @@ class PostgresConfig(BaseSettings):
 class AppConfig(BaseSettings):
     PROJECT_NAME: str
     VERSION: str
+    # Baked into the image at build time (Dockerfile ARG, set by make and CI);
+    # shown by /status and /health.
+    COMMIT_SHA: str = "unknown"
     DEBUG: bool = False
     TESTING: bool = False
     # Read by loggers/ straight from the environment at import time as well, so
@@ -137,13 +186,59 @@ class BotConfig(BaseSettings):
     # A user row is rewritten when the Telegram profile changes, or when
     # last_seen_at is older than this; every other update reads it and moves on.
     USER_TOUCH_INTERVAL_SECONDS: int = Field(300, gt=0)
+    # How long a user's snapshot answers updates from the cache. A language
+    # change, a ban and a reachability change drop it at once; anything else
+    # that edits the row by hand shows up after at most this long.
+    USER_CACHE_TTL_SECONDS: int = Field(300, gt=0)
     # Flood-wait retries per Bot API call (src/core/telegram/session.py).
     TELEGRAM_RETRY_ATTEMPTS: int = Field(3, ge=0, le=10)
     # How long a stopping bot waits for updates already being handled. Keep it
     # below the container's stop_grace_period, or Docker kills the process first.
     SHUTDOWN_TIMEOUT_SECONDS: float = Field(20, gt=0)
+    # Telegram user ids, comma-separated. Admins get the admin commands and
+    # menu, developers the developer ones; both skip throttling and bans.
+    # NoDecode: without it pydantic-settings expects a JSON list here.
+    ADMIN_IDS: Annotated[frozenset[int], NoDecode] = frozenset()
+    DEVELOPER_IDS: Annotated[frozenset[int], NoDecode] = frozenset()
+    # Where developer alerts go: a group or channel id. Empty sends each alert
+    # to every DEVELOPER_IDS member in private.
+    DEV_ALERT_CHAT_ID: int | None = None
+    # The same failure (type, origin, place) is alerted once per this many seconds.
+    ALERT_COOLDOWN_SECONDS: int = Field(300, gt=0)
+    # Message every admin when a user starts the bot for the first time. Off,
+    # the notice task still runs and sends nothing.
+    NOTIFY_ADMINS_ON_NEW_USER: bool = True
 
     model_config = SettingsConfigDict(extra="ignore", hide_input_in_errors=True)
+
+    @field_validator("DEV_ALERT_CHAT_ID", mode="before")
+    @classmethod
+    def empty_alert_chat_is_none(cls, value: object) -> object:
+        # `DEV_ALERT_CHAT_ID=` in .env means "not set", not an invalid int.
+        return None if value == "" else value
+
+    @field_validator("DEV_ALERT_CHAT_ID")
+    @classmethod
+    def require_an_alert_chat(cls, value: int | None) -> int | None:
+        # 0 is no chat: Telegram would refuse every alert, and they are only logged.
+        if value == 0:
+            raise ValueError("DEV_ALERT_CHAT_ID must be a chat id or empty, not 0")
+        return value
+
+    @field_validator("ADMIN_IDS", "DEVELOPER_IDS", mode="before")
+    @classmethod
+    def split_user_ids(cls, value: object) -> object:
+        if not isinstance(value, str):
+            return value
+        return frozenset(int(part) for part in value.split(",") if part.strip())
+
+    @field_validator("ADMIN_IDS", "DEVELOPER_IDS")
+    @classmethod
+    def require_user_ids(cls, value: frozenset[int]) -> frozenset[int]:
+        # User ids are positive; a negative one is a group or a channel.
+        if any(user_id <= 0 for user_id in value):
+            raise ValueError("role ids must be Telegram user ids (positive integers)")
+        return value
 
     @field_validator("BOT_TOKEN")
     @classmethod
@@ -161,6 +256,29 @@ class BotConfig(BaseSettings):
                 f"DEFAULT_LOCALE must be one of {', '.join(SUPPORTED_LOCALES)}"
             )
         return locale
+
+
+class ThrottlingConfig(BaseSettings):
+    # Handler calls per user per window (src/core/telegram/middlewares/throttling.py).
+    # Admins and developers are never limited.
+    THROTTLE_DEFAULT_LIMIT: int = Field(20, ge=1)
+    THROTTLE_DEFAULT_WINDOW_SECONDS: int = Field(60, ge=1)
+    # Handlers flagged throttle="llm" call a paid model.
+    THROTTLE_LLM_LIMIT: int = Field(5, ge=1)
+    THROTTLE_LLM_WINDOW_SECONDS: int = Field(60, ge=1)
+
+    model_config = SettingsConfigDict(extra="ignore")
+
+
+class BroadcastConfig(BaseSettings):
+    # Copies a broadcast sends per second. Telegram allows about 30 messages a
+    # second to different users; closer to it every copy meets flood control.
+    BROADCAST_RATE_PER_SECOND: float = Field(25, gt=0, le=30)
+    # Recipients per batch and checkpoint. A worker restart may send up to this
+    # many messages a second time; a large value also makes a stop slower.
+    BROADCAST_CHECKPOINT_EVERY: int = Field(50, ge=1, le=1000)
+
+    model_config = SettingsConfigDict(extra="ignore")
 
 
 class WebServerConfig(BaseSettings):
@@ -221,16 +339,45 @@ class WebhookConfig(BaseSettings):
         return self.WEBHOOK_BASE_URL.rstrip("/") + self.WEBHOOK_PATH
 
 
+class HttpConfig(BaseSettings):
+    # Sent on every outgoing request (src/core/http). Blank derives
+    # "<project-name>/<VERSION>" from PROJECT_NAME and VERSION. Many APIs
+    # behind a WAF refuse the library's default agent outright.
+    HTTP_USER_AGENT: str = Field("", max_length=256)
+
+    model_config = SettingsConfigDict(extra="ignore")
+
+    @field_validator("HTTP_USER_AGENT")
+    @classmethod
+    def reject_unprintable(cls, value: str) -> str:
+        # A control character in a header is a request-splitting vector.
+        if any(not " " <= character <= "~" for character in value):
+            raise ValueError("HTTP_USER_AGENT must be printable ASCII")
+        return value.strip()
+
+
 class Config(BaseModel):
     app: AppConfig
     bot: BotConfig
+    throttling: ThrottlingConfig
+    broadcast: BroadcastConfig
     web_server: WebServerConfig
     webhook: WebhookConfig
     postgres: PostgresConfig
     redis: RedisConfig
+    cache: CacheConfig
     sentry: SentryConfig
+    http: HttpConfig
 
     model_config = ConfigDict(extra="ignore")
+
+    @model_validator(mode="after")
+    def user_cache_ttl_fits_the_version_ttl(self) -> Self:
+        # Checked at startup: the cache refuses to write a value that outlives
+        # its version counter, which would fail every update that caches a user.
+        if self.bot.USER_CACHE_TTL_SECONDS > self.cache.CACHE_VERSION_TTL:
+            raise ValueError("USER_CACHE_TTL_SECONDS must not exceed CACHE_VERSION_TTL")
+        return self
 
     @model_validator(mode="after")
     def require_webhook_settings(self) -> Self:
@@ -269,9 +416,13 @@ def get_settings() -> Config:
     return Config(
         app=AppConfig(_env_file=env_file),
         bot=BotConfig(_env_file=env_file),
+        throttling=ThrottlingConfig(_env_file=env_file),
+        broadcast=BroadcastConfig(_env_file=env_file),
         web_server=WebServerConfig(_env_file=env_file),
         webhook=WebhookConfig(_env_file=env_file),
         postgres=PostgresConfig(_env_file=env_file),
         redis=RedisConfig(_env_file=env_file),
+        cache=CacheConfig(_env_file=env_file),
         sentry=SentryConfig(_env_file=env_file),
+        http=HttpConfig(_env_file=env_file),
     )

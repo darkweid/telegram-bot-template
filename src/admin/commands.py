@@ -1,0 +1,10 @@
+from src.core.i18n import N_
+from src.core.telegram.commands import BotCommandSpec
+
+# Shown in the menu of every id in ADMIN_IDS, after the user commands.
+ADMIN_COMMANDS: tuple[BotCommandSpec, ...] = (
+    BotCommandSpec("ban", N_("Ban a user")),
+    BotCommandSpec("unban", N_("Unban a user")),
+    BotCommandSpec("stats", N_("Show user statistics")),
+    BotCommandSpec("broadcast", N_("Send a message to every user")),
+)

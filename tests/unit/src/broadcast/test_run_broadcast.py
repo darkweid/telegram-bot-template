@@ -1,0 +1,913 @@
+import asyncio
+from dataclasses import dataclass, field
+from datetime import UTC, datetime
+from types import SimpleNamespace
+from typing import Any
+from unittest.mock import AsyncMock
+from uuid import UUID
+
+from aiogram.exceptions import (
+    TelegramBadRequest,
+    TelegramForbiddenError,
+    TelegramNetworkError,
+    TelegramNotFound,
+    TelegramRetryAfter,
+    TelegramServerError,
+)
+from aiogram.methods import CopyMessage, EditMessageText, SendMessage
+from aiogram.types import InlineKeyboardMarkup
+from aiogram.utils.i18n import I18n
+from annotated_types import Le
+import pytest
+
+from src.broadcast.callbacks import BroadcastStopCallback
+from src.broadcast.enums import BroadcastStatus
+from src.broadcast.models import Broadcast
+from src.broadcast.repositories import BroadcastRepository
+from src.broadcast.schemas import Checkpoint
+from src.broadcast.services import STALE_AFTER
+from src.broadcast.usecases import run_broadcast as run_module
+from src.broadcast.usecases.run_broadcast import RunBroadcastUseCase
+from src.core.limiter.pacer import Pacer
+from src.core.telegram.session import MAX_RETRY_SLEEP_SECONDS
+from src.main.config import BotConfig, Config
+from src.user.repositories import UserRepository
+from tests.factories.users import build_user_model
+from tests.fakes.db import FakeSessionFactory
+from tests.fakes.telegram import FakeTelegramSession, make_bot
+
+BROADCAST_ID = UUID("01900000-0000-7000-8000-000000000001")
+ADMIN = 1
+SOURCE_MESSAGE_ID = 7
+PROGRESS_MESSAGE_ID = 8
+RECIPIENTS = [10, 20, 30]
+CREATED_AT = datetime(2026, 1, 1, 12, tzinfo=UTC)
+COPY = CopyMessage(chat_id=10, from_chat_id=ADMIN, message_id=SOURCE_MESSAGE_ID)
+FINISHED = "Broadcast finished: 3 of 3\nSent: 3\nUnreachable: 0\nFailed: 0"
+
+
+def _broadcast(**overrides: Any) -> Broadcast:
+    values: dict[str, Any] = {
+        "id": BROADCAST_ID,
+        "admin_id": ADMIN,
+        "source_chat_id": ADMIN,
+        "source_message_id": SOURCE_MESSAGE_ID,
+        "progress_message_id": PROGRESS_MESSAGE_ID,
+        "status": BroadcastStatus.RUNNING,
+        "total": len(RECIPIENTS),
+        "sent": 0,
+        "failed": 0,
+        "unreachable": 0,
+        "cursor_user_id": 0,
+        "stop_requested": False,
+        "created_at": CREATED_AT,
+    }
+    return Broadcast(**(values | overrides))
+
+
+async def _recipients(
+    session: object, *, after: int, limit: int, registered_by: datetime
+) -> list[int]:
+    assert registered_by == CREATED_AT
+    return [user_id for user_id in RECIPIENTS if user_id > after][:limit]
+
+
+@dataclass
+class _Clock:
+    """Stands in for the run's clock and sleep: a sleep moves the clock on at
+    once and is logged, together with every checkpoint and how many copies
+    had gone out by then."""
+
+    telegram: FakeTelegramSession
+    now: float = 0.0
+    events: list[tuple[str, float]] = field(default_factory=list)
+
+    def monotonic(self) -> float:
+        return self.now
+
+    async def sleep(self, seconds: float) -> None:
+        self.events.append(("sleep", seconds))
+        self.now += seconds
+
+    def checkpointed(self, *args: object, **kwargs: object) -> None:
+        self.events.append(("checkpoint", len(self.telegram.sent(CopyMessage))))
+
+
+def _install_clock(
+    monkeypatch: pytest.MonkeyPatch,
+    telegram: FakeTelegramSession,
+    broadcasts: AsyncMock,
+    lease: bool | None,
+) -> _Clock:
+    """`lease` is what every checkpoint answers: False goes on, True asks to
+    stop, None means the lease was lost."""
+    clock = _Clock(telegram)
+    monkeypatch.setattr(run_module, "time", SimpleNamespace(monotonic=clock.monotonic))
+    monkeypatch.setattr(run_module, "asyncio", SimpleNamespace(sleep=clock.sleep))
+
+    def save_checkpoint(*args: object, **kwargs: object) -> bool | None:
+        clock.checkpointed()
+        return lease
+
+    broadcasts.save_checkpoint.side_effect = save_checkpoint
+    return clock
+
+
+def _broadcasts() -> AsyncMock:
+    broadcasts = AsyncMock(spec=BroadcastRepository)
+    broadcasts.claim_run.return_value = _broadcast()
+    broadcasts.save_checkpoint.return_value = False
+    broadcasts.finish.return_value = True
+    broadcasts.claim_report.return_value = None
+    broadcasts.mark_reported.return_value = True
+    return broadcasts
+
+
+def _users(locale: str | None = None) -> AsyncMock:
+    users = AsyncMock(spec=UserRepository)
+    users.get_single.return_value = build_user_model(
+        id=ADMIN, language_code="en", locale=locale
+    )
+    users.get_recipient_ids.side_effect = _recipients
+    return users
+
+
+def _run(
+    settings: Config,
+    i18n: I18n,
+    telegram: FakeTelegramSession,
+    broadcasts: AsyncMock,
+    users: AsyncMock | None = None,
+) -> RunBroadcastUseCase:
+    return RunBroadcastUseCase(
+        FakeSessionFactory(),
+        broadcasts,
+        users or _users(),
+        make_bot(telegram),
+        i18n,
+        Pacer(10_000),
+        settings.broadcast.model_copy(update={"BROADCAST_CHECKPOINT_EVERY": 2}),
+        settings.bot,
+    )
+
+
+def _copied_to(telegram: FakeTelegramSession) -> list[int | str]:
+    return [copy.chat_id for copy in telegram.sent(CopyMessage)]
+
+
+def _finished_with(broadcasts: AsyncMock) -> tuple[Checkpoint, BroadcastStatus]:
+    kwargs = broadcasts.finish.await_args.kwargs
+    return kwargs["checkpoint"], kwargs["status"]
+
+
+async def test_a_broadcast_reaches_every_recipient_and_reports(
+    settings: Config, i18n: I18n
+) -> None:
+    telegram = FakeTelegramSession()
+    broadcasts = _broadcasts()
+    status = await _run(settings, i18n, telegram, broadcasts).execute(BROADCAST_ID)
+    assert status == BroadcastStatus.COMPLETED
+    assert [
+        (copy.chat_id, copy.from_chat_id, copy.message_id)
+        for copy in telegram.sent(CopyMessage)
+    ] == [(10, ADMIN, 7), (20, ADMIN, 7), (30, ADMIN, 7)]
+    assert _finished_with(broadcasts) == (
+        Checkpoint(cursor_user_id=30, sent=3, failed=0, unreachable=0),
+        BroadcastStatus.COMPLETED,
+    )
+    [report] = telegram.sent(SendMessage)
+    assert (report.chat_id, report.text) == (ADMIN, FINISHED)
+
+
+async def test_a_user_who_turned_reachable_mid_run_never_reads_as_over_the_total(
+    settings: Config, i18n: I18n, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The total is counted at start and the walk picks up a user unblocked
+    since: "3 of 2" in the progress or the report would read as a bug."""
+    monkeypatch.setattr(run_module, "PROGRESS_EDIT_INTERVAL_SECONDS", 0)
+    telegram = FakeTelegramSession()
+    broadcasts = _broadcasts()
+    broadcasts.claim_run.return_value = _broadcast(total=2)
+    await _run(settings, i18n, telegram, broadcasts).execute(BROADCAST_ID)
+    titles = [edit.text.split("\n")[0] for edit in telegram.sent(EditMessageText)]
+    assert titles == [
+        "Broadcast in progress: 0 of 2",
+        "Broadcast in progress: 1 of 2",
+        "Broadcast in progress: 2 of 2",
+        "Broadcast in progress: 3 of 3",
+        "Broadcast finished: 3 of 3",
+    ]
+    [report] = telegram.sent(SendMessage)
+    assert report.text == FINISHED
+
+
+async def test_a_user_who_left_mid_run_is_dropped_from_the_final_total(
+    settings: Config, i18n: I18n
+) -> None:
+    """A user blocked or banned since the start is skipped by the walk; a
+    completed broadcast reading "3 of 5" would look cut short."""
+    telegram = FakeTelegramSession()
+    broadcasts = _broadcasts()
+    broadcasts.claim_run.return_value = _broadcast(total=5)
+    status = await _run(settings, i18n, telegram, broadcasts).execute(BROADCAST_ID)
+    assert status == BroadcastStatus.COMPLETED
+    [report] = telegram.sent(SendMessage)
+    assert report.text == FINISHED
+
+
+async def test_progress_is_checkpointed_after_every_batch(
+    settings: Config, i18n: I18n
+) -> None:
+    """The checkpoint is where a restarted run continues; between two of them
+    at most one batch is sent twice."""
+    broadcasts = _broadcasts()
+    await _run(settings, i18n, FakeTelegramSession(), broadcasts).execute(BROADCAST_ID)
+    cursors = [
+        call.kwargs["checkpoint"].cursor_user_id
+        for call in broadcasts.save_checkpoint.await_args_list
+    ]
+    assert cursors == [20, 30]
+
+
+async def test_a_slow_batch_still_renews_the_lease(
+    settings: Config, i18n: I18n, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A batch slowed by flood control can outlast STALE_AFTER; without a
+    checkpoint inside it the resume task would start a second run."""
+    monkeypatch.setattr(run_module, "CHECKPOINT_INTERVAL_SECONDS", 0)
+    broadcasts = _broadcasts()
+    await _run(settings, i18n, FakeTelegramSession(), broadcasts).execute(BROADCAST_ID)
+    cursors = [
+        call.kwargs["checkpoint"].cursor_user_id
+        for call in broadcasts.save_checkpoint.await_args_list
+    ]
+    assert cursors == [10, 20, 20, 30, 30]
+
+
+async def test_a_stop_takes_effect_at_a_checkpoint_inside_a_batch(
+    settings: Config, i18n: I18n, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A batch can take minutes under flood control; the admin's Stop must not
+    wait for its end."""
+    monkeypatch.setattr(run_module, "CHECKPOINT_INTERVAL_SECONDS", 0)
+    telegram = FakeTelegramSession()
+    broadcasts = _broadcasts()
+    broadcasts.save_checkpoint.return_value = True
+    status = await _run(settings, i18n, telegram, broadcasts).execute(BROADCAST_ID)
+    assert status == BroadcastStatus.CANCELLED
+    assert _copied_to(telegram) == [10]
+    assert _finished_with(broadcasts)[0].cursor_user_id == 10
+
+
+async def test_a_refused_recipient_is_counted_and_the_rest_still_get_it(
+    settings: Config, i18n: I18n
+) -> None:
+    telegram = FakeTelegramSession()
+    telegram.queue(
+        CopyMessage,
+        TelegramForbiddenError(
+            method=COPY, message="Forbidden: bot was blocked by the user"
+        ),
+    )
+    telegram.queue(
+        CopyMessage,
+        TelegramBadRequest(method=COPY, message="Bad Request: chat not found"),
+    )
+    broadcasts = _broadcasts()
+    status = await _run(settings, i18n, telegram, broadcasts).execute(BROADCAST_ID)
+    assert status == BroadcastStatus.COMPLETED
+    assert _copied_to(telegram) == [10, 20, 30]
+    assert _finished_with(broadcasts)[0] == Checkpoint(
+        cursor_user_id=30, sent=1, failed=1, unreachable=1
+    )
+
+
+def _forbidden() -> TelegramForbiddenError:
+    return TelegramForbiddenError(
+        method=COPY, message="Forbidden: bot was blocked by the user"
+    )
+
+
+async def test_an_unreachable_recipient_is_checkpointed_before_the_next_copy(
+    settings: Config, i18n: I18n
+) -> None:
+    """The user is marked unreachable at once and a resumed run walks only
+    reachable users, so the outcome must be saved before anything else can
+    stop the run, or the report never counts it."""
+    telegram = FakeTelegramSession()
+    telegram.queue(CopyMessage, _forbidden())
+    broadcasts = _broadcasts()
+    saved: list[tuple[int, Checkpoint]] = []
+
+    def save_checkpoint(*args: object, **kwargs: Any) -> bool:
+        saved.append((len(telegram.sent(CopyMessage)), kwargs["checkpoint"]))
+        return False
+
+    broadcasts.save_checkpoint.side_effect = save_checkpoint
+    await _run(settings, i18n, telegram, broadcasts).execute(BROADCAST_ID)
+    assert saved[0] == (
+        1,
+        Checkpoint(cursor_user_id=10, sent=0, failed=0, unreachable=1),
+    )
+
+
+async def test_an_unreachable_recipient_is_checkpointed_before_the_progress_edit(
+    settings: Config, i18n: I18n, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A worker stopped during the progress edit would otherwise lose the
+    outcome: the user is already marked unreachable and never walked again."""
+    monkeypatch.setattr(run_module, "PROGRESS_EDIT_INTERVAL_SECONDS", 0)
+    telegram = FakeTelegramSession()
+    telegram.queue(CopyMessage, _forbidden())
+    broadcasts = _broadcasts()
+    last_call_at_save: list[type[object]] = []
+
+    def save_checkpoint(*args: object, **kwargs: Any) -> bool:
+        last_call_at_save.append(type(telegram.requests[-1]))
+        return False
+
+    broadcasts.save_checkpoint.side_effect = save_checkpoint
+    await _run(settings, i18n, telegram, broadcasts).execute(BROADCAST_ID)
+    assert last_call_at_save[0] is CopyMessage
+
+
+async def test_a_resumed_run_keeps_the_unreachable_outcome_in_its_report(
+    settings: Config, i18n: I18n
+) -> None:
+    """A worker stopped right after the checkpoint: the resumed run never
+    meets the unreachable user again, yet the report must count them."""
+    telegram = FakeTelegramSession()
+    telegram.queue(CopyMessage, _forbidden())
+    broadcasts = _broadcasts()
+    saved: list[Checkpoint] = []
+
+    def stop_the_worker(*args: object, **kwargs: Any) -> bool:
+        saved.append(kwargs["checkpoint"])
+        raise asyncio.CancelledError
+
+    broadcasts.save_checkpoint.side_effect = stop_the_worker
+    with pytest.raises(asyncio.CancelledError):
+        await _run(settings, i18n, telegram, broadcasts).execute(BROADCAST_ID)
+    [stored] = saved
+
+    resumed_telegram = FakeTelegramSession()
+    resumed = _broadcasts()
+    resumed.claim_run.return_value = _broadcast(
+        cursor_user_id=stored.cursor_user_id,
+        sent=stored.sent,
+        failed=stored.failed,
+        unreachable=stored.unreachable,
+    )
+    status = await _run(settings, i18n, resumed_telegram, resumed).execute(BROADCAST_ID)
+    assert status == BroadcastStatus.COMPLETED
+    assert _copied_to(resumed_telegram) == [20, 30]
+    [report] = resumed_telegram.sent(SendMessage)
+    assert report.text == (
+        "Broadcast finished: 3 of 3\nSent: 2\nUnreachable: 1\nFailed: 0"
+    )
+
+
+async def test_flood_control_is_waited_out_and_the_same_user_retried(
+    settings: Config, i18n: I18n
+) -> None:
+    telegram = FakeTelegramSession()
+    telegram.queue(
+        CopyMessage,
+        TelegramRetryAfter(
+            method=COPY, message="Flood control exceeded", retry_after=0
+        ),
+    )
+    broadcasts = _broadcasts()
+    await _run(settings, i18n, telegram, broadcasts).execute(BROADCAST_ID)
+    assert _copied_to(telegram) == [10, 10, 20, 30]
+    assert _finished_with(broadcasts)[0].sent == 3
+
+
+async def test_a_stop_cuts_a_long_flood_wait_short(
+    settings: Config, i18n: I18n
+) -> None:
+    """Telegram may ask for an hour of silence; a Stop pressed meanwhile acts
+    at the next lease renewal, and the user who met the flood is not counted."""
+    telegram = FakeTelegramSession()
+    telegram.queue(
+        CopyMessage,
+        TelegramRetryAfter(
+            method=COPY, message="Flood control exceeded", retry_after=3600
+        ),
+    )
+    broadcasts = _broadcasts()
+    broadcasts.save_checkpoint.return_value = True
+    status = await _run(settings, i18n, telegram, broadcasts).execute(BROADCAST_ID)
+    assert status == BroadcastStatus.CANCELLED
+    assert _copied_to(telegram) == [10]
+    assert _finished_with(broadcasts)[0] == Checkpoint(
+        cursor_user_id=0, sent=0, failed=0, unreachable=0
+    )
+
+
+async def test_a_network_blip_is_retried(
+    settings: Config, i18n: I18n, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A second of lost connectivity must not end a broadcast to the whole
+    user base."""
+    monkeypatch.setattr(run_module, "TRANSIENT_RETRY_DELAYS_SECONDS", (0, 0, 0, 0))
+    telegram = FakeTelegramSession()
+    telegram.queue(CopyMessage, TelegramNetworkError(method=COPY, message="timeout"))
+    broadcasts = _broadcasts()
+    status = await _run(settings, i18n, telegram, broadcasts).execute(BROADCAST_ID)
+    assert status == BroadcastStatus.COMPLETED
+    assert _copied_to(telegram) == [10, 10, 20, 30]
+
+
+async def test_a_lasting_failure_marks_the_broadcast_failed_and_raises(
+    settings: Config, i18n: I18n, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The error leaves the task, so the task middleware alerts developers;
+    the admin learns from the report that it stopped."""
+    monkeypatch.setattr(run_module, "TRANSIENT_RETRY_DELAYS_SECONDS", (0, 0, 0, 0))
+    telegram = FakeTelegramSession()
+    for _ in range(5):
+        telegram.queue(
+            CopyMessage, TelegramNetworkError(method=COPY, message="timeout")
+        )
+    broadcasts = _broadcasts()
+    with pytest.raises(TelegramNetworkError):
+        await _run(settings, i18n, telegram, broadcasts).execute(BROADCAST_ID)
+    assert _finished_with(broadcasts) == (
+        Checkpoint(cursor_user_id=0, sent=0, failed=0, unreachable=0),
+        BroadcastStatus.FAILED,
+    )
+    [report] = telegram.sent(SendMessage)
+    assert report.text == "Broadcast failed: 0 of 3\nSent: 0\nUnreachable: 0\nFailed: 0"
+
+
+async def test_a_deleted_source_message_fails_the_broadcast(
+    settings: Config, i18n: I18n
+) -> None:
+    """Counted per recipient, a deleted original would walk the whole user
+    base, finish as completed with every copy failed, and alert nobody."""
+    telegram = FakeTelegramSession()
+    telegram.queue(
+        CopyMessage,
+        TelegramBadRequest(
+            method=COPY, message="Bad Request: message to copy not found"
+        ),
+    )
+    broadcasts = _broadcasts()
+    with pytest.raises(TelegramBadRequest):
+        await _run(settings, i18n, telegram, broadcasts).execute(BROADCAST_ID)
+    assert _copied_to(telegram) == [10]
+    assert _finished_with(broadcasts)[1] == BroadcastStatus.FAILED
+
+
+async def test_a_stop_ends_the_broadcast_at_the_checkpoint(
+    settings: Config, i18n: I18n
+) -> None:
+    telegram = FakeTelegramSession()
+    broadcasts = _broadcasts()
+    broadcasts.save_checkpoint.return_value = True
+    status = await _run(settings, i18n, telegram, broadcasts).execute(BROADCAST_ID)
+    assert status == BroadcastStatus.CANCELLED
+    assert _copied_to(telegram) == [10, 20]
+    [report] = telegram.sent(SendMessage)
+    assert (
+        report.text == "Broadcast stopped: 2 of 3\nSent: 2\nUnreachable: 0\nFailed: 0"
+    )
+
+
+async def test_a_broadcast_stopped_before_its_start_sends_nothing(
+    settings: Config, i18n: I18n
+) -> None:
+    telegram = FakeTelegramSession()
+    broadcasts = _broadcasts()
+    broadcasts.claim_run.return_value = _broadcast(stop_requested=True)
+    status = await _run(settings, i18n, telegram, broadcasts).execute(BROADCAST_ID)
+    assert status == BroadcastStatus.CANCELLED
+    assert telegram.sent(CopyMessage) == []
+    assert _finished_with(broadcasts)[1] == BroadcastStatus.CANCELLED
+
+
+async def test_a_run_that_lost_its_lease_quits_without_a_trace(
+    settings: Config, i18n: I18n
+) -> None:
+    """Another run owns the broadcast now; finishing or reporting from here
+    would overwrite its counts and confuse the admin."""
+    telegram = FakeTelegramSession()
+    broadcasts = _broadcasts()
+    broadcasts.save_checkpoint.return_value = None
+    assert (
+        await _run(settings, i18n, telegram, broadcasts).execute(BROADCAST_ID) is None
+    )
+    broadcasts.finish.assert_not_awaited()
+    assert telegram.sent(SendMessage) == []
+
+
+async def test_a_broadcast_owned_elsewhere_is_left_alone(
+    settings: Config, i18n: I18n
+) -> None:
+    telegram = FakeTelegramSession()
+    broadcasts = _broadcasts()
+    broadcasts.claim_run.return_value = None
+    assert (
+        await _run(settings, i18n, telegram, broadcasts).execute(BROADCAST_ID) is None
+    )
+    assert telegram.requests == []
+
+
+async def test_the_report_is_in_the_admins_language(
+    settings: Config, i18n: I18n
+) -> None:
+    telegram = FakeTelegramSession()
+    await _run(settings, i18n, telegram, _broadcasts(), _users(locale="ru")).execute(
+        BROADCAST_ID
+    )
+    [report] = telegram.sent(SendMessage)
+    assert (
+        report.text
+        == "Рассылка завершена: 3 из 3\nДоставлено: 3\nНедоступны: 0\nОшибки: 0"
+    )
+
+
+async def test_progress_is_shown_with_a_stop_button_then_replaced_by_the_report(
+    settings: Config, i18n: I18n
+) -> None:
+    """Edits are rate limited to one per five seconds: the whole run here
+    takes milliseconds, so only the first progress edit and the final one go
+    out. The first goes before any copy, so Stop is there from the start."""
+    telegram = FakeTelegramSession()
+    await _run(settings, i18n, telegram, _broadcasts()).execute(BROADCAST_ID)
+    first, last = telegram.sent(EditMessageText)
+    first_copy = telegram.sent(CopyMessage)[0]
+    assert telegram.requests.index(first) < telegram.requests.index(first_copy)
+    assert (first.chat_id, first.message_id) == (ADMIN, PROGRESS_MESSAGE_ID)
+    assert (
+        first.text
+        == "Broadcast in progress: 0 of 3\nSent: 0\nUnreachable: 0\nFailed: 0"
+    )
+    assert isinstance(first.reply_markup, InlineKeyboardMarkup)
+    [[button]] = first.reply_markup.inline_keyboard
+    assert (
+        button.callback_data == BroadcastStopCallback(broadcast_id=BROADCAST_ID).pack()
+    )
+    assert (last.text, last.reply_markup) == (FINISHED, None)
+
+
+async def test_a_long_flood_wait_renews_the_lease_before_each_pause(
+    settings: Config, i18n: I18n, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Telegram can ask for minutes of silence, longer than STALE_AFTER; slept
+    in one go, the lease would lapse and the resume task would start a second
+    run beside this one."""
+    telegram = FakeTelegramSession()
+    telegram.queue(
+        CopyMessage,
+        TelegramRetryAfter(
+            method=COPY, message="Flood control exceeded", retry_after=150
+        ),
+    )
+    broadcasts = _broadcasts()
+    clock = _install_clock(monkeypatch, telegram, broadcasts, lease=False)
+    status = await _run(settings, i18n, telegram, broadcasts).execute(BROADCAST_ID)
+    assert status == BroadcastStatus.COMPLETED
+    assert clock.events[:6] == [
+        ("checkpoint", 1),
+        ("sleep", 60),
+        ("checkpoint", 1),
+        ("sleep", 60),
+        ("checkpoint", 1),
+        ("sleep", 30),
+    ]
+    assert _copied_to(telegram) == [10, 10, 20, 30]
+
+
+async def test_a_long_streak_of_failed_copies_renews_the_lease(
+    settings: Config, i18n: I18n, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Retries of one recipient can run past CHECKPOINT_INTERVAL_SECONDS;
+    without a renewal among them the lease could lapse mid-delivery."""
+    monkeypatch.setattr(run_module, "CHECKPOINT_INTERVAL_SECONDS", 3)
+    telegram = FakeTelegramSession()
+    for _ in range(4):
+        telegram.queue(
+            CopyMessage, TelegramNetworkError(method=COPY, message="timeout")
+        )
+    broadcasts = _broadcasts()
+    clock = _install_clock(monkeypatch, telegram, broadcasts, lease=False)
+    status = await _run(settings, i18n, telegram, broadcasts).execute(BROADCAST_ID)
+    assert status == BroadcastStatus.COMPLETED
+    assert clock.events[:7] == [
+        ("sleep", 1),
+        ("sleep", 2),
+        ("checkpoint", 2),
+        ("sleep", 4),
+        ("checkpoint", 3),
+        ("sleep", 8),
+        ("checkpoint", 4),
+    ]
+    assert _copied_to(telegram) == [10, 10, 10, 10, 10, 20, 30]
+
+
+async def test_a_lease_lost_between_retries_stops_the_run_without_writing(
+    settings: Config, i18n: I18n, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A second run owns the broadcast; another attempt or a final write from
+    here would send twice and overwrite its counts."""
+    monkeypatch.setattr(run_module, "CHECKPOINT_INTERVAL_SECONDS", 3)
+    telegram = FakeTelegramSession()
+    for _ in range(4):
+        telegram.queue(
+            CopyMessage, TelegramNetworkError(method=COPY, message="timeout")
+        )
+    broadcasts = _broadcasts()
+    clock = _install_clock(monkeypatch, telegram, broadcasts, lease=None)
+    assert (
+        await _run(settings, i18n, telegram, broadcasts).execute(BROADCAST_ID) is None
+    )
+    assert clock.events == [("sleep", 1), ("sleep", 2), ("checkpoint", 2)]
+    assert _copied_to(telegram) == [10, 10]
+    broadcasts.finish.assert_not_awaited()
+    assert telegram.sent(SendMessage) == []
+
+
+async def test_a_stop_between_retries_leaves_the_recipient_undone(
+    settings: Config, i18n: I18n, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(run_module, "CHECKPOINT_INTERVAL_SECONDS", 3)
+    telegram = FakeTelegramSession()
+    for _ in range(4):
+        telegram.queue(
+            CopyMessage, TelegramNetworkError(method=COPY, message="timeout")
+        )
+    broadcasts = _broadcasts()
+    _install_clock(monkeypatch, telegram, broadcasts, lease=True)
+    status = await _run(settings, i18n, telegram, broadcasts).execute(BROADCAST_ID)
+    assert status == BroadcastStatus.CANCELLED
+    assert _copied_to(telegram) == [10, 10]
+    assert _finished_with(broadcasts)[0] == Checkpoint(
+        cursor_user_id=0, sent=0, failed=0, unreachable=0
+    )
+
+
+def test_the_longest_gap_between_checkpoints_stays_under_the_lease() -> None:
+    """Past a due renewal a run can still make a copy, then a progress edit or
+    a retry pause, before it renews again. A call is every flood retry the
+    config allows, each request hanging to its timeout, plus the session's
+    flood sleep. Raising any of these must keep the gap under STALE_AFTER, or
+    a live run gets a twin."""
+    [max_attempts] = [
+        constraint.le
+        for constraint in BotConfig.model_fields["TELEGRAM_RETRY_ATTEMPTS"].metadata
+        if isinstance(constraint, Le)
+    ]
+    one_call = (
+        max_attempts + 1
+    ) * run_module.TELEGRAM_REQUEST_TIMEOUT_SECONDS + MAX_RETRY_SLEEP_SECONDS
+    after_copy = max(one_call, max(run_module.TRANSIENT_RETRY_DELAYS_SECONDS))
+    longest_gap = run_module.CHECKPOINT_INTERVAL_SECONDS + one_call + after_copy
+    assert longest_gap < STALE_AFTER.total_seconds()
+
+
+async def test_every_call_of_a_run_is_capped_by_the_short_timeout(
+    settings: Config, i18n: I18n
+) -> None:
+    """The session's 60 s default would let five hanging attempts of one copy
+    outlast the lease on their own."""
+    telegram = FakeTelegramSession()
+    await _run(settings, i18n, telegram, _broadcasts()).execute(BROADCAST_ID)
+    calls = [
+        *telegram.sent(CopyMessage),
+        *telegram.sent(EditMessageText),
+        *telegram.sent(SendMessage),
+    ]
+    assert len(calls) == 6
+    assert {telegram.timeout_of(call) for call in calls} == {5}
+
+
+async def test_a_server_error_is_retried_and_the_copy_then_counts_as_sent(
+    settings: Config, i18n: I18n, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A 5xx is Telegram's trouble, not the recipient's: the same copy is
+    tried again rather than counted as failed."""
+    monkeypatch.setattr(run_module, "TRANSIENT_RETRY_DELAYS_SECONDS", (0, 0, 0, 0))
+    telegram = FakeTelegramSession()
+    telegram.queue(
+        CopyMessage,
+        TelegramServerError(method=COPY, message="Internal Server Error"),
+    )
+    broadcasts = _broadcasts()
+    status = await _run(settings, i18n, telegram, broadcasts).execute(BROADCAST_ID)
+    assert status == BroadcastStatus.COMPLETED
+    assert _copied_to(telegram) == [10, 10, 20, 30]
+    assert _finished_with(broadcasts)[0] == Checkpoint(
+        cursor_user_id=30, sent=3, failed=0, unreachable=0
+    )
+
+
+async def test_a_not_found_recipient_is_counted_as_failed(
+    settings: Config, i18n: I18n
+) -> None:
+    """One recipient Telegram cannot find must not end the broadcast for the
+    rest."""
+    telegram = FakeTelegramSession()
+    telegram.queue(CopyMessage, TelegramNotFound(method=COPY, message="Not Found"))
+    broadcasts = _broadcasts()
+    status = await _run(settings, i18n, telegram, broadcasts).execute(BROADCAST_ID)
+    assert status == BroadcastStatus.COMPLETED
+    assert _copied_to(telegram) == [10, 20, 30]
+    assert _finished_with(broadcasts)[0] == Checkpoint(
+        cursor_user_id=30, sent=2, failed=1, unreachable=0
+    )
+
+
+REPORT_EDIT = EditMessageText(text="", chat_id=ADMIN, message_id=PROGRESS_MESSAGE_ID)
+REPORT_SEND = SendMessage(chat_id=ADMIN, text="")
+
+
+def _queue_for_the_report(
+    telegram: FakeTelegramSession, method: type[Any], error: Exception
+) -> None:
+    # The first edit shows the progress before any copy; the report's is the
+    # second, as the run takes less than the edit interval.
+    if method is EditMessageText:
+        telegram.queue(EditMessageText, True)
+    telegram.queue(method, error)
+
+
+async def test_a_delivered_report_is_recorded_under_the_runs_lease(
+    settings: Config, i18n: I18n
+) -> None:
+    """Unrecorded, the resume task would send the admin the same report again."""
+    broadcasts = _broadcasts()
+    await _run(settings, i18n, FakeTelegramSession(), broadcasts).execute(BROADCAST_ID)
+    broadcasts.mark_reported.assert_awaited_once()
+    finish_run_id = broadcasts.finish.await_args.args[2]
+    assert broadcasts.mark_reported.await_args.args[1:3] == (
+        BROADCAST_ID,
+        finish_run_id,
+    )
+
+
+async def test_a_report_cut_off_by_a_stop_is_sent_by_the_next_run(
+    settings: Config, i18n: I18n
+) -> None:
+    """A worker that stops between finishing and reporting leaves the admin
+    with "in progress" and a Stop button forever: the broadcast is finished,
+    so a redelivered run cannot claim it, and only the report run can tell."""
+    telegram = FakeTelegramSession()
+    _queue_for_the_report(telegram, EditMessageText, asyncio.CancelledError())
+    broadcasts = _broadcasts()
+    with pytest.raises(asyncio.CancelledError):
+        await _run(settings, i18n, telegram, broadcasts).execute(BROADCAST_ID)
+    broadcasts.mark_reported.assert_not_awaited()
+
+    resumed_telegram = FakeTelegramSession()
+    resumed = _broadcasts()
+    resumed.claim_run.return_value = None
+    resumed.claim_report.return_value = _broadcast(
+        status=BroadcastStatus.COMPLETED, sent=3, cursor_user_id=30
+    )
+    status = await _run(settings, i18n, resumed_telegram, resumed).execute(BROADCAST_ID)
+    assert status == BroadcastStatus.COMPLETED
+    [edit] = resumed_telegram.sent(EditMessageText)
+    [report] = resumed_telegram.sent(SendMessage)
+    assert (edit.text, edit.reply_markup) == (FINISHED, None)
+    assert (report.chat_id, report.text) == (ADMIN, FINISHED)
+    assert resumed_telegram.sent(CopyMessage) == []
+    resumed.finish.assert_not_awaited()
+    claim_run_id = resumed.claim_report.await_args.args[2]
+    resumed.mark_reported.assert_awaited_once()
+    assert resumed.mark_reported.await_args.args[2] == claim_run_id
+
+
+async def test_a_reported_broadcast_is_not_reported_again(
+    settings: Config, i18n: I18n
+) -> None:
+    telegram = FakeTelegramSession()
+    broadcasts = _broadcasts()
+    broadcasts.claim_run.return_value = None
+    assert (
+        await _run(settings, i18n, telegram, broadcasts).execute(BROADCAST_ID) is None
+    )
+    assert telegram.requests == []
+    broadcasts.mark_reported.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        TelegramNetworkError(method=REPORT_EDIT, message="timeout"),
+        TelegramServerError(method=REPORT_EDIT, message="Bad Gateway"),
+        TelegramRetryAfter(method=REPORT_EDIT, message="", retry_after=90),
+    ],
+)
+async def test_a_report_edit_that_may_get_through_later_stays_unrecorded(
+    settings: Config, i18n: I18n, error: Exception
+) -> None:
+    """The request may never have reached Telegram; the resume task tries again."""
+    telegram = FakeTelegramSession()
+    _queue_for_the_report(telegram, EditMessageText, error)
+    broadcasts = _broadcasts()
+    await _run(settings, i18n, telegram, broadcasts).execute(BROADCAST_ID)
+    broadcasts.mark_reported.assert_not_awaited()
+
+
+async def test_the_report_is_recorded_before_the_notice_goes_out(
+    settings: Config, i18n: I18n
+) -> None:
+    """Recorded after it, a worker stopping in between would have the resume
+    task send the admin the same notice again."""
+    telegram = FakeTelegramSession()
+    broadcasts = _broadcasts()
+    notices_when_recorded: list[int] = []
+
+    async def record(*_args: object, **_kwargs: object) -> bool:
+        notices_when_recorded.append(len(telegram.sent(SendMessage)))
+        return True
+
+    broadcasts.mark_reported.side_effect = record
+    await _run(settings, i18n, telegram, broadcasts).execute(BROADCAST_ID)
+    assert notices_when_recorded == [0]
+    assert len(telegram.sent(SendMessage)) == 1
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        TelegramNetworkError(method=REPORT_SEND, message="timeout"),
+        TelegramServerError(method=REPORT_SEND, message="Bad Gateway"),
+        TelegramRetryAfter(method=REPORT_SEND, message="", retry_after=90),
+    ],
+)
+async def test_a_failed_notice_is_not_sent_again(
+    settings: Config, i18n: I18n, error: Exception
+) -> None:
+    """A timed-out notice may have reached the admin; the edited progress
+    message carries the result either way."""
+    telegram = FakeTelegramSession()
+    telegram.queue(SendMessage, error)
+    broadcasts = _broadcasts()
+    status = await _run(settings, i18n, telegram, broadcasts).execute(BROADCAST_ID)
+    assert status == BroadcastStatus.COMPLETED
+    broadcasts.mark_reported.assert_awaited_once()
+
+
+async def test_a_report_recorded_by_another_run_sends_no_notice(
+    settings: Config, i18n: I18n
+) -> None:
+    """The run that recorded it sends the notice; a second would repeat it."""
+    telegram = FakeTelegramSession()
+    broadcasts = _broadcasts()
+    broadcasts.mark_reported.return_value = False
+    await _run(settings, i18n, telegram, broadcasts).execute(BROADCAST_ID)
+    assert telegram.sent(SendMessage) == []
+
+
+async def test_the_notice_waits_for_an_edit_that_may_get_through_later(
+    settings: Config, i18n: I18n
+) -> None:
+    """Sent beside a failed edit, the notice would go out again with every
+    resend until the edit lands."""
+    telegram = FakeTelegramSession()
+    _queue_for_the_report(
+        telegram,
+        EditMessageText,
+        TelegramNetworkError(method=REPORT_EDIT, message="timeout"),
+    )
+    await _run(settings, i18n, telegram, _broadcasts()).execute(BROADCAST_ID)
+    assert not telegram.sent(SendMessage)
+
+
+@pytest.mark.parametrize(
+    ("method", "error"),
+    [
+        (
+            SendMessage,
+            TelegramForbiddenError(
+                method=REPORT_SEND, message="Forbidden: bot was blocked by the user"
+            ),
+        ),
+        (
+            EditMessageText,
+            TelegramBadRequest(
+                method=REPORT_EDIT, message="Bad Request: message to edit not found"
+            ),
+        ),
+        (
+            EditMessageText,
+            TelegramBadRequest(
+                method=REPORT_EDIT,
+                message="Bad Request: message is not modified",
+            ),
+        ),
+    ],
+)
+async def test_a_report_refused_for_good_is_recorded(
+    settings: Config, i18n: I18n, method: type[Any], error: Exception
+) -> None:
+    """A blocked bot or a deleted progress message would refuse every resend:
+    retrying it each minute forever only fills the log."""
+    telegram = FakeTelegramSession()
+    _queue_for_the_report(telegram, method, error)
+    broadcasts = _broadcasts()
+    await _run(settings, i18n, telegram, broadcasts).execute(BROADCAST_ID)
+    broadcasts.mark_reported.assert_awaited_once()

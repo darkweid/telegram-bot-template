@@ -7,8 +7,12 @@ from redis.connection import parse_url
 from sqlalchemy.engine import make_url
 
 from src.main.config import (
+    AppConfig,
     BotConfig,
+    BroadcastConfig,
+    CacheConfig,
     Config,
+    HttpConfig,
     PostgresConfig,
     RedisConfig,
     WebhookConfig,
@@ -70,6 +74,10 @@ def test_default_locale_must_be_supported() -> None:
 
 def test_default_locale_is_normalized() -> None:
     assert _bot(DEFAULT_LOCALE="RU").DEFAULT_LOCALE == "ru"
+
+
+def test_admins_hear_of_new_users_by_default() -> None:
+    assert _bot().NOTIFY_ADMINS_ON_NEW_USER is True
 
 
 @pytest.mark.parametrize(
@@ -187,9 +195,60 @@ def test_webhook_mode_accepts_a_complete_webhook() -> None:
 
 
 def test_redis_fsm_dsn_uses_its_own_database() -> None:
-    redis = get_settings().redis.model_copy(update={"REDIS_FSM_DATABASE": "7"})
+    redis = get_settings().redis.model_copy(update={"REDIS_FSM_DATABASE": 7})
     assert redis.fsm_dsn.endswith("/7")
     assert redis.dsn != redis.fsm_dsn
+
+
+def test_each_redis_role_has_its_own_database(settings: Config) -> None:
+    redis = settings.redis
+    databases = {
+        redis.REDIS_DATABASE,
+        redis.REDIS_FSM_DATABASE,
+        redis.REDIS_TASKS_DATABASE,
+    }
+    assert len(databases) == 3
+    assert redis.tasks_dsn.endswith(f"/{redis.REDIS_TASKS_DATABASE}")
+
+
+@pytest.mark.parametrize(
+    ("databases", "message"),
+    [
+        (
+            {"REDIS_DATABASE": "1"},
+            "REDIS_DATABASE and REDIS_TASKS_DATABASE must differ, both are 1",
+        ),
+        (
+            {"REDIS_DATABASE": "2"},
+            "REDIS_DATABASE and REDIS_FSM_DATABASE must differ, both are 2",
+        ),
+        (
+            {"REDIS_DATABASE": "0", "REDIS_TASKS_DATABASE": "2"},
+            "REDIS_FSM_DATABASE and REDIS_TASKS_DATABASE must differ, both are 2",
+        ),
+        (
+            {"REDIS_DATABASE": "01"},
+            "REDIS_DATABASE and REDIS_TASKS_DATABASE must differ, both are 1",
+        ),
+    ],
+)
+def test_redis_roles_on_one_database_are_refused(
+    databases: dict[str, str], message: str
+) -> None:
+    """A cache flush on a shared database would empty the task queue or every
+    user's dialog state with it."""
+    values = {"REDIS_HOST": "redis-host", "REDIS_PORT": 6379, "REDIS_PASSWORD": "x"}
+    with pytest.raises(ValidationError, match=message):
+        RedisConfig(**values, **databases)
+
+
+@pytest.mark.parametrize("database", ["-1", "cache"])
+def test_a_redis_database_is_a_non_negative_index(database: str) -> None:
+    """Redis numbers its databases from 0; anything else would only fail on
+    the first command."""
+    values = {"REDIS_HOST": "redis-host", "REDIS_PORT": 6379, "REDIS_PASSWORD": "x"}
+    with pytest.raises(ValidationError, match="REDIS_DATABASE"):
+        RedisConfig(**values, REDIS_DATABASE=database)
 
 
 def test_redis_dsn_escapes_special_characters_in_password() -> None:
@@ -198,7 +257,7 @@ def test_redis_dsn_escapes_special_characters_in_password() -> None:
         REDIS_HOST="redis-host",
         REDIS_PORT=6379,
         REDIS_PASSWORD=raw_password,
-        REDIS_DATABASE="0",
+        REDIS_DATABASE=0,
     )
 
     for dsn, database in ((redis_config.dsn, 0), (redis_config.fsm_dsn, 2)):
@@ -251,7 +310,7 @@ _REQUIRED: dict[type, dict[str, object]] = {
     RedisConfig: {
         "REDIS_HOST": "redis-host",
         "REDIS_PASSWORD": "secret",
-        "REDIS_DATABASE": "0",
+        "REDIS_DATABASE": 0,
         "REDIS_PORT": 6379,
     },
     PostgresConfig: {
@@ -298,6 +357,16 @@ _REQUIRED: dict[type, dict[str, object]] = {
         ),
         (
             BotConfig,
+            {"BOT_TOKEN": VALID_TOKEN, "ALERT_COOLDOWN_SECONDS": 0},
+            "ALERT_COOLDOWN_SECONDS",
+        ),
+        (
+            BotConfig,
+            {"BOT_TOKEN": VALID_TOKEN, "DEV_ALERT_CHAT_ID": 0},
+            "DEV_ALERT_CHAT_ID",
+        ),
+        (
+            BotConfig,
             {"BOT_TOKEN": VALID_TOKEN, "BOT_MODE": "longpoll"},
             "BOT_MODE",
         ),
@@ -325,6 +394,12 @@ def test_port_bounds_accept_their_edges(port: int) -> None:
     assert _postgres(POSTGRES_PORT=port).POSTGRES_PORT == port
 
 
+def test_an_image_without_a_commit_says_unknown() -> None:
+    """A local build outside git must still start; /status shows the gap."""
+    config = AppConfig(_env_file=None, PROJECT_NAME="Bot", VERSION="1.0.0")
+    assert config.COMMIT_SHA == "unknown"
+
+
 def test_get_settings_loads_the_test_env_file(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("TESTING", "true")
     get_settings.cache_clear()
@@ -345,3 +420,122 @@ def test_env_example_token_is_a_placeholder_the_validator_rejects() -> None:
     assert values.get("BOT_TOKEN")
     with pytest.raises(ValidationError, match="does not look like a token"):
         BotConfig(_env_file=None, BOT_TOKEN=values["BOT_TOKEN"])
+
+
+def test_role_ids_are_parsed_from_a_comma_separated_list(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Compose and .env pass lists as plain strings; a JSON list is easy to
+    get wrong in an env file and fails with an unreadable error."""
+    monkeypatch.setenv("ADMIN_IDS", " 11, 22 ,")
+    monkeypatch.setenv("DEVELOPER_IDS", "33")
+    config = _bot()
+    assert config.ADMIN_IDS == frozenset({11, 22})
+    assert config.DEVELOPER_IDS == frozenset({33})
+
+
+def test_role_ids_default_to_nobody() -> None:
+    config = _bot()
+    assert config.ADMIN_IDS == frozenset()
+    assert config.DEVELOPER_IDS == frozenset()
+
+
+@pytest.mark.parametrize("key", ["ADMIN_IDS", "DEVELOPER_IDS"])
+@pytest.mark.parametrize("value", ["abc", "0", "-100123", "1;2"])
+def test_role_ids_reject_anything_but_user_ids(
+    monkeypatch: pytest.MonkeyPatch, key: str, value: str
+) -> None:
+    """A group id or a typo would silently grant nobody the role."""
+    monkeypatch.setenv(key, value)
+    with pytest.raises(ValidationError):
+        _bot()
+
+
+def test_role_ids_reject_a_group_id_passed_as_a_collection() -> None:
+    """Positivity must not depend on how the value arrives, or a group id slips
+    in through a code path other than the environment."""
+    with pytest.raises(ValidationError):
+        _bot(ADMIN_IDS=frozenset({-100123}))
+
+
+def test_an_empty_alert_chat_means_private_alerts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("DEV_ALERT_CHAT_ID", "")
+    assert _bot().DEV_ALERT_CHAT_ID is None
+
+
+def test_an_alert_chat_id_is_read(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DEV_ALERT_CHAT_ID", "-1001234567890")
+    assert _bot().DEV_ALERT_CHAT_ID == -1001234567890
+
+
+@pytest.mark.parametrize(
+    "value", ["bot/1\r\nX-Evil: 1", "bot/1\x00", "бот/1", "x" * 257]
+)
+def test_a_user_agent_that_could_split_a_request_is_refused(value: str) -> None:
+    """A control character in a header is a request-splitting vector."""
+    with pytest.raises(ValidationError):
+        HttpConfig(HTTP_USER_AGENT=value)
+
+
+def test_cache_default_ttl_may_not_outlive_the_version_counter() -> None:
+    """A default TTL above the counter's would raise on every write that does
+    not set its own TTL, failing each update that touches the cache."""
+    with pytest.raises(ValidationError, match="CACHE_DEFAULT_TTL"):
+        CacheConfig(_env_file=None, CACHE_DEFAULT_TTL=100, CACHE_VERSION_TTL=99)
+    assert (
+        CacheConfig(
+            _env_file=None, CACHE_DEFAULT_TTL=100, CACHE_VERSION_TTL=100
+        ).CACHE_DEFAULT_TTL
+        == 100
+    )
+
+
+def test_throttling_defaults_match_the_spec(settings: Config) -> None:
+    """The README and .env.example quote these numbers; a drifted default would
+    make both wrong."""
+    throttling = settings.throttling
+    assert (
+        throttling.THROTTLE_DEFAULT_LIMIT,
+        throttling.THROTTLE_DEFAULT_WINDOW_SECONDS,
+    ) == (20, 60)
+    assert (throttling.THROTTLE_LLM_LIMIT, throttling.THROTTLE_LLM_WINDOW_SECONDS) == (
+        5,
+        60,
+    )
+
+
+def test_user_cache_ttl_may_not_outlive_the_version_counter() -> None:
+    """The cache refuses to write a value that outlives its version counter,
+    which would fail every update that caches a user."""
+    cache = get_settings().cache.model_copy(update={"CACHE_VERSION_TTL": 100})
+    with pytest.raises(ValidationError, match="USER_CACHE_TTL_SECONDS"):
+        Config.model_validate(
+            _config(bot=_bot(USER_CACHE_TTL_SECONDS=101), cache=cache).model_dump()
+        )
+    config = Config.model_validate(
+        _config(bot=_bot(USER_CACHE_TTL_SECONDS=100), cache=cache).model_dump()
+    )
+    assert config.bot.USER_CACHE_TTL_SECONDS == 100
+
+
+def test_broadcast_defaults_stay_under_the_bot_api_limit() -> None:
+    """Telegram allows about 30 messages a second to different users; the
+    default leaves headroom for the bot's other traffic."""
+    config = BroadcastConfig()
+    assert config.BROADCAST_RATE_PER_SECOND == 25
+    assert config.BROADCAST_CHECKPOINT_EVERY == 50
+
+
+@pytest.mark.parametrize(
+    "values",
+    [
+        {"BROADCAST_RATE_PER_SECOND": 0},
+        {"BROADCAST_RATE_PER_SECOND": 31},
+        {"BROADCAST_CHECKPOINT_EVERY": 0},
+    ],
+)
+def test_broadcast_settings_out_of_range_are_refused(values: dict[str, float]) -> None:
+    with pytest.raises(ValidationError):
+        BroadcastConfig(**values)

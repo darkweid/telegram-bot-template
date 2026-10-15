@@ -2,7 +2,7 @@ from datetime import UTC, datetime
 
 from aiogram.exceptions import TelegramForbiddenError
 from aiogram.methods import EditMessageText, GetChat, SendMessage, SetMyCommands
-from aiogram.types import BotCommand, Chat, Message
+from aiogram.types import BotCommand, Chat, Message, MessageId
 import pytest
 
 from tests.factories.updates import (
@@ -33,6 +33,17 @@ async def test_edit_returns_a_message_for_a_chat_message() -> None:
     edited = await bot.edit_message_text(text="new", chat_id=42, message_id=1)
     assert isinstance(edited, Message)
     assert [type(m) for m in session.requests] == [EditMessageText]
+
+
+async def test_records_the_timeout_of_each_call() -> None:
+    """Code that caps its calls below the session default is pinned through
+    this; a fake that dropped the timeout would hide a missing cap."""
+    session = FakeTelegramSession()
+    bot = make_bot(session)
+    await bot.send_message(chat_id=42, text="capped", request_timeout=5)
+    await bot.send_message(chat_id=42, text="default")
+    capped, default = session.sent(SendMessage)
+    assert (session.timeout_of(capped), session.timeout_of(default)) == (5, None)
 
 
 async def test_queued_results_and_errors_come_first() -> None:
@@ -193,3 +204,14 @@ def test_my_chat_member_chat_id_follows_the_chat_type() -> None:
     assert group.my_chat_member.chat.id == -7
     assert explicit.my_chat_member.chat.id == -100
     assert explicit.my_chat_member.from_user.language_code == "ru"
+
+
+async def test_copy_returns_a_new_message_id() -> None:
+    """copyMessage answers with the id of the copy, not a Message; a
+    broadcast test would otherwise queue one result per recipient."""
+    session = FakeTelegramSession()
+    bot = make_bot(session)
+    first = await bot.copy_message(chat_id=10, from_chat_id=1, message_id=7)
+    second = await bot.copy_message(chat_id=20, from_chat_id=1, message_id=7)
+    assert isinstance(first, MessageId)
+    assert first.message_id != second.message_id

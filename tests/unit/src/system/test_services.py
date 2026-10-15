@@ -1,5 +1,6 @@
 import asyncio
 from collections.abc import Awaitable, Callable
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock
 
 from aiogram.fsm.storage.memory import MemoryStorage
@@ -9,10 +10,21 @@ from redis.asyncio import Redis
 from redis.exceptions import ConnectionError as RedisConnectionError, ResponseError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.core.outbox.repositories import OutboxRepository
+from src.core.tasks.broker import STREAM_CONSUMER_GROUP, TasksRedis
+from src.core.tasks.heartbeat import HEARTBEAT_TTL_SECONDS
 from src.main.config import Config
 from src.system import services
 from src.system.repositories import SystemRepository
 from src.system.services import HealthService
+from tests.helpers.logs import captured_logs
+
+NOW = datetime(2026, 1, 1, 12, tzinfo=UTC)
+
+
+@pytest.fixture(autouse=True)
+def frozen_now(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(services, "get_utc_now", lambda: NOW)
 
 
 async def _hang(*_: object) -> None:
@@ -25,13 +37,24 @@ def _service(
     postgres: Callable[..., Awaitable[None]] | BaseException | None = None,
     redis: Callable[..., Awaitable[None]] | BaseException | None = None,
     fsm: Callable[..., Awaitable[None]] | BaseException | None = None,
+    tasks: Callable[..., Awaitable[None]] | BaseException | None = None,
     memory: dict[str, int] | BaseException | None = None,
+    beat_age: timedelta | None = timedelta(seconds=10),
+    pending: tuple[int, timedelta | None] = (0, None),
+    groups: list[dict[str, object]] | None = None,
+    commit: str | None = None,
 ) -> HealthService:
-    """`postgres`/`redis`/`fsm`: None answers, an exception is raised, a
-    coroutine function runs instead (e.g. `_hang`). `memory`: what INFO memory
-    returns."""
+    """`postgres`/`redis`/`fsm`/`tasks`: None answers, an exception is raised,
+    a coroutine function runs instead (e.g. `_hang`). `memory`: what INFO
+    memory returns. `beat_age`: how long ago the scheduler beat, None for
+    never. `pending`: the outbox backlog, count and oldest age. `groups`:
+    what XINFO GROUPS returns, by default the workers' group with 2 entries
+    undelivered and 1 unacked. `commit`: the image's COMMIT_SHA."""
     repository = AsyncMock(spec=SystemRepository)
     repository.ping.side_effect = postgres
+    outbox = AsyncMock(spec=OutboxRepository)
+    outbox.count_pending.return_value = pending[0]
+    outbox.oldest_pending_age.return_value = pending[1]
     client = AsyncMock(spec=Redis)
     # redis-py's command methods are plain functions returning awaitables, so a
     # spec'd AsyncMock makes them MagicMocks that cannot be awaited.
@@ -42,12 +65,31 @@ def _service(
     )
     fsm_client = AsyncMock(spec=Redis)
     fsm_client.ping = AsyncMock(return_value=True, side_effect=fsm)
+    tasks_client = AsyncMock(spec=Redis)
+    tasks_client.ping = AsyncMock(return_value=True, side_effect=tasks)
+    tasks_client.exists = AsyncMock(return_value=1)
+    tasks_client.xinfo_groups = AsyncMock(
+        return_value=(
+            [{"name": STREAM_CONSUMER_GROUP, "lag": 2, "pending": 1}]
+            if groups is None
+            else groups
+        )
+    )
+    tasks_client.get = AsyncMock(
+        return_value=None if beat_age is None else (NOW - beat_age).isoformat().encode()
+    )
     return HealthService(
         repository,
+        outbox,
         AsyncMock(spec=AsyncSession),
         client,
         RedisStorage(redis=fsm_client),
-        settings.app,
+        TasksRedis(tasks_client),
+        (
+            settings.app
+            if commit is None
+            else settings.app.model_copy(update={"COMMIT_SHA": commit})
+        ),
         settings.bot,
     )
 
@@ -77,6 +119,14 @@ async def test_not_ready_when_the_fsm_database_refuses(settings: Config) -> None
     assert (readiness.postgres, readiness.redis, readiness.ok) == (True, False, False)
 
 
+async def test_not_ready_when_the_task_database_refuses(settings: Config) -> None:
+    """The bot sends every task there after commit; a refused index fails each
+    send while the cache client still answers."""
+    service = _service(settings, tasks=ResponseError("DB index is out of range"))
+    readiness = await service.check_readiness()
+    assert (readiness.postgres, readiness.redis, readiness.ok) == (True, False, False)
+
+
 async def test_in_process_fsm_storage_needs_no_probe(settings: Config) -> None:
     service = _service(settings)
     service.storage = MemoryStorage()
@@ -89,7 +139,7 @@ async def test_a_hanging_dependency_fails_within_the_budget(
     monkeypatch.setattr(services, "PROBE_TIMEOUT_SECONDS", 0.05)
     async with asyncio.timeout(1):
         readiness = await _service(
-            settings, postgres=_hang, redis=_hang, fsm=_hang
+            settings, postgres=_hang, redis=_hang, fsm=_hang, tasks=_hang
         ).check_readiness()
     assert (readiness.postgres, readiness.redis) == (False, False)
 
@@ -129,3 +179,91 @@ async def test_hanging_redis_memory_read_is_not_an_outage(
     async with asyncio.timeout(1):
         report = await service.get_report()
     assert (report.status, report.redis_memory_used_ratio) == ("ok", None)
+
+
+async def test_report_names_the_commit_backlog_queue_and_heartbeat(
+    settings: Config,
+) -> None:
+    service = _service(
+        settings, pending=(2, timedelta(seconds=30)), commit="0123456789ab"
+    )
+    report = await service.get_report()
+    assert report.status == "ok"
+    assert report.commit == "0123456789ab"
+    assert (report.outbox_pending, report.outbox_oldest_pending_seconds) == (2, 30.0)
+    assert report.task_queue_length == 3
+    assert report.scheduler_heartbeat_age_seconds == 10.0
+
+
+async def test_report_degrades_when_the_scheduler_is_silent(settings: Config) -> None:
+    """Without the scheduler no cron fires, no retry runs and the outbox is
+    never swept, while the bot itself answers every update."""
+    stale = timedelta(seconds=HEARTBEAT_TTL_SECONDS + 1)
+    report = await _service(settings, beat_age=stale).get_report()
+    assert report.status == "degraded"
+
+
+async def test_report_degrades_when_no_scheduler_ever_beat(settings: Config) -> None:
+    report = await _service(settings, beat_age=None).get_report()
+    assert (report.status, report.scheduler_heartbeat_age_seconds) == ("degraded", None)
+
+
+async def test_report_degrades_when_the_outbox_is_stuck(settings: Config) -> None:
+    """The sweeper retries every minute; rows pending for minutes mean
+    nothing reaches the worker."""
+    stuck = timedelta(seconds=services.OUTBOX_STALE_SECONDS + 1)
+    report = await _service(settings, pending=(1, stuck)).get_report()
+    assert report.status == "degraded"
+
+
+async def test_an_unreadable_backlog_does_not_break_the_report(
+    settings: Config,
+) -> None:
+    """Monitoring reads /health to learn what is down; a failed count must
+    leave the rest of the report standing."""
+    service = _service(settings)
+    service.outbox.count_pending = AsyncMock(side_effect=OSError("reset"))
+    report = await service.get_report()
+    assert (report.outbox_pending, report.outbox_oldest_pending_seconds) == (None, None)
+    assert report.scheduler_heartbeat_age_seconds == 10.0
+
+
+async def test_nothing_is_read_from_a_dependency_that_is_down(settings: Config) -> None:
+    service = _service(settings, postgres=OSError("down"), tasks=OSError("down"))
+    report = await service.get_report()
+    service.outbox.count_pending.assert_not_awaited()
+    assert (report.outbox_pending, report.task_queue_length) == (None, None)
+
+
+async def test_the_queue_is_the_workers_group_backlog(settings: Config) -> None:
+    """Another consumer group on the same stream says nothing about whether
+    the workers keep up."""
+    groups: list[dict[str, object]] = [
+        {"name": "someone-else", "lag": 50, "pending": 50},
+        {"name": STREAM_CONSUMER_GROUP, "lag": 0, "pending": 4},
+    ]
+    report = await _service(settings, groups=groups).get_report()
+    assert report.task_queue_length == 4
+
+
+async def test_a_stream_without_the_workers_group_has_nothing_waiting(
+    settings: Config,
+) -> None:
+    service = _service(settings, groups=[])
+    assert (await service.get_report()).task_queue_length == 0
+    service.tasks_redis.exists = AsyncMock(return_value=0)
+    assert (await service.get_report()).task_queue_length == 0
+
+
+async def test_an_uncountable_lag_is_reported_as_unknown(settings: Config) -> None:
+    """Redis answers nil for the lag after some trims and deletions; a number
+    made up from `pending` alone would look like a short queue."""
+    groups: list[dict[str, object]] = [
+        {"name": STREAM_CONSUMER_GROUP, "lag": None, "pending": 3}
+    ]
+    with captured_logs("src.system.services") as records:
+        report = await _service(settings, groups=groups).get_report()
+    assert (report.status, report.task_queue_length) == ("ok", None)
+    assert [record.getMessage() for record in records] == [
+        "Task queue check failed: StreamLagUnknownError"
+    ]

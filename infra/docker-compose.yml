@@ -8,6 +8,8 @@ services:
     build:
       context: ..
       dockerfile: infra/docker/Dockerfile
+      args:
+        COMMIT_SHA: ${COMMIT_SHA:-unknown}
     image: ${BOT_IMAGE:-tg-bot-template-bot:latest}
     # Only builds the image; must not start a second bot when the stack comes up.
     command: ["true"]
@@ -100,6 +102,80 @@ services:
         limits:
           cpus: '1'
           memory: 512M
+
+  # Runs background tasks: one process, up to 20 at once; scale with replicas.
+  # Waits for the migrations like the bot: tasks read and write the same tables.
+  worker:
+    image: ${BOT_IMAGE:-tg-bot-template-bot:latest}
+    env_file: ../.env
+    restart: unless-stopped
+    command:
+      - taskiq
+      - worker
+      - src.main.worker:broker
+      - --receiver
+      - src.core.tasks.receiver:IdempotencyReceiver
+      - --workers
+      - "1"
+      - --max-async-tasks
+      - "20"
+      - --wait-tasks-timeout
+      - "25"
+      - --no-configure-logging
+    # Longer than --wait-tasks-timeout, so the worker cancels what is still
+    # running before Docker kills it. A cancelled task may still be acked:
+    # long work resumes through its own state (a broadcast: its resume task).
+    stop_grace_period: 35s
+    depends_on:
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+      bot-builder:
+        condition: service_completed_successfully
+    networks:
+      - bot-network
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 512M
+
+  # Exactly one: taskiq has no duplicate-fire protection, N schedulers fire
+  # every cron N times. It also fires the worker's delayed retries.
+  scheduler:
+    image: ${BOT_IMAGE:-tg-bot-template-bot:latest}
+    env_file: ../.env
+    restart: unless-stopped
+    command:
+      - taskiq
+      - scheduler
+      - src.main.scheduler:scheduler
+      - --update-interval
+      - "30"
+      - --no-configure-logging
+    healthcheck:
+      # A Redis ping stays green while a wedged loop fires nothing; the
+      # heartbeat is written by the loop itself.
+      test: ["CMD", "python", "-m", "src.main.heartbeat"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
+    # No migrations to wait for: the scheduler only reads its schedule and
+    # sends messages to Redis, it never opens the database.
+    depends_on:
+      redis:
+        condition: service_healthy
+      bot-builder:
+        condition: service_completed_successfully
+    networks:
+      - bot-network
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
 
   redis:
     image: 'redis:8.10'

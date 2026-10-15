@@ -33,6 +33,11 @@ async def health(request: web.Request) -> web.Response:
             "postgres": report.postgres,
             "redis": report.redis,
             "redis_memory_used_ratio": report.redis_memory_used_ratio,
+            "commit": report.commit,
+            "outbox_pending": report.outbox_pending,
+            "outbox_oldest_pending_seconds": report.outbox_oldest_pending_seconds,
+            "task_queue_length": report.task_queue_length,
+            "scheduler_heartbeat_age_seconds": report.scheduler_heartbeat_age_seconds,
         }
     )
 

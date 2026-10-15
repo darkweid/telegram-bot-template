@@ -14,6 +14,8 @@ from aiohttp import web
 from dishka import AsyncContainer, Provider
 
 from loggers import get_logger
+from src.core.http.client import close_http_clients
+from src.core.telegram.roles import Roles
 from src.main.commands import set_bot_commands
 from src.main.config import Config, WebServerConfig
 from src.main.di import build_container
@@ -23,7 +25,11 @@ from src.system.services import HealthService
 logger = get_logger(__name__)
 
 
-class DependencyUnavailableError(RuntimeError):
+class StartupError(RuntimeError):
+    """The environment keeps the bot from starting; the message says why."""
+
+
+class DependencyUnavailableError(StartupError):
     """PostgreSQL or Redis did not answer at startup."""
 
 
@@ -47,17 +53,21 @@ async def bot_runtime(
     """
     container = build_container(config, *providers)
     try:
-        await _require_dependencies(container)
+        await require_dependencies(container)
         dp = await create_dispatcher(container)
         bot = await container.get(Bot)
-        await set_bot_commands(bot, await container.get(I18n))
+        await set_bot_commands(
+            bot, await container.get(I18n), await container.get(Roles)
+        )
         yield BotRuntime(config=config, container=container, dp=dp, bot=bot)
     finally:
-        # The bot session, FSM storage, Redis and the engine all close here.
+        # Sessions opened on this loop close before the loop stops; the
+        # container then closes the bot session, FSM storage, Redis and the engine.
+        await close_http_clients()
         await container.close()
 
 
-async def _require_dependencies(container: AsyncContainer) -> None:
+async def require_dependencies(container: AsyncContainer) -> None:
     async with container() as scope:
         readiness = await (await scope.get(HealthService)).check_readiness()
     missing = [

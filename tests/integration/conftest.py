@@ -3,7 +3,7 @@ import os
 # Before any src.* import: importing it loads the config, which reads TESTING.
 os.environ.setdefault("TESTING", "true")
 
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, AsyncIterator
 from dataclasses import dataclass
 from pathlib import Path
 import secrets
@@ -14,12 +14,14 @@ from uuid import uuid4
 
 import pytest
 import pytest_asyncio
+from redis.asyncio import Redis
 from sqlalchemy import make_url, text
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, create_async_engine
 
+from src.core.redis.core import create_redis_client
 from src.core.utils.datetime_utils import get_utc_now
-from src.main.config import get_settings
+from src.main.config import Config, get_settings
 
 INTEGRATION_ROOT = Path(__file__).resolve().parent
 # tests/integration -> tests -> repo root, which is where alembic.ini lives and what
@@ -210,3 +212,12 @@ async def db_session(integration_engine: AsyncEngine) -> AsyncGenerator[AsyncSes
     async with AsyncSession(integration_engine, expire_on_commit=False) as session:
         yield session
         await session.rollback()
+
+
+@pytest_asyncio.fixture(loop_scope="session")
+async def redis_client(settings: Config) -> AsyncIterator[Redis]:
+    client = create_redis_client(settings.redis.dsn)
+    try:
+        yield client
+    finally:
+        await client.aclose()

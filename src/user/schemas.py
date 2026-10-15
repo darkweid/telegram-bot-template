@@ -39,6 +39,7 @@ class UserProfile:
     language_code: str | None
     locale: str | None
     is_reachable: bool
+    is_banned: bool
     last_seen_at: datetime
 
     @classmethod
@@ -51,6 +52,7 @@ class UserProfile:
             language_code=user.language_code,
             locale=user.locale,
             is_reachable=user.is_reachable,
+            is_banned=user.is_banned,
             last_seen_at=user.last_seen_at,
         )
 
@@ -67,3 +69,26 @@ class UserProfile:
             profile.last_name,
             profile.language_code,
         )
+
+
+@dataclass(frozen=True, slots=True)
+class BanChange:
+    user: UserProfile
+    # False when the user already was in the requested state.
+    changed: bool
+
+
+@dataclass(frozen=True, slots=True)
+class UserStats:
+    """User counts for /stats. `active_*` count by the last update seen,
+    `new_*` by the first; the windows are the last 1, 7 and 30 days."""
+
+    total: int
+    reachable: int
+    banned: int
+    active_day: int
+    active_week: int
+    active_month: int
+    new_day: int
+    new_week: int
+    new_month: int

@@ -15,6 +15,13 @@ HOST_USER := $(shell id -u):$(shell id -g)
 APP_CONTAINER = bot
 # The bot image's name when BOT_IMAGE is unset; matches the default in COMPOSE_BASE.
 LOCAL_BOT_IMAGE = tg-bot-template-bot:latest
+# The commit baked into a locally built image; /status and /health show it.
+# Twelve characters, like the sha- tag CI gives the image.
+# Evaluated once; a COMMIT_SHA from the shell or the command line wins.
+ifndef COMMIT_SHA
+COMMIT_SHA := $(shell git rev-parse --short=12 HEAD 2>/dev/null || echo unknown)
+endif
+export COMMIT_SHA
 
 # Requirements management
 REQ_DIR = infra/requirements
@@ -44,7 +51,7 @@ run: ## Build and start the prod-like stack; with BOT_IMAGE set, pull it instead
 	@if $(DOCKER_COMPOSE) config --images | grep -qxF '$(LOCAL_BOT_IMAGE)'; then \
 		$(DOCKER_COMPOSE) up --build -d; \
 	else \
-		$(DOCKER_COMPOSE) pull migrate bot && \
+		$(DOCKER_COMPOSE) pull migrate bot worker scheduler && \
 		$(DOCKER_COMPOSE) build postgres && \
 		$(DOCKER_COMPOSE) up -d; \
 	fi

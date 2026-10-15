@@ -34,6 +34,34 @@ services:
     image: tg-bot-template-bot-dev:latest
     command: ["true"]
 
+  worker:
+    restart: "no"
+    image: tg-bot-template-bot-dev:latest
+    # Restarted on any change under the watched packages, like the bot.
+    command: >-
+      watchfiles --filter python
+      'taskiq worker src.main.worker:broker
+      --receiver src.core.tasks.receiver:IdempotencyReceiver
+      --workers 1 --max-async-tasks 20 --wait-tasks-timeout 25
+      --no-configure-logging'
+      src loggers models
+    # Here `migrate` exits at once and the dev bot migrates on its own start;
+    # its healthcheck answers only after that, so waiting for it is waiting
+    # for the schema.
+    depends_on:
+      bot:
+        condition: service_healthy
+    volumes:
+      - ..:/app
+      - /app/.venv
+
+  scheduler:
+    restart: "no"
+    image: tg-bot-template-bot-dev:latest
+    volumes:
+      - ..:/app
+      - /app/.venv
+
   postgres:
     restart: "no"
 

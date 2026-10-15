@@ -1,0 +1,81 @@
+"""Worker entrypoint: `taskiq worker src.main.worker:broker --receiver
+src.core.tasks.receiver:IdempotencyReceiver`.
+
+Each task gets a REQUEST scope of the worker's container, opened by dishka's
+taskiq middleware; the Bot, the engine and Redis live in its APP scope.
+"""
+
+from dishka import AsyncContainer, Provider, Scope, from_context, provide
+from dishka.integrations.taskiq import TaskiqProvider, setup_dishka
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from taskiq import AsyncBroker, TaskiqEvents, TaskiqState
+
+from loggers import setup_logging
+from src.core.http.client import close_http_clients
+from src.core.outbox.interface import TaskPublisher
+from src.core.outbox.publisher import OutboxPublisher
+from src.core.tasks.middlewares import FAILURE_REPORTER_STATE
+from src.core.telegram.alerts import DeveloperAlerter
+from src.main.config import Config, get_settings
+from src.main.di import build_container
+from src.main.runtime import require_dependencies
+from src.main.sentry import init_sentry
+from src.main.tasks import build_broker
+
+
+class WorkerProvider(Provider):
+    # The CLI's broker, which the CLI starts and stops; replaces the bot's.
+    broker = from_context(provides=AsyncBroker, scope=Scope.APP, override=True)
+
+    @provide(scope=Scope.APP, override=True)
+    def publisher(
+        self, broker: AsyncBroker, sessionmaker: async_sessionmaker[AsyncSession]
+    ) -> TaskPublisher:
+        # Started already: a second startup would rerun the worker's startup
+        # hooks.
+        return OutboxPublisher(broker, sessionmaker)
+
+
+class WorkerLifecycle:
+    def __init__(self, config: Config, container: AsyncContainer) -> None:
+        self._config = config
+        self._container = container
+
+    async def startup(self, state: TaskiqState) -> None:
+        setup_logging()
+        # Inside the loop: Sentry's asyncio integration patches the running
+        # loop's task factory.
+        init_sentry(self._config)
+        # A worker without its database would take every task and fail it.
+        await require_dependencies(self._container)
+        # TaskFailureAlertMiddleware reads it from the state: the broker was
+        # built before this container and cannot be handed it.
+        state[FAILURE_REPORTER_STATE] = await self._container.get(DeveloperAlerter)
+
+    async def shutdown(self, _state: TaskiqState) -> None:
+        try:
+            await close_http_clients()
+        finally:
+            # The bot session, Redis and the engine close here.
+            await self._container.close()
+
+
+def create_worker(config: Config, *providers: Provider) -> AsyncBroker:
+    """The worker's broker with its container attached. `providers` override
+    production ones in tests."""
+    broker = build_broker(config)
+    container = build_container(
+        config,
+        TaskiqProvider(),
+        WorkerProvider(),
+        *providers,
+        context={AsyncBroker: broker},
+    )
+    setup_dishka(container, broker)
+    lifecycle = WorkerLifecycle(config, container)
+    broker.add_event_handler(TaskiqEvents.WORKER_STARTUP, lifecycle.startup)
+    broker.add_event_handler(TaskiqEvents.WORKER_SHUTDOWN, lifecycle.shutdown)
+    return broker
+
+
+broker = create_worker(get_settings())

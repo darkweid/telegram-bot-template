@@ -14,6 +14,8 @@ _LOG_FORMAT = (
 _DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
 
 log_level = getattr(logging, os.environ.get("LOG_LEVEL", "INFO").upper(), logging.INFO)
+# Third-party loggers that print task arguments at DEBUG; never below INFO.
+ARGUMENT_LOGGING_LOGGERS = ("taskiq", "taskiq_redis")
 
 # Structured JSON logs for log aggregators that parse stdout (e.g. a
 # container platform shipping to a log index); text formats stay the default
@@ -99,6 +101,10 @@ def setup_logging() -> None:
     Our own loggers keep their handler and do not propagate (get_logger), so
     nothing is printed twice.
     """
+    # taskiq logs every task's arguments at DEBUG (kicker, receiver,
+    # taskiq_redis): with LOG_LEVEL=DEBUG they would reach stdout.
+    for name in ARGUMENT_LOGGING_LOGGERS:
+        logging.getLogger(name).setLevel(max(log_level, logging.INFO))
     root = logging.getLogger()
     if any(
         isinstance(f, UpdateContextFilter) for h in root.handlers for f in h.filters

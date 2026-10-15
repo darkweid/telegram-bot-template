@@ -1,0 +1,100 @@
+import pytest
+from sqlalchemy.exc import DBAPIError
+from taskiq import InMemoryBroker
+
+from src.core.errors.scrubbed import ScrubbedError
+from src.core.tasks.registry import AT_MOST_ONCE_LABEL, TaskSpec, register_tasks
+
+
+def _chain(error: BaseException) -> list[BaseException]:
+    """Every exception logging or Sentry would render below `error`."""
+    links: list[BaseException] = []
+    pending: list[BaseException] = [error]
+    while pending:
+        link = pending.pop()
+        if any(link is seen for seen in links):
+            continue
+        links.append(link)
+        pending.extend(
+            nested
+            for nested in (link.__cause__, link.__context__)
+            if nested is not None
+        )
+    return links
+
+
+async def ping(value: int) -> int:
+    return value + 1
+
+
+async def broken() -> None:
+    raise DBAPIError("UPDATE", {}, Exception("DETAIL: Key (id)=(4242)"))
+
+
+async def test_a_registered_task_carries_its_name_schedule_and_retry_label() -> None:
+    broker = InMemoryBroker(await_inplace=True)
+    register_tasks(
+        broker,
+        [
+            TaskSpec(
+                "test.ping",
+                ping,
+                schedule=({"cron": "* * * * *"},),
+                retry_on_error=True,
+            ),
+            TaskSpec("test.plain", ping),
+        ],
+    )
+    task = broker.find_task("test.ping")
+    assert task is not None
+    assert task.labels == {"schedule": [{"cron": "* * * * *"}], "retry_on_error": True}
+    plain = broker.find_task("test.plain")
+    assert plain is not None and plain.labels == {}
+
+
+async def test_an_at_most_once_task_carries_its_label() -> None:
+    """The worker's receiver reads the label to mark the task done up front."""
+    broker = InMemoryBroker(await_inplace=True)
+    register_tasks(broker, [TaskSpec("test.once", ping, at_most_once=True)])
+    task = broker.find_task("test.once")
+    assert task is not None and task.labels == {AT_MOST_ONCE_LABEL: True}
+
+
+def test_an_at_most_once_task_cannot_be_retried() -> None:
+    """A retry carries the same task id, so the marker written before the first
+    run would drop it: the retry flag would promise what never happens."""
+    with pytest.raises(ValueError, match="at_most_once"):
+        TaskSpec("test.both", ping, retry_on_error=True, at_most_once=True)
+
+
+async def test_a_task_error_leaves_the_task_already_scrubbed() -> None:
+    """taskiq's receiver logs a failed task before any middleware sees it."""
+    broker = InMemoryBroker(await_inplace=True)
+    register_tasks(broker, [TaskSpec("test.broken", broken)])
+    await broker.startup()
+    try:
+        task = await broker.find_task("test.broken").kiq()
+        result = await task.wait_result()
+    finally:
+        await broker.shutdown()
+    assert isinstance(result.error, ScrubbedError)
+    chain = _chain(result.error)
+    assert not any(isinstance(link, DBAPIError) for link in chain)
+    assert all("4242" not in str(link) for link in chain)
+
+
+async def refused() -> None:
+    raise PermissionError("not allowed")
+
+
+async def test_an_error_without_user_data_leaves_the_task_unchanged() -> None:
+    """Retry rules and alerts match on the task's own exception type."""
+    broker = InMemoryBroker(await_inplace=True)
+    register_tasks(broker, [TaskSpec("test.refused", refused)])
+    await broker.startup()
+    try:
+        task = await broker.find_task("test.refused").kiq()
+        result = await task.wait_result()
+    finally:
+        await broker.shutdown()
+    assert isinstance(result.error, PermissionError)

@@ -116,6 +116,7 @@ class Stubs(Provider):
             language_code=profile.language_code,
             locale=None,
             is_reachable=True,
+            is_banned=False,
             last_seen_at=datetime(2026, 1, 1, tzinfo=UTC),
         )
 

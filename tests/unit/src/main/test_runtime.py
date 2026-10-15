@@ -8,6 +8,7 @@ from aiogram.utils.i18n import I18n
 import pytest
 
 from src.core.i18n import SUPPORTED_LOCALES
+from src.main import runtime as runtime_module
 from src.main.config import Config
 from src.main.runtime import (
     DependencyUnavailableError,
@@ -88,3 +89,25 @@ async def test_wait_for_stop_signal_returns_on_sigterm() -> None:
         async with asyncio.timeout(1):
             await waiter
     assert [r.getMessage() for r in records] == ["Received SIGTERM, stopping"]
+
+
+async def test_http_clients_close_with_the_runtime(
+    settings: Config, i18n: I18n, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A session left open warns "Unclosed client session" at exit and leaks
+    the connector's sockets. The clients close before the container, while
+    the loop that opened their sessions still runs."""
+    events: list[str] = []
+
+    async def close_http_clients() -> None:
+        events.append("http clients")
+
+    async def close_bot_session() -> None:
+        events.append("bot session")
+
+    monkeypatch.setattr(runtime_module, "close_http_clients", close_http_clients)
+    session = FakeTelegramSession()
+    monkeypatch.setattr(session, "close", close_bot_session)
+    async with bot_runtime(settings, TestOverrides(session, i18n), Stubs(session)):
+        assert events == []
+    assert events == ["http clients", "bot session"]

@@ -17,6 +17,48 @@ msgstr ""
 "Content-Transfer-Encoding: 8bit\n"
 "Generated-By: Babel 2.18.0\n"
 
+msgid "A broadcast is already running. Wait for it to finish or stop it."
+msgstr "Рассылка уже идёт. Дождитесь её окончания или остановите её."
+
+#, python-brace-format
+msgid "Active in the last day / week / month: {day} / {week} / {month}"
+msgstr "Активны за день / неделю / месяц: {day} / {week} / {month}"
+
+msgid "Admins and developers cannot be banned."
+msgstr "Админов и разработчиков банить нельзя."
+
+msgid "Albums are not supported: send a single message."
+msgstr "Альбомы не поддерживаются: пришлите одно сообщение."
+
+msgid "Ban a user"
+msgstr "Забанить пользователя"
+
+#, python-brace-format
+msgid "Banned: {count}"
+msgstr "Забанены: {count}"
+
+msgid "Broadcast cancelled."
+msgstr "Рассылка отменена."
+
+#, python-brace-format
+msgid "Broadcast failed: {processed} of {total}"
+msgstr "Рассылка прервана ошибкой: {processed} из {total}"
+
+#, python-brace-format
+msgid "Broadcast finished: {processed} of {total}"
+msgstr "Рассылка завершена: {processed} из {total}"
+
+#, python-brace-format
+msgid "Broadcast in progress: {processed} of {total}"
+msgstr "Идёт рассылка: {processed} из {total}"
+
+#, python-brace-format
+msgid "Broadcast stopped: {processed} of {total}"
+msgstr "Рассылка остановлена: {processed} из {total}"
+
+msgid "Cancel"
+msgstr "Отмена"
+
 msgid "Change language"
 msgstr "Сменить язык"
 
@@ -40,8 +82,66 @@ msgstr ""
 msgid "Language: {language}"
 msgstr "Язык: {language}"
 
+#, python-brace-format
+msgid "New in the last day / week / month: {day} / {week} / {month}"
+msgstr "Новые за день / неделю / месяц: {day} / {week} / {month}"
+
+#, python-brace-format
+msgid "New user: {name} (@{username}), id {id}"
+msgstr "Новый пользователь: {name} (@{username}), id {id}"
+
+#, python-brace-format
+msgid "New user: {name}, id {id}"
+msgstr "Новый пользователь: {name}, id {id}"
+
+msgid "No such user. They have to start the bot first."
+msgstr "Такого пользователя нет. Сначала он должен запустить бота."
+
+#, python-brace-format
+msgid "Reachable: {count}"
+msgstr "Достижимы: {count}"
+
+msgid "Send"
+msgstr "Отправить"
+
+msgid "Send a message to every user"
+msgstr "Рассылка всем пользователям"
+
+msgid "Send a test alert"
+msgstr "Отправить тестовый алерт"
+
+msgid ""
+"Send the message to broadcast. Every user will get an exact copy of it.\n"
+"\n"
+"Send /cancel to stop."
+msgstr ""
+"Пришлите сообщение для рассылки. Каждый пользователь получит его точную "
+"копию.\n"
+"\n"
+"Отправьте /cancel, чтобы выйти."
+
+#, python-brace-format
+msgid ""
+"Sent: {sent}\n"
+"Unreachable: {unreachable}\n"
+"Failed: {failed}"
+msgstr ""
+"Доставлено: {sent}\n"
+"Недоступны: {unreachable}\n"
+"Ошибки: {failed}"
+
+#, python-brace-format
+msgid "Several users have had @{username}. Use the numeric id instead."
+msgstr "@{username} был у нескольких пользователей. Укажите числовой id."
+
 msgid "Show help"
 msgstr "Показать справку"
+
+msgid "Show the bot's status"
+msgstr "Состояние бота"
+
+msgid "Show user statistics"
+msgstr "Статистика пользователей"
 
 msgid "Something went wrong. Please try again later."
 msgstr "Что-то пошло не так. Попробуйте ещё раз чуть позже."
@@ -49,5 +149,70 @@ msgstr "Что-то пошло не так. Попробуйте ещё раз �
 msgid "Start the bot"
 msgstr "Запустить бота"
 
+msgid "Starting the broadcast…"
+msgstr "Запускаю рассылку…"
+
+msgid "Stop"
+msgstr "Остановить"
+
+msgid "Stopping the broadcast."
+msgstr "Останавливаю рассылку."
+
+msgid "The broadcast was not started."
+msgstr "Рассылка не запущена."
+
+msgid "This broadcast has already finished."
+msgstr "Эта рассылка уже завершена."
+
 msgid "This language is not available."
 msgstr "Этот язык недоступен."
+
+msgid "This message is too old. Start again with /broadcast."
+msgstr "Это сообщение слишком старое. Начните заново с /broadcast."
+
+#, python-brace-format
+msgid "This message will go to {count} user. Send it?"
+msgid_plural "This message will go to {count} users. Send it?"
+msgstr[0] "Это сообщение получит {count} пользователь. Отправить?"
+msgstr[1] "Это сообщение получат {count} пользователя. Отправить?"
+msgstr[2] "Это сообщение получат {count} пользователей. Отправить?"
+
+#, python-brace-format
+msgid "Too many requests. Try again in {seconds} second."
+msgid_plural "Too many requests. Try again in {seconds} seconds."
+msgstr[0] "Слишком много запросов. Попробуйте через {seconds} секунду."
+msgstr[1] "Слишком много запросов. Попробуйте через {seconds} секунды."
+msgstr[2] "Слишком много запросов. Попробуйте через {seconds} секунд."
+
+msgid "Unban a user"
+msgstr "Разбанить пользователя"
+
+#, python-brace-format
+msgid "Usage: /{command} USER_ID or /{command} @username"
+msgstr "Использование: /{command} ID или /{command} @username"
+
+msgid "You cannot ban yourself."
+msgstr "Себя забанить нельзя."
+
+#, python-brace-format
+msgid "{count} user"
+msgid_plural "{count} users"
+msgstr[0] "{count} пользователь"
+msgstr[1] "{count} пользователя"
+msgstr[2] "{count} пользователей"
+
+#, python-brace-format
+msgid "{name} ({id}) is already banned."
+msgstr "{name} ({id}) уже забанен."
+
+#, python-brace-format
+msgid "{name} ({id}) is banned."
+msgstr "{name} ({id}) забанен."
+
+#, python-brace-format
+msgid "{name} ({id}) is not banned."
+msgstr "{name} ({id}) не забанен."
+
+#, python-brace-format
+msgid "{name} ({id}) is unbanned."
+msgstr "{name} ({id}) разбанен."

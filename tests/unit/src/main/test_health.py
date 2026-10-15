@@ -28,6 +28,11 @@ class StubHealth(Provider):
             postgres=readiness.postgres,
             redis=readiness.redis,
             redis_memory_used_ratio=None,
+            commit="abc1234",
+            outbox_pending=0,
+            outbox_oldest_pending_seconds=None,
+            task_queue_length=0,
+            scheduler_heartbeat_age_seconds=5.0,
         )
 
     @provide(scope=Scope.REQUEST, override=True)
@@ -98,6 +103,11 @@ async def test_health_reports_details_with_200_even_when_degraded(
         "postgres": False,
         "redis": True,
         "redis_memory_used_ratio": None,
+        "commit": "abc1234",
+        "outbox_pending": 0,
+        "outbox_oldest_pending_seconds": None,
+        "task_queue_length": 0,
+        "scheduler_heartbeat_age_seconds": 5.0,
     }
 
 
