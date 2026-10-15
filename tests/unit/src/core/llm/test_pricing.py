@@ -32,6 +32,15 @@ def test_the_smallest_charge_is_not_rounded_away() -> None:
     assert PricingTable().cost("claude-haiku-5-5", usage) == COST_QUANTUM
 
 
+def test_a_half_quantum_rounds_up() -> None:
+    """One cache-write token of claude-haiku-5-5 is $0.000000125, exactly
+    between two quanta. Half-up is the usual money rounding; the default
+    half-even would round it down and make ties inconsistent."""
+    usage = LLMUsage(input_tokens=0, output_tokens=0, cache_write_tokens=1)
+
+    assert PricingTable().cost("claude-haiku-5-5", usage) == Decimal("0.00000013")
+
+
 def test_a_cost_has_the_scale_of_the_usage_column() -> None:
     """The cost goes into a Numeric(14, 8) column; any other scale would be
     rounded again by the database."""
