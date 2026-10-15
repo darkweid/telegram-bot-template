@@ -409,8 +409,10 @@ def test_a_first_webhook_deploy_starts_nginx_and_routes_to_the_new_bot(
         "start nginx",
         f"start {OLD_BOT} {LOCAL_IMAGE}",
         f"write {OLD_BOT}",
+        "test",
         f"reload {OLD_BOT}",
         "write bot",
+        "test",
         "reload bot",
         f"start tg-bot-template-worker-1 {LOCAL_IMAGE}",
         f"start tg-bot-template-scheduler-1 {LOCAL_IMAGE}",
@@ -432,15 +434,86 @@ def test_a_running_nginx_renders_the_new_configuration_before_the_roll(
     )
     assert deploy.returncode == 0, deploy.output
     render = _position(deploy.events, "render")
-    assert deploy.events[render : render + 3] == [
-        "render",
-        "test the running nginx",
-        "reload bot",
-    ]
+    assert deploy.events[render : render + 3] == ["render", "test", "reload bot"]
     assert render < _position(deploy.events, f"start {NEW_BOT} {LOCAL_IMAGE}")
     assert f"{LOCAL_IMAGE} | {COMPOSE} exec -T -e NGINX_REQUIRE_TLS=1 nginx sh " in (
         "\n".join(deploy.calls)
     )
+
+
+def test_a_just_started_nginx_is_reloaded_once_its_master_is_up(
+    tmp_path: Path,
+) -> None:
+    """`nginx -s reload` finds the master through its pid file, which a
+    just-started nginx writes only on its way up: a reload sent earlier fails,
+    and the roll would give up on a healthy bot."""
+    deploy = _deploy(
+        tmp_path,
+        WEBHOOK_ENV,
+        state={"containers": [], "nginx": None, "nginx_starting": 2},
+    )
+    assert deploy.returncode == 0, deploy.output
+    assert deploy.events[: deploy.events.index(f"reload {OLD_BOT}") + 1] == [
+        "start nginx",
+        f"start {OLD_BOT} {LOCAL_IMAGE}",
+        f"write {OLD_BOT}",
+        "no master yet",
+        "no master yet",
+        "test",
+        f"reload {OLD_BOT}",
+    ]
+
+
+def test_a_configuration_the_running_nginx_refuses_stops_the_deploy_first(
+    tmp_path: Path,
+) -> None:
+    """A reload exits 0 even when the master refuses the new files and keeps the
+    old ones: the deploy must see the refusal before it rolls a bot onto a
+    configuration nginx is not serving."""
+    state = _serving_webhook_stack(_container("bot", 1), pinned=["bot"])
+    state["nginx"]["refuse_render"] = True
+    deploy = _deploy(tmp_path, WEBHOOK_ENV, state=state)
+    assert deploy.returncode == 1
+    assert (
+        "the running nginx refuses this checkout's configuration; it keeps the previous one"
+        in (deploy.output)
+    )
+    assert "the bot was not rolled and the deploy failed" in deploy.output
+    assert deploy.events == ["render refused"]
+    assert deploy.running("bot") == [OLD_BOT]
+
+
+def test_a_reload_nginx_refuses_mid_roll_keeps_the_old_bot_serving(
+    tmp_path: Path,
+) -> None:
+    """nginx never reloaded onto the new container, so it still routes to the
+    old one: the new one goes and the old one must keep running."""
+    state = _serving_webhook_stack(_container("bot", 1), pinned=["bot"])
+    # The first test follows the render, the second pins the old container.
+    state["nginx"]["refuse_from"] = 3
+    deploy = _deploy(tmp_path, WEBHOOK_ENV, state=state)
+    assert deploy.returncode == 1
+    assert "the running nginx refuses its configuration; not reloading" in deploy.output
+    assert f"nginx could not be moved onto {NEW_BOT}" in deploy.output
+    assert "rolling the bot failed; the previous one keeps serving" in deploy.output
+    assert f"reload {NEW_BOT}" not in deploy.events
+    assert f"remove {NEW_BOT}" in deploy.events
+    assert deploy.running("bot") == [OLD_BOT]
+    assert deploy.state["nginx"]["applied"] == [OLD_BOT]
+    assert not any("worker scheduler" in call for call in deploy.calls)
+
+
+def test_a_roll_that_cannot_unpin_nginx_still_succeeds(tmp_path: Path) -> None:
+    """Once the old container is gone nginx is pinned to the new one, which
+    serves: failing the roll there would roll back a bot that works and report
+    that the previous one keeps serving when it no longer runs."""
+    state = _serving_webhook_stack(_container("bot", 1), pinned=["bot"])
+    state["nginx"]["refuse_from"] = 4
+    deploy = _deploy(tmp_path, WEBHOOK_ENV, state=state)
+    assert deploy.returncode == 0, deploy.output
+    assert f"nginx stays pinned to {NEW_BOT}, which serves" in deploy.output
+    assert deploy.running("bot") == [NEW_BOT]
+    assert deploy.state["nginx"]["applied"] == [NEW_BOT]
 
 
 def test_a_webhook_roll_moves_nginx_before_the_old_bot_stops(tmp_path: Path) -> None:
@@ -520,13 +593,16 @@ def test_a_failing_worker_rolls_the_webhook_bot_back(tmp_path: Path) -> None:
         "start tg-bot-template-worker-1 sha256:previous",
         "start tg-bot-template-scheduler-1 sha256:previous",
         f"write {NEW_BOT}",
+        "test",
         f"reload {NEW_BOT}",
         "start tg-bot-template-bot-3 sha256:previous",
         "write tg-bot-template-bot-3",
+        "test",
         "reload tg-bot-template-bot-3",
         f"stop {NEW_BOT}",
         f"remove {NEW_BOT}",
         "write bot",
+        "test",
         "reload bot",
     ]
     assert deploy.running("bot") == ["tg-bot-template-bot-3"]

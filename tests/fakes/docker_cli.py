@@ -15,6 +15,11 @@ the deploy works on and records what happened in its "events":
   wait_until_healthy probe takes the next one and the last one stays.
 - "nginx": {"id", "inc", "applied"} while nginx runs, else null; "inc" and
   "applied" are the container names of bot_upstream.inc and .applied.
+  Optional "starting": how many more probes find no master process yet;
+  "refuse_from": the number of the `nginx -t -q` before a reload from which on
+  the running nginx refuses its configuration; "refuse_render": true makes it
+  refuse what the deploy renders into it.
+- "nginx_starting": the "starting" of an nginx `up` starts, 0 by default.
 - "bot_health": {image: [...]} for the bot containers `up --scale` starts.
 - "tasks": {image: "<status> <restarts>"} for the worker and the scheduler
   `up --wait` starts, "running 0" by default.
@@ -118,6 +123,7 @@ class Docker:
                     "id": "nginx1",
                     "inc": ["bot"],
                     "applied": ["bot"],
+                    "starting": self.state.get("nginx_starting", 0),
                 }
                 self.events.append("start nginx")
             return 0
@@ -137,6 +143,11 @@ class Docker:
             return self.nginx_exec(args[2:])
         return 0
 
+    def _refuses(self, nginx: dict[str, Any]) -> bool:
+        nginx["tests"] = nginx.get("tests", 0) + 1
+        refuse_from = nginx.get("refuse_from")
+        return refuse_from is not None and nginx["tests"] >= refuse_from
+
     def nginx_exec(self, args: list[str]) -> int:
         while args[0] == "-e":
             args = args[2:]
@@ -151,15 +162,26 @@ class Docker:
             nginx["applied"] = list(nginx["inc"])
         elif "worker process is shutting down" in script:
             return 1
+        elif "nginx: master process" in script:
+            if nginx.get("starting", 0) > 0:
+                nginx["starting"] -= 1
+                self.events.append("no master yet")
+                return 1
+        elif "/etc/nginx/bot/render.sh" in script:
+            if nginx.get("refuse_render"):
+                self.events.append("render refused")
+                return 1
+            self.events.append("render")
+        elif command == ["nginx", "-t", "-q"]:
+            if self._refuses(nginx):
+                self.events.append("refused")
+                return 1
+            self.events.append("test")
         elif "bot_upstream.applied" in script:
             for name in nginx["applied"]:
                 print(f"server {name}:{PORT} resolve;")
         elif command == ["nginx", "-s", "reload"]:
             self.events.append(f"reload {' '.join(nginx['inc'])}")
-        elif command == ["sh", "/etc/nginx/bot/render.sh"]:
-            self.events.append("render")
-        elif command == ["nginx", "-t"]:
-            self.events.append("test the running nginx")
         else:
             raise AssertionError(f"unexpected exec in nginx: {command}")
         return 0

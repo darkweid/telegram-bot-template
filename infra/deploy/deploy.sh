@@ -99,9 +99,61 @@ ROLLBACK_FAILED="[deploy] rollback failed; the bot, worker or scheduler may stil
 # How long the nginx workers retired by a reload get to finish the requests
 # they still carry to the old bot.
 NGINX_DRAIN_TIMEOUT_SECONDS=60
+# How long a just-started nginx gets to bring up its master process.
+NGINX_MASTER_TIMEOUT_SECONDS=30
 
 nginx_is_running() {
   [ -n "$("${COMPOSE[@]}" ps -q nginx)" ]
+}
+
+# `nginx -s reload` signals the master through its pid file and exits 0 once
+# the signal is sent, even when the master then refuses the configuration and
+# keeps serving the old one. So the master has to be up first - a just-started
+# nginx writes its pid file only on the way to the master process, whose title
+# it sets after it - and the configuration is tested in the running container
+# before the signal: a refused one fails the step instead of passing unseen.
+reload_nginx() {
+  local deadline=$((SECONDS + NGINX_MASTER_TIMEOUT_SECONDS))
+  until "${COMPOSE[@]}" exec -T nginx sh -c \
+    'grep -qs "^nginx: master process" /proc/[0-9]*/cmdline'; do
+    if [ "$SECONDS" -ge "$deadline" ]; then
+      echo "[deploy] nginx has no master process ${NGINX_MASTER_TIMEOUT_SECONDS}s after it started"
+      return 1
+    fi
+    sleep 1
+  done
+  if ! "${COMPOSE[@]}" exec -T nginx nginx -t -q; then
+    echo "[deploy] the running nginx refuses its configuration; not reloading"
+    return 1
+  fi
+  "${COMPOSE[@]}" exec -T nginx nginx -s reload
+}
+
+# Renders this checkout's configuration into the running nginx, tests it there
+# and reloads. render.sh rewrites conf.d in place, so the files it replaces are
+# kept aside and put back when nginx refuses the new ones: the running nginx
+# keeps its configuration, and a restart would start on the same one.
+render_into_running_nginx() {
+  # shellcheck disable=SC2016  # expanded by the shell inside the nginx container
+  if ! "${COMPOSE[@]}" exec -T -e NGINX_REQUIRE_TLS=1 nginx sh -c '
+    set -e
+    previous=/tmp/nginx-previous
+    rm -rf "$previous"
+    mkdir -p "$previous/conf.d" "$previous/generated" /etc/nginx/generated
+    cp -a /etc/nginx/conf.d/. "$previous/conf.d/"
+    cp -a /etc/nginx/generated/. "$previous/generated/"
+    if sh /etc/nginx/bot/render.sh && nginx -t -q; then
+      exit 0
+    fi
+    rm -rf /etc/nginx/conf.d/* /etc/nginx/generated/*
+    cp -a "$previous/conf.d/." /etc/nginx/conf.d/
+    cp -a "$previous/generated/." /etc/nginx/generated/
+    exit 1
+  '; then
+    echo "[deploy] the running nginx refuses this checkout's configuration; it keeps the previous one"
+    return 1
+  fi
+  reload_nginx
 }
 
 # nginx routes to whatever /etc/nginx/upstream/bot_upstream.inc names (the
@@ -128,7 +180,7 @@ route_bot_to() {
     done > /etc/nginx/upstream/bot_upstream.inc.next
     mv /etc/nginx/upstream/bot_upstream.inc.next /etc/nginx/upstream/bot_upstream.inc
   ' sh "$@" || return 1
-  "${COMPOSE[@]}" exec -T nginx nginx -s reload || return 1
+  reload_nginx || return 1
   "${COMPOSE[@]}" exec -T nginx sh -c '
     cp /etc/nginx/upstream/bot_upstream.inc /etc/nginx/upstream/bot_upstream.applied.next
     mv /etc/nginx/upstream/bot_upstream.applied.next /etc/nginx/upstream/bot_upstream.applied
@@ -323,7 +375,11 @@ roll_bot() {
     # shellcheck disable=SC2086
     docker rm $old_ids >/dev/null || return 1
   fi
-  route_bot_to bot || return 1
+  # The roll is done whether or not this lands: nginx stays pinned to the new
+  # container, which serves, and the next deploy starts from that pin.
+  if ! route_bot_to bot; then
+    echo "[deploy] nginx stays pinned to ${new_name}, which serves; the next deploy moves it back to the service name"
+  fi
 }
 
 # Removes every bot container the roll started, the ones given excepted. nginx
@@ -433,9 +489,9 @@ if [ "$BOT_MODE" = "webhook" ]; then
   # tested above are rendered into it here, tested there and reloaded.
   if [ -n "$NGINX_BEFORE" ] && [ "$NGINX_BEFORE" = "$("${COMPOSE[@]}" ps -q nginx)" ]; then
     echo "[deploy] rendering the nginx configuration into the running nginx"
-    "${COMPOSE[@]}" exec -T -e NGINX_REQUIRE_TLS=1 nginx sh /etc/nginx/bot/render.sh
-    "${COMPOSE[@]}" exec -T nginx nginx -t
-    "${COMPOSE[@]}" exec -T nginx nginx -s reload
+    if ! render_into_running_nginx; then
+      die "[deploy] the bot was not rolled and the deploy failed."
+    fi
   fi
   echo "[deploy] rolling the bot"
   if ! roll_bot "$BOT_IMAGE"; then
