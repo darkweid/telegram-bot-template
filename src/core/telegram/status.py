@@ -33,6 +33,11 @@ INTERRUPTED_EDIT_SECONDS: float = 2
 _GONE = "message to edit not found"
 
 
+def _now() -> float:
+    """The ticker's clock; tests replace it to step time by hand."""
+    return asyncio.get_running_loop().time()
+
+
 class ProcessingStatus:
     """`send` in the handler, `async with` and `finish` in the work.
 
@@ -151,11 +156,10 @@ class ProcessingStatus:
             )
 
     async def _tick(self) -> None:
-        loop = asyncio.get_running_loop()
-        next_typing = next_edit = loop.time()
+        next_typing = next_edit = _now()
         with without_flood_retry():
             while True:
-                now = loop.time()
+                now = _now()
                 if now >= next_typing:
                     next_typing = now + TYPING_INTERVAL_SECONDS
                     wait = await self._attempt(
@@ -165,7 +169,7 @@ class ProcessingStatus:
                         ),
                     )
                     if wait is not None:
-                        quiet = loop.time() + wait
+                        quiet = _now() + wait
                         next_typing, next_edit = quiet, max(next_edit, quiet)
                 wanted = self._wanted
                 if wanted != self._shown and wanted is not None and now >= next_edit:
@@ -176,14 +180,14 @@ class ProcessingStatus:
                     if wait is None:
                         self._shown = wanted
                     else:
-                        quiet = loop.time() + wait
+                        quiet = _now() + wait
                         next_edit, next_typing = quiet, max(next_typing, quiet)
                 self._changed.clear()
                 wake = next_typing
                 if self._wanted is not None and self._wanted != self._shown:
                     wake = min(wake, next_edit)
                 with suppress(TimeoutError):
-                    async with asyncio.timeout_at(wake):
+                    async with asyncio.timeout(max(0.0, wake - _now())):
                         await self._changed.wait()
 
     async def _attempt(self, what: str, call: Awaitable[object]) -> float | None:

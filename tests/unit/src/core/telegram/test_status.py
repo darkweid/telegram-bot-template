@@ -34,6 +34,29 @@ class Count(BaseModel):
     value: int
 
 
+class FakeClock:
+    """The ticker's clock, stepped by the test; `looked` returns once the
+    ticker went once more round its loop, with no wall-clock wait."""
+
+    def __init__(self) -> None:
+        self.now = 0.0
+        self.reads = 0
+        self._read = asyncio.Event()
+
+    def __call__(self) -> float:
+        self.reads += 1
+        self._read.set()
+        return self.now
+
+    async def looked(self) -> None:
+        # Two reads: the top of the loop, then the wait at its end.
+        target = self.reads + 2
+        async with asyncio.timeout(2):
+            while self.reads < target:
+                self._read.clear()
+                await self._read.wait()
+
+
 class HoldingSession(FakeTelegramSession):
     """Holds every editMessageText until `release` is set; `held` is set
     once one is waiting."""
@@ -115,10 +138,14 @@ async def test_typing_repeats_until_finish(i18n: I18n) -> None:
 
 
 async def test_edits_go_at_most_once_a_second_and_the_latest_wins(
-    i18n: I18n,
+    i18n: I18n, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Telegram floods a chat edited faster; a text overtaken before it was
     shown is of no use to the user."""
+    clock = FakeClock()
+    monkeypatch.setattr(status_module, "_now", clock)
+    monkeypatch.setattr(status_module, "EDIT_INTERVAL_SECONDS", 1)
+    monkeypatch.setattr(status_module, "TYPING_INTERVAL_SECONDS", 60)
     session = FakeTelegramSession()
     status = await _send(session, i18n)
     async with status:
@@ -126,8 +153,10 @@ async def test_edits_go_at_most_once_a_second_and_the_latest_wins(
         await session.wait_for(EditMessageText)
         status.update("two")
         status.update("three")
-        await asyncio.sleep(0.05)
+        clock.now = 0.999
+        await clock.looked()
         assert _edits(session) == ["⏳ one"]  # the interval has not passed
+        clock.now = 1
         await session.wait_for(EditMessageText, count=2)
         await status.finish("Done.")
     assert _edits(session) == ["⏳ one", "⏳ three", "Done."]
