@@ -291,11 +291,17 @@ def makefile_targets(root: Path) -> set[str]:
     return {name for name in MAKEFILE_RULE.findall(text) if not name.startswith(".")}
 
 
-def check_configuration(root: Path, files: set[str]) -> list[str]:
+def check_configuration(root: Path) -> list[str]:
     """Every key in .env.example has a row in the configuration doc, and every
-    row names a key the example has."""
-    if CONFIGURATION_DOC not in files:
-        return [f"{CONFIGURATION_DOC} is missing"]
+    row names a key the example has. Existence is checked on disk: git still
+    lists a tracked file deleted from the working tree."""
+    missing = [
+        f"{name} is missing"
+        for name in (CONFIGURATION_DOC, ".env.example")
+        if not (root / name).is_file()
+    ]
+    if missing:
+        return missing
     example = set(
         EXAMPLE_KEY.findall((root / ".env.example").read_text(encoding="utf-8"))
     )
@@ -325,7 +331,7 @@ def check(root: Path) -> list[str]:
         problems += check_paths(root, path, code, files)
         if has_unterminated_fence(text):
             problems.append(f"{path}: a fenced code block is never closed")
-    problems += check_configuration(root, files)
+    problems += check_configuration(root)
     return problems
 
 

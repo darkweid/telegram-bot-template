@@ -348,41 +348,60 @@ def test_a_setext_heading_takes_the_whole_paragraph() -> None:
     assert heading_anchors(text) == {"quick-start-for-a-new-bot"}
 
 
-def _configuration_tree(tmp_path: Path, example: str, doc: str) -> set[str]:
+def _configuration_tree(tmp_path: Path, example: str, doc: str) -> None:
     (tmp_path / "docs").mkdir()
     (tmp_path / ".env.example").write_text(example, encoding="utf-8")
     (tmp_path / "docs/configuration.md").write_text(doc, encoding="utf-8")
-    return {".env.example", "docs/configuration.md"}
 
 
 def test_a_key_missing_from_the_configuration_doc_is_reported(tmp_path: Path) -> None:
     """A setting nobody can find is a setting nobody changes on purpose."""
-    files = _configuration_tree(
+    _configuration_tree(
         tmp_path,
-        "BOT_TOKEN=x\n# BOT_IMAGE=\n# A comment, KEY=not a setting\n",
+        "BOT_TOKEN=x\n# BOT_IMAGE=\n# A comment, KEY=not a setting\n"
+        '#   python -c "import secrets; print(secrets.token_urlsafe(48))"\n'
+        "#   INDENTED_EXAMPLE=inside a multi-line comment\n",
         "| Key | Default | What it does |\n|---|---|---|\n| `BOT_TOKEN` | - | t |\n",
     )
-    assert check_configuration(tmp_path, files) == [
+    assert check_configuration(tmp_path) == [
         "docs/configuration.md: BOT_IMAGE from .env.example is not documented"
     ]
 
 
 def test_a_documented_key_the_example_lacks_is_reported(tmp_path: Path) -> None:
-    files = _configuration_tree(
+    _configuration_tree(
         tmp_path,
         "BOT_TOKEN=x\n",
         "| `BOT_TOKEN` | - | t |\n| `BOT_TOKENS` | - | typo |\n",
     )
-    assert check_configuration(tmp_path, files) == [
+    assert check_configuration(tmp_path) == [
         "docs/configuration.md: BOT_TOKENS is not in .env.example"
     ]
 
 
 def test_a_missing_configuration_doc_is_reported(tmp_path: Path) -> None:
     (tmp_path / ".env.example").write_text("BOT_TOKEN=x\n", encoding="utf-8")
-    assert check_configuration(tmp_path, {".env.example"}) == [
-        "docs/configuration.md is missing"
-    ]
+    assert check_configuration(tmp_path) == ["docs/configuration.md is missing"]
+
+
+def test_a_tracked_configuration_doc_deleted_from_the_working_tree_is_reported(
+    tmp_path: Path,
+) -> None:
+    """git still lists a file deleted but not yet staged; the hook must name it,
+    not stop on a traceback."""
+    _documented_tree(tmp_path, "`make lint`\n")
+    subprocess.run(["git", "add", "docs/configuration.md"], cwd=tmp_path, check=True)
+    (tmp_path / "docs/configuration.md").unlink()
+    assert check(tmp_path) == ["docs/configuration.md is missing"]
+
+
+def test_a_tracked_example_deleted_from_the_working_tree_is_reported(
+    tmp_path: Path,
+) -> None:
+    _documented_tree(tmp_path, "`make lint`\n")
+    subprocess.run(["git", "add", ".env.example"], cwd=tmp_path, check=True)
+    (tmp_path / ".env.example").unlink()
+    assert check(tmp_path) == [".env.example is missing"]
 
 
 def test_check_reports_an_undocumented_key(tmp_path: Path) -> None:
