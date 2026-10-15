@@ -239,8 +239,8 @@ async def test_llm_spending_shows_purposes_top_users_and_gaps(
 async def test_stats_are_hidden_from_everyone_else(
     settings: Config, i18n: I18n
 ) -> None:
-    """User counts are business data; a non-admin must not learn the command
-    exists."""
+    """User counts and model spending are business data; a non-admin must not
+    learn the command exists."""
     stub = StatsStub()
     async with running_bot(_admin(settings), i18n, UseCases(), stub) as running:
         await running.feed(build_message_update("/stats", user_id=77))

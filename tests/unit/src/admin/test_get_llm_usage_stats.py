@@ -47,7 +47,7 @@ def _usage() -> AsyncMock:
 async def test_windows_are_today_in_utc_and_the_last_7_and_30_days(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """ "Today" is read as a calendar day; the week and month match the
+    """An admin reads "today" as a calendar day; the week and month match the
     rolling windows of the user block above it."""
     monkeypatch.setattr(get_llm_usage_stats, "get_utc_now", lambda: NOW)
     session = FakeAsyncSession()
