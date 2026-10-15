@@ -202,12 +202,16 @@ class RunBroadcastUseCase:
                 if not await self._deliver(run, user_id):
                     return BroadcastStatus.CANCELLED
                 run.cursor = user_id
-                await self._show_progress(run)
                 # ForbiddenMiddleware has already committed the user as
                 # unreachable, and a resumed run walks reachable users only:
                 # it would never meet this one again, so the outcome is saved
-                # now rather than lost with the run.
-                if run.unreachable > unreachable_before or _checkpoint_due(run):
+                # before any other Bot API call can stop the run.
+                if run.unreachable > unreachable_before:
+                    await self._checkpoint(run)
+                    if run.stop_requested:
+                        return BroadcastStatus.CANCELLED
+                await self._show_progress(run)
+                if _checkpoint_due(run):
                     await self._checkpoint(run)
                     if run.stop_requested:
                         return BroadcastStatus.CANCELLED

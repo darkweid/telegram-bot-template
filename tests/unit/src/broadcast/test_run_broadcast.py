@@ -309,6 +309,26 @@ async def test_an_unreachable_recipient_is_checkpointed_before_the_next_copy(
     )
 
 
+async def test_an_unreachable_recipient_is_checkpointed_before_the_progress_edit(
+    settings: Config, i18n: I18n, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A worker stopped during the progress edit would otherwise lose the
+    outcome: the user is already marked unreachable and never walked again."""
+    monkeypatch.setattr(run_module, "PROGRESS_EDIT_INTERVAL_SECONDS", 0)
+    telegram = FakeTelegramSession()
+    telegram.queue(CopyMessage, _forbidden())
+    broadcasts = _broadcasts()
+    last_call_at_save: list[type[object]] = []
+
+    def save_checkpoint(*args: object, **kwargs: Any) -> bool:
+        last_call_at_save.append(type(telegram.requests[-1]))
+        return False
+
+    broadcasts.save_checkpoint.side_effect = save_checkpoint
+    await _run(settings, i18n, telegram, broadcasts).execute(BROADCAST_ID)
+    assert last_call_at_save[0] is CopyMessage
+
+
 async def test_a_resumed_run_keeps_the_unreachable_outcome_in_its_report(
     settings: Config, i18n: I18n
 ) -> None:
