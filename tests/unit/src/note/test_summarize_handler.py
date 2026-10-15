@@ -189,11 +189,18 @@ def test_every_reply_to_a_failure_is_distinct() -> None:
 
 
 async def test_note_text_stays_out_of_the_logs(settings: Config, i18n: I18n) -> None:
-    """Notes are what users typed: CLAUDE.md keeps them out of logs and
-    Sentry, and a failed call is where a careless detail would leak them."""
+    """Notes are what users typed: they never reach a log line or Sentry, and
+    a failed call is where a careless detail would leak them. The error carries
+    a detail shaped like the adapters' (locations and types only), which the
+    use case forwards."""
     secret = "my card PIN is 4931"
     with captured_logs("src.core.telegram.errors") as records:
-        _, llm = await _summarize(settings, i18n, NoteStub(secret), LLMOutputError())
+        _, llm = await _summarize(
+            settings,
+            i18n,
+            NoteStub(secret),
+            LLMOutputError("summary: value_error"),
+        )
     assert records
     assert llm.calls and secret in llm.calls[0].messages[0].content
     for record in records:
