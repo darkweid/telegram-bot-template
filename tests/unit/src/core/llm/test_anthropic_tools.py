@@ -1,4 +1,5 @@
 import base64
+from decimal import Decimal
 from typing import Any, get_args
 
 from pydantic import BaseModel, field_validator
@@ -20,6 +21,7 @@ from src.core.llm.types import (
     ToolUseBlock,
 )
 from tests.helpers.llm_bodies import (
+    JsonObject,
     anthropic_message,
     anthropic_text,
     anthropic_thinking,
@@ -299,6 +301,9 @@ async def test_a_tool_call_cut_at_max_tokens_is_an_output_error(
         await make_client(server).complete(request())
 
     assert caught.value.usage is not None
+    assert caught.value.usage.input_tokens == 1000
+    assert caught.value.usage.output_tokens == 200
+    assert caught.value.usage.cost_usd == Decimal("0.004")
 
 
 async def test_text_cut_at_max_tokens_is_still_an_answer(
@@ -315,14 +320,21 @@ async def test_text_cut_at_max_tokens_is_still_an_answer(
 async def test_a_tool_call_whose_input_is_not_an_object_is_unavailable(
     server: ScriptedLLMServer,
 ) -> None:
+    """The answer was billed: /stats and llm_usage must count it even though
+    nothing in it can be used."""
     body = anthropic_message(stop_reason="tool_use")
     body["content"] = [
         {"type": "tool_use", "id": "toolu_1", "name": "lookup", "input": "rice"}
     ]
     server.reply(body)
 
-    with pytest.raises(LLMUnavailable):
+    with pytest.raises(LLMUnavailable) as caught:
         await make_client(server).complete(request())
+
+    assert caught.value.usage is not None
+    assert caught.value.usage.input_tokens == 1000
+    assert caught.value.usage.output_tokens == 200
+    assert caught.value.usage.cost_usd == Decimal("0.004")
 
 
 async def test_an_empty_assistant_turn_is_dropped(server: ScriptedLLMServer) -> None:
@@ -359,12 +371,15 @@ async def test_a_cut_tool_call_with_a_malformed_input_is_an_output_error(
         await make_client(server).complete(request())
 
     assert caught.value.usage is not None
+    assert caught.value.usage.input_tokens == 1000
+    assert caught.value.usage.output_tokens == 200
+    assert caught.value.usage.cost_usd == Decimal("0.004")
 
 
 async def test_redacted_thinking_goes_back_byte_for_byte(
     server: ScriptedLLMServer,
 ) -> None:
-    redacted = {"type": "redacted_thinking", "data": "opaque-1"}
+    redacted: JsonObject = {"type": "redacted_thinking", "data": "opaque-1"}
     server.reply(
         anthropic_message(
             redacted,
@@ -400,3 +415,96 @@ async def test_structured_output_takes_no_tools(server: ScriptedLLMServer) -> No
         await make_client(server).structured(request(), Answer)
 
     assert server.requests == []
+
+
+async def test_tool_results_go_first_in_a_user_turn(server: ScriptedLLMServer) -> None:
+    """Anthropic answers 400 to a user turn whose tool results do not lead,
+    and that 400 would read as an outage and switch to the fallback."""
+    server.reply(anthropic_message(anthropic_text("ok")))
+    call = ToolUseBlock(id="toolu_1", name="lookup", input={"query": "rice"})
+
+    await make_client(server).complete(
+        request(
+            messages=[
+                ASK,
+                LLMMessage(role="assistant", content=[call]),
+                LLMMessage(
+                    role="user",
+                    content=[
+                        TextBlock("Count this too."),
+                        ToolResultBlock(tool_use_id="toolu_1", content="found"),
+                    ],
+                ),
+            ]
+        )
+    )
+
+    assert server.bodies()[0]["messages"][2]["content"] == [
+        {
+            "type": "tool_result",
+            "tool_use_id": "toolu_1",
+            "content": "found",
+            "is_error": False,
+        },
+        {"type": "text", "text": "Count this too."},
+    ]
+
+
+async def test_an_empty_text_block_is_not_sent(server: ScriptedLLMServer) -> None:
+    """The API refuses an empty text block with a 400, and an answer can carry
+    one next to a tool call; a turn left with nothing is dropped."""
+    server.reply(anthropic_message(anthropic_text("ok")))
+    call = ToolUseBlock(id="toolu_1", name="lookup", input={"query": "rice"})
+
+    await make_client(server).complete(
+        request(
+            messages=[
+                ASK,
+                LLMMessage(role="assistant", content=[TextBlock(""), call]),
+                LLMMessage(
+                    role="user",
+                    content=[ToolResultBlock(tool_use_id="toolu_1", content="found")],
+                ),
+                LLMMessage(role="assistant", content=[TextBlock("")]),
+                LLMMessage(role="user", content="and?"),
+            ]
+        )
+    )
+
+    sent = server.bodies()[0]["messages"]
+    assert sent[1]["content"] == [
+        {
+            "type": "tool_use",
+            "id": "toolu_1",
+            "name": "lookup",
+            "input": {"query": "rice"},
+        }
+    ]
+    assert [message["role"] for message in sent] == [
+        "user",
+        "assistant",
+        "user",
+        "user",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("stop_reason", "stop"),
+    [
+        ("model_context_window_exceeded", "max_tokens"),
+        ("pause_turn", "end"),
+        ("stop_sequence", "end"),
+    ],
+)
+async def test_every_stop_reason_maps_to_a_stop(
+    server: ScriptedLLMServer, stop_reason: str, stop: str
+) -> None:
+    """A loop reads `stop`, not the raw reason: a full context window is as
+    final as max_tokens, and a paused or sequence-stopped turn is over."""
+    server.reply(anthropic_message(anthropic_text("Part"), stop_reason=stop_reason))
+
+    response = await make_client(server).complete(request())
+
+    assert response.stop == stop
+    assert response.stop_reason == stop_reason
+    assert response.text == "Part"

@@ -186,8 +186,7 @@ class OpenRouterLLMClient:
         except (AttributeError, TypeError, ValueError):
             # The SDK builds the completion without validating it, so a JSON
             # body that is no completion (a choice without a message, a null
-            # usage count) fails on first access to the missing field, and so
-            # do tool arguments that are not a JSON object.
+            # usage count) fails on first access to the missing field.
             raise LLMUnavailable(
                 "OpenRouter returned a body that is not a chat completion",
                 provider=_PROVIDER,
@@ -273,8 +272,12 @@ def _user_turn(blocks: Sequence[ContentBlock]) -> list[ChatCompletionMessagePara
         for block in blocks
         if isinstance(block, ToolResultBlock)
     ]
+    # Anthropic behind OpenRouter refuses an empty text part.
     parts = [
-        _part(block) for block in blocks if isinstance(block, (TextBlock, ImageBlock))
+        _part(block)
+        for block in blocks
+        if isinstance(block, ImageBlock)
+        or (isinstance(block, TextBlock) and block.text)
     ]
     if parts:
         turn.append(ChatCompletionUserMessageParam(role="user", content=parts))
@@ -372,6 +375,11 @@ def _response(
         )
     stop = _stop(finish_reason)
     tool_calls = choice.message.tool_calls or []
+    if tool_calls and stop == "end":
+        # Some providers behind OpenRouter report "stop" with tool calls; a
+        # loop that reads `stop` would drop them. The raw reason is kept.
+        stop = "tool_use"
+    usage = _usage(completion)
     if stop == "max_tokens" and (structured or tool_calls):
         # Truncated JSON fails validation again on a repair attempt that has
         # even less room left, and a cut tool call carries half its arguments,
@@ -383,7 +391,7 @@ def _response(
                 else "structured output cut at max_tokens"
             ),
             provider=_PROVIDER,
-            usage=_usage(completion),
+            usage=usage,
         )
     content: list[AnswerBlock] = []
     reasoning = (choice.message.model_extra or {}).get("reasoning_details")
@@ -393,10 +401,19 @@ def _response(
         )
     if choice.message.content:
         content.append(TextBlock(choice.message.content))
-    content.extend(_tool_use(call) for call in tool_calls)
+    try:
+        content.extend(_tool_use(call) for call in tool_calls)
+    except (TypeError, ValueError):
+        # Arguments that are not a JSON object: nothing in the answer can be
+        # used, but it was billed.
+        raise LLMUnavailable(
+            "OpenRouter returned a malformed tool call",
+            provider=_PROVIDER,
+            usage=usage,
+        ) from None
     return LLMResponse(
         content=content,
-        usage=_usage(completion),
+        usage=usage,
         model=completion.model,
         provider=_PROVIDER,
         stop=stop,

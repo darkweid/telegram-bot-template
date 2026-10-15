@@ -260,11 +260,20 @@ class AnthropicLLMClient:
                 provider=_PROVIDER,
                 usage=usage,
             )
-        content = [
-            block
-            for block in (_answer_block(item) for item in message.content)
-            if block is not None
-        ]
+        try:
+            content = [
+                block
+                for block in (_answer_block(item) for item in message.content)
+                if block is not None
+            ]
+        except (AttributeError, TypeError):
+            # A tool call whose input is not an object: nothing in the answer
+            # can be used, but it was billed.
+            raise LLMUnavailable(
+                "Anthropic returned a malformed content block",
+                provider=_PROVIDER,
+                usage=usage,
+            ) from None
         return LLMResponse(
             content=content,
             usage=usage,
@@ -328,13 +337,18 @@ def _messages(request: LLMRequest) -> list[MessageParam]:
                     MessageParam(role=message.role, content=message.content)
                 )
             continue
+        items = message.content
+        if message.role == "user":
+            # The API answers 400 to a user turn whose tool results do not
+            # come first; the sort is stable, so each group keeps its order.
+            items = sorted(
+                items, key=lambda item: not isinstance(item, ToolResultBlock)
+            )
         blocks = [
-            block
-            for block in (_block(item) for item in message.content)
-            if block is not None
+            block for block in (_block(item) for item in items) if block is not None
         ]
-        # A turn of the other provider's reasoning alone is left with nothing,
-        # and the API refuses an empty one.
+        # A turn of the other provider's reasoning or of empty text alone is
+        # left with nothing, and the API refuses an empty one.
         if blocks:
             rendered.append(MessageParam(role=message.role, content=blocks))
     return rendered
@@ -343,7 +357,9 @@ def _messages(request: LLMRequest) -> list[MessageParam]:
 def _block(block: ContentBlock) -> ContentBlockParam | None:
     match block:
         case TextBlock(text=text):
-            return TextBlockParam(type="text", text=text)
+            # The API refuses an empty text block, and an answer can carry one
+            # next to a tool call.
+            return TextBlockParam(type="text", text=text) if text else None
         case ImageBlock(media_type=media_type, data=data):
             return ImageBlockParam(
                 type="image",
@@ -380,7 +396,7 @@ def _answer_block(block: AnthropicContentBlock) -> AnswerBlock | None:
             return TextBlock(block.text)
         case AnthropicToolUseBlock():
             if not isinstance(block.input, dict):
-                # Caught with the other malformed bodies in _send.
+                # Caught in _response, which keeps the answer's usage.
                 raise TypeError("tool_use input is not an object")
             return ToolUseBlock(
                 id=block.id,

@@ -1,3 +1,4 @@
+import base64
 from decimal import Decimal
 
 from pydantic import BaseModel
@@ -118,10 +119,17 @@ def test_an_image_type_the_providers_do_not_take_is_refused() -> None:
 
 
 def test_an_image_over_the_provider_limit_is_refused() -> None:
-    """Anthropic refuses an image over 5 MB with a 400, which would read as an
-    outage and switch to the fallback for nothing."""
-    with pytest.raises(ValueError, match="5242880"):
+    """Anthropic refuses an image whose base64 form passes 5 MB with a 400,
+    which would read as an outage and switch to the fallback for nothing."""
+    with pytest.raises(ValueError, match="3932160"):
         ImageBlock(media_type="image/jpeg", data=b"x" * (MAX_IMAGE_BYTES + 1))
+
+
+def test_the_largest_image_still_fits_the_limit_once_encoded() -> None:
+    """The limit is on the base64 payload the API receives, not on the bytes."""
+    ImageBlock(media_type="image/jpeg", data=b"x" * MAX_IMAGE_BYTES)
+
+    assert len(base64.b64encode(b"x" * MAX_IMAGE_BYTES)) <= 5 * 1024 * 1024
 
 
 def test_an_empty_image_is_refused() -> None:

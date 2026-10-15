@@ -1,8 +1,9 @@
 import base64
+from decimal import Decimal
 import json
 from typing import Any
 
-from pydantic import BaseModel
+from pydantic import BaseModel, JsonValue
 import pytest
 
 from src.core.llm.enums import LLMProviderName, ModelTier
@@ -25,7 +26,7 @@ MODELS = {
     ModelTier.STRONG: "anthropic/claude-sonnet-5.5",
     ModelTier.FAST: "anthropic/claude-haiku-5.5",
 }
-REASONING = [
+REASONING: list[JsonValue] = [
     {"type": "reasoning.text", "text": "Weighing.", "signature": "s", "index": 0}
 ]
 
@@ -134,6 +135,8 @@ async def test_every_tool_call_of_an_answer_becomes_a_block_in_order(
 async def test_arguments_that_are_not_a_json_object_are_unavailable(
     server: ScriptedLLMServer, arguments: str
 ) -> None:
+    """The answer was billed: /stats and llm_usage must count it even though
+    nothing in it can be used."""
     server.reply(
         openrouter_completion(
             None,
@@ -142,8 +145,13 @@ async def test_arguments_that_are_not_a_json_object_are_unavailable(
         )
     )
 
-    with pytest.raises(LLMUnavailable):
+    with pytest.raises(LLMUnavailable) as caught:
         await make_client(server).complete(request())
+
+    assert caught.value.usage is not None
+    assert caught.value.usage.input_tokens == 120
+    assert caught.value.usage.output_tokens == 30
+    assert caught.value.usage.cost_usd == Decimal("0.000123")
 
 
 async def test_the_tool_loop_goes_back_in_the_openai_shape(
@@ -311,6 +319,9 @@ async def test_a_tool_call_cut_at_max_tokens_is_an_output_error(
         await make_client(server).complete(request())
 
     assert caught.value.usage is not None
+    assert caught.value.usage.input_tokens == 120
+    assert caught.value.usage.output_tokens == 30
+    assert caught.value.usage.cost_usd == Decimal("0.000123")
 
 
 async def test_a_tool_call_that_is_not_a_function_call_is_unavailable(
@@ -414,3 +425,70 @@ async def test_structured_output_takes_no_tools(server: ScriptedLLMServer) -> No
         await make_client(server).structured(request(), Answer)
 
     assert server.requests == []
+
+
+async def test_tool_calls_under_finish_reason_stop_are_a_tool_use(
+    server: ScriptedLLMServer,
+) -> None:
+    """Some providers behind OpenRouter report "stop" with tool calls; a loop
+    that reads `stop` would drop the calls."""
+    server.reply(
+        openrouter_completion(
+            None,
+            tool_calls=[
+                openrouter_tool_call("lookup", {"query": "rice", "limit": None})
+            ],
+            finish_reason="stop",
+        )
+    )
+
+    response = await make_client(server).complete(request())
+
+    assert response.stop == "tool_use"
+    assert response.stop_reason == "stop"
+    assert len(response.tool_calls) == 1
+
+
+async def test_text_cut_at_max_tokens_is_still_an_answer(
+    server: ScriptedLLMServer,
+) -> None:
+    server.reply(openrouter_completion("A long", finish_reason="length"))
+
+    response = await make_client(server).complete(request())
+
+    assert response.stop == "max_tokens"
+    assert response.stop_reason == "length"
+    assert response.text == "A long"
+
+
+async def test_an_empty_text_block_is_not_sent(server: ScriptedLLMServer) -> None:
+    """Anthropic behind OpenRouter refuses an empty text part; a user turn
+    left with nothing but its tool results sends only those."""
+    server.reply(openrouter_completion())
+
+    await make_client(server).complete(
+        request(
+            messages=[
+                ASK,
+                LLMMessage(
+                    role="assistant",
+                    content=[
+                        ToolUseBlock(
+                            id="call_1", name="lookup", input={"query": "rice"}
+                        )
+                    ],
+                ),
+                LLMMessage(
+                    role="user",
+                    content=[
+                        ToolResultBlock(tool_use_id="call_1", content="found"),
+                        TextBlock(""),
+                    ],
+                ),
+                LLMMessage(role="user", content=[TextBlock("")]),
+            ]
+        )
+    )
+
+    roles = [message["role"] for message in server.bodies()[0]["messages"]]
+    assert roles == ["user", "assistant", "tool"]

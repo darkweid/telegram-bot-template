@@ -10,9 +10,11 @@ from src.core.llm.enums import LLMProviderName, ModelTier
 
 # The width of llm_usage.purpose.
 PURPOSE_MAX_LENGTH = 64
-# What both providers take as an image; the size is Anthropic's per-image limit.
+# What both providers take as an image. Anthropic's 5 MB per-image limit
+# applies to the base64 payload, which is 4/3 of the bytes, so the raw limit
+# is three quarters of it.
 IMAGE_MEDIA_TYPES = frozenset({"image/jpeg", "image/png", "image/gif", "image/webp"})
-MAX_IMAGE_BYTES = 5 * 1024 * 1024
+MAX_IMAGE_BYTES = 5 * 1024 * 1024 * 3 // 4
 # The narrower of the two APIs' rules for a tool name.
 _TOOL_NAME = re.compile(r"[a-zA-Z0-9_-]{1,64}")
 
