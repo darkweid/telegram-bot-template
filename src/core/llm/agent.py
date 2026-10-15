@@ -103,7 +103,8 @@ async def run_agent(
     `deadline_seconds` bounds every model call and every tool, not `on_step`.
     An LLMError is raised with the run so far in its `agent_run`; any other
     exception from a tool or from `on_step` is raised as it is, and so is a
-    cancel from outside.
+    cancel from outside. A model call cut by the deadline makes
+    `usage.cost_usd` unknown.
     """
     if base.tools:
         raise ValueError("tools go to run_agent, not to the base request")
@@ -120,6 +121,11 @@ async def run_agent(
         result = await run.drive(client, max_steps, on_step)
     except LLMError as error:
         error.agent_run = run.result("answer", "")
+        run.log(type(error).__name__)
+        raise
+    except BaseException as error:
+        # A cancel or a bug in a tool or on_step: the line still says how
+        # far the run got.
         run.log(type(error).__name__)
         raise
     run.log(result.stop)
@@ -214,6 +220,9 @@ class _Run:
         except TimeoutError:
             # A TimeoutError of the client's own is not the deadline.
             if timeout.expired():
+                # Its usage row has no cost, and the provider may have
+                # billed it: the total is unknown, not lower.
+                self._usage = replace(self._usage, cost_usd=None)
                 return None
             raise
         except LLMError as error:

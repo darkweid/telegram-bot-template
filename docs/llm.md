@@ -262,7 +262,8 @@ stored data.
 - `AgentRun.stop` is `answer`, `tool_ended`, `steps_exhausted` or `deadline`;
   `final_text` is the last answer's text, `messages` the history with every
   turn the loop added, the final answer included, `usage` the sum of every
-  call (`cost_usd` None when any cost was unknown). The caller decides what
+  call (`cost_usd` None when any cost was unknown, a model call the deadline
+  cut included: its `llm_usage` row has no cost). The caller decides what
   the user hears: after `deadline` or `steps_exhausted` with `wrote`, part of
   a change may be saved.
 - An `LLMError` ends the run and carries the run so far in
@@ -270,9 +271,10 @@ stored data.
 - `on_step(StepEvent(step, tool_names))` runs before the step's tools: show
   progress there, with `ProcessingStatus.update`.
 
-Each run logs one line: purpose, steps, outcome, the tools called with their
-counts, whether a tool wrote, and the cost; never the prompt, the arguments or
-the answers.
+Each run logs one line, however it ends: purpose, steps, outcome (the stop,
+or the class of the exception that ended it, a cancel included), the tools
+called with their counts, whether a tool wrote, and the cost; never the
+prompt, the arguments or the answers.
 
 A run takes seconds: start it in [background work](bot-layer.md#background-work),
 never in the handler. `tests/unit/src/core/test_agent_in_background.py` is

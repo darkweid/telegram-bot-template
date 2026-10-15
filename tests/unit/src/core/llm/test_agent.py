@@ -323,10 +323,37 @@ async def test_any_other_tool_error_ends_the_run() -> None:
     """A bug in a tool is not the model's to work around."""
     llm = FakeLLMClient()
     llm.queue_tool_calls(tool_call("raises", {"query": "rice"}))
-    with pytest.raises(ZeroDivisionError):
-        await run_agent(
-            llm, BASE, [Raises(ZeroDivisionError())], max_steps=5, deadline_seconds=5
-        )
+    with captured_logs("src.core.llm.agent") as records:
+        with pytest.raises(ZeroDivisionError):
+            await run_agent(
+                llm,
+                BASE,
+                [Raises(ZeroDivisionError("secret-detail"))],
+                max_steps=5,
+                deadline_seconds=5,
+            )
+    [record] = records
+    line = record.getMessage()
+    assert "stop=ZeroDivisionError" in line and "tools=raises:1" in line
+    assert "steps=1" in line and "secret" not in line
+
+
+async def test_a_failing_on_step_still_logs_the_run() -> None:
+    """The line says how far a run got before the bug, as it does for any
+    other ending."""
+    llm = FakeLLMClient()
+    llm.queue_tool_calls(tool_call("lookup", {"query": "rice"}))
+
+    async def on_step(event: StepEvent) -> None:
+        raise ZeroDivisionError
+
+    with captured_logs("src.core.llm.agent") as records:
+        with pytest.raises(ZeroDivisionError):
+            await run_agent(
+                llm, BASE, [Lookup()], max_steps=5, deadline_seconds=5, on_step=on_step
+            )
+    [record] = records
+    assert "steps=1 stop=ZeroDivisionError tools=-" in record.getMessage()
 
 
 async def test_the_deadline_cuts_a_slow_model_call() -> None:
@@ -337,6 +364,8 @@ async def test_the_deadline_cuts_a_slow_model_call() -> None:
     run = await run_agent(llm, BASE, [Lookup()], max_steps=5, deadline_seconds=0.05)
     assert (run.stop, run.steps, run.final_text) == ("deadline", 2, "Looking.")
     assert llm.cancelled
+    # The cut call's row has no cost, and the provider may have billed it.
+    assert run.usage.cost_usd is None
 
 
 async def test_the_deadline_cuts_a_slow_tool() -> None:
@@ -472,7 +501,10 @@ async def test_a_cancel_from_outside_is_not_a_deadline() -> None:
     )
     async with asyncio.timeout(2):
         await llm.entered.wait()
-    task.cancel()
-    with pytest.raises(asyncio.CancelledError):
-        await task
+    with captured_logs("src.core.llm.agent") as records:
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
     assert llm.cancelled
+    [record] = records
+    assert "steps=1 stop=CancelledError" in record.getMessage()
