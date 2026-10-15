@@ -157,6 +157,30 @@ twice a day and nginx reloads every six hours, so a renewed certificate is in
 use within six hours. `make clean` keeps the certificate volume: Let's Encrypt
 issues a certificate for the same host at most five times a week.
 
+## Deployment
+
+On the box, from the checkout:
+
+    bash infra/deploy/deploy.sh
+
+It checks `.env` (`make check-env`), and in webhook mode tests the nginx
+configuration and refuses to go on without a certificate (`make cert-issue`).
+Then it builds the Postgres image, builds the bot image or pulls `BOT_IMAGE`,
+starts Postgres and Redis, applies the migrations, and replaces the bot, the
+worker and the scheduler. A failed check or migration stops it with the
+previous stack still running.
+
+- In webhook mode the new bot starts beside the old one and nginx moves to it
+  once it is healthy, so no update is refused. In polling mode the bot is
+  replaced in place: two pollers on one token conflict.
+- When the new bot, worker or scheduler never turns healthy, the stack goes
+  back to the image it ran before. Migrations stay applied.
+- `BUILD=1` builds the image on the box (the default without `BOT_IMAGE`);
+  `BUILD=0` pulls `BOT_IMAGE`, the image CI pushed:
+  `BUILD=0 BOT_IMAGE=ghcr.io/<owner>/<repo>:sha-<12> bash infra/deploy/deploy.sh`.
+- At the end it removes images and build cache unused for a week, on Linux
+  only; `PRUNE=0` keeps them.
+
 ## Roles
 
 Two optional roles, set in `.env` as comma-separated Telegram user ids:
