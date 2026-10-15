@@ -145,8 +145,48 @@ def test_a_base_url_with_a_path_is_refused(base_url: str) -> None:
     assert errors[0].startswith("WEBHOOK_BASE_URL must be the origin only")
 
 
-def test_a_trailing_slash_and_a_port_are_an_origin() -> None:
-    assert _webhook_errors(WEBHOOK_BASE_URL="https://bot.example.com:8443/") == []
+def test_a_trailing_slash_and_the_https_port_are_an_origin() -> None:
+    assert _webhook_errors(WEBHOOK_BASE_URL="https://bot.example.com:443/") == []
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://bot.example.com:8443",
+        "https://bot.example.com:8443/",
+        "https://bot.example.com:port",
+        "https://bot.example.com:99999",
+    ],
+)
+def test_a_port_other_than_443_is_refused(url: str) -> None:
+    """nginx publishes 443 only and the firewall opens nothing else; Telegram
+    would call the named port, nothing would answer, and every other check
+    would still pass."""
+    errors = _webhook_errors(WEBHOOK_BASE_URL=url)
+    assert len(errors) == 1
+    assert errors[0].startswith("WEBHOOK_BASE_URL must not name a port")
+
+
+@pytest.mark.parametrize(
+    "host", ["127.0.0.1", "127.1.2.3", "localhost", "::1", "[::1]"]
+)
+def test_a_loopback_web_server_is_refused_in_webhook_mode(host: str) -> None:
+    """The bot's own healthcheck passes on loopback, but nginx runs in another
+    container and could never reach it: every update would get a 502."""
+    errors = _webhook_errors(WEB_SERVER_HOST=host)
+    assert len(errors) == 1
+    assert errors[0].startswith("WEB_SERVER_HOST must not be a loopback address")
+
+
+@pytest.mark.parametrize("host", ["", "0.0.0.0", "::", "bot"])
+def test_a_reachable_web_server_passes_in_webhook_mode(host: str) -> None:
+    assert _webhook_errors(WEB_SERVER_HOST=host) == []
+
+
+def test_a_loopback_web_server_passes_in_polling_mode() -> None:
+    """Polling serves only the health app, which the bot's own healthcheck
+    probes from inside its container."""
+    assert _errors(WEB_SERVER_HOST="127.0.0.1") == []
 
 
 @pytest.mark.parametrize(

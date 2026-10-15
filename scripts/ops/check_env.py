@@ -21,7 +21,7 @@ import ipaddress
 from pathlib import Path
 import re
 import sys
-from urllib.parse import urlsplit
+from urllib.parse import SplitResult, urlsplit
 
 # Every key the template reads from .env: the bot's settings, compose's own
 # (profiles, image, host ports, limits) and those of nginx. A key missing here
@@ -127,6 +127,8 @@ WEBHOOK_PATH_MAX_LENGTH = 256
 DEFAULT_WEBHOOK_PATH = "/webhook/telegram"
 BOT_MODES = ("polling", "webhook")
 WEBHOOK_PROFILE = "webhook"
+# The one port nginx publishes for the webhook (infra/docker-compose.yml).
+HTTPS_PORT = 443
 # What pydantic reads as true for a bool setting.
 TRUE_VALUES = frozenset({"1", "true", "t", "yes", "y", "on"})
 # Marks every secret placeholder in .env.example.
@@ -205,6 +207,24 @@ def _check_ids(env: dict[str, str], key: str, report: Report) -> None:
             return
 
 
+def _port(url: SplitResult) -> int | None:
+    """The URL's explicit port; -1 for one that is not a port number."""
+    try:
+        return url.port
+    except ValueError:
+        return -1
+
+
+def _is_loopback(host: str) -> bool:
+    host = host.strip().strip("[]").lower()
+    if host == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
 def _check_webhook(env: dict[str, str], report: Report) -> None:
     base_url = urlsplit(env.get("WEBHOOK_BASE_URL", ""))
     if base_url.scheme != "https" or not base_url.hostname:
@@ -215,6 +235,13 @@ def _check_webhook(env: dict[str, str], report: Report) -> None:
         report.errors.append(
             "WEBHOOK_BASE_URL must be the origin only (no path, query or "
             "fragment); the path goes into WEBHOOK_PATH"
+        )
+    elif _port(base_url) not in (None, HTTPS_PORT):
+        # nginx publishes 443 only and the firewall opens 80 and 443; Telegram
+        # would call the named port and nothing would answer.
+        report.errors.append(
+            "WEBHOOK_BASE_URL must not name a port other than 443: nginx "
+            "receives the webhook on 443 only"
         )
     path = env.get("WEBHOOK_PATH") or DEFAULT_WEBHOOK_PATH
     segments = path[1:].split("/")
@@ -229,6 +256,13 @@ def _check_webhook(env: dict[str, str], report: Report) -> None:
         report.errors.append(
             "WEBHOOK_PATH must start with / and hold segments of "
             "A-Z a-z 0-9 _ -, at most 256 characters"
+        )
+    if _is_loopback(env.get("WEB_SERVER_HOST", "")):
+        # The bot's own healthcheck runs inside its container and passes;
+        # nginx, in another container, cannot reach a loopback address.
+        report.errors.append(
+            "WEB_SERVER_HOST must not be a loopback address in webhook mode: "
+            "nginx reaches the bot from another container"
         )
     if not WEBHOOK_SECRET_PATTERN.fullmatch(env.get("WEBHOOK_SECRET", "")):
         report.errors.append(
