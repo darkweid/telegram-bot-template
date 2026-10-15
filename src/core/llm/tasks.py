@@ -1,12 +1,13 @@
 """Background upkeep of the LLM layer."""
 
 from datetime import timedelta
+from functools import partial
 from typing import NewType
 
 from dishka import FromDishka
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.core.database.uow import SQLAlchemyUnitOfWork
+from src.core.database.batches import delete_in_batches
 from src.core.llm.repository import LLMUsageRepository
 from src.core.utils.datetime_utils import get_utc_now
 
@@ -24,21 +25,7 @@ async def purge_llm_usage(
     retention: FromDishka[LLMUsageRetention],
 ) -> str:
     """Delete usage rows older than the retention window, in batches of
-    LLM_USAGE_PURGE_BATCH_SIZE.
-
-    Each batch commits in a unit of work of its own: in one transaction a
-    failure on a late batch would roll back every earlier one, and a large
-    backlog would hold its locks for the whole run.
-    """
-    cutoff = get_utc_now() - retention
-    deleted = 0
-    while True:
-        async with SQLAlchemyUnitOfWork(session) as uow:
-            batch = await usage.purge_older_than(
-                uow.session, cutoff, limit=LLM_USAGE_PURGE_BATCH_SIZE
-            )
-            await uow.commit()
-        deleted += batch
-        if batch < LLM_USAGE_PURGE_BATCH_SIZE:
-            break
+    LLM_USAGE_PURGE_BATCH_SIZE (see `delete_in_batches`)."""
+    purge_batch = partial(usage.purge_older_than, cutoff=get_utc_now() - retention)
+    deleted = await delete_in_batches(session, purge_batch, LLM_USAGE_PURGE_BATCH_SIZE)
     return f"Deleted {deleted} LLM usage rows."

@@ -26,17 +26,12 @@ async def test_rows_older_than_the_retention_are_deleted_batch_by_batch(
     usage = AsyncMock(spec=LLMUsageRepository)
     usage.purge_older_than.side_effect = [LLM_USAGE_PURGE_BATCH_SIZE, 7]
 
-    result = await purge_llm_usage(session, usage, RETENTION)  # type: ignore[arg-type]
+    result = await purge_llm_usage(session, usage, RETENTION)
 
     cutoff = NOW - timedelta(days=90)
-    assert [call.args for call in usage.purge_older_than.await_args_list] == [
-        (session, cutoff),
-        (session, cutoff),
-    ]
-    assert all(
-        call.kwargs == {"limit": LLM_USAGE_PURGE_BATCH_SIZE}
-        for call in usage.purge_older_than.await_args_list
-    )
+    assert [
+        (call.args, call.kwargs) for call in usage.purge_older_than.await_args_list
+    ] == [((session,), {"cutoff": cutoff, "limit": LLM_USAGE_PURGE_BATCH_SIZE})] * 2
     assert session.commit.await_count == 2
     assert result == f"Deleted {LLM_USAGE_PURGE_BATCH_SIZE + 7} LLM usage rows."
 
@@ -53,7 +48,7 @@ async def test_a_failed_llm_usage_purge_batch_keeps_the_earlier_ones_deleted() -
     ]
 
     with pytest.raises(ConnectionError):
-        await purge_llm_usage(session, usage, RETENTION)  # type: ignore[arg-type]
+        await purge_llm_usage(session, usage, RETENTION)
 
     assert session.commit.await_count == 2
     session.rollback.assert_awaited()
