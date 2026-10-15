@@ -6,9 +6,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
-  issues: write
-  pull-requests: write
+  contents: read
 
 concurrency:
   group: pre-commit-autoupdate
@@ -18,6 +16,11 @@ jobs:
   autoupdate:
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    # Push the branch, open the pull request, label and close superseded ones.
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
 
     steps:
       - name: Checkout repository
@@ -73,10 +76,13 @@ jobs:
       - name: Close superseded pull requests
         if: steps.create_pr.outputs.pull-request-operation == 'created'
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        # Through the environment, never spliced into the script's source.
+        env:
+          PR_NUMBER: ${{ steps.create_pr.outputs.pull-request-number }}
         with:
           github-token: ${{ secrets.PRECOMMIT_BOT_TOKEN || github.token }}
           script: |
-            const currentPullRequestNumber = Number("${{ steps.create_pr.outputs.pull-request-number }}");
+            const currentPullRequestNumber = Number(process.env.PR_NUMBER);
             const targetTitle = "chore: update pre-commit hooks";
             const targetHeadPrefix = "chore/pre-commit-autoupdate-";
             const currentRepositoryFullName = `${context.repo.owner}/${context.repo.repo}`;

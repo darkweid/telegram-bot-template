@@ -88,3 +88,28 @@ def test_callers_grant_every_permission_the_reusable_workflow_requests(
                         _RANK[granted.get(scope, "none")] >= _RANK[level]
                     ), f"{caller}: {where} requests {scope}: {level}"
     assert found
+
+
+def test_no_workflow_grants_write_to_every_job() -> None:
+    """A write permission at workflow level reaches every job, including ones
+    added later that run third-party code and need none; the job that writes
+    asks for it."""
+    for path in (PROJECT_ROOT / ".github/workflows").glob("*.yml"):
+        workflow = yaml.safe_load(path.read_text(encoding="utf-8"))
+        granted = _grants(workflow.get("permissions"))
+        assert "write" not in granted.values(), path.name
+
+
+def test_github_script_never_splices_an_expression_into_its_source() -> None:
+    """An expression in `script` is pasted into the JavaScript before it runs,
+    so a value with a quote in it rewrites the code; the environment hands it
+    over as data."""
+    found = 0
+    for path in (PROJECT_ROOT / ".github/workflows").glob("*.yml"):
+        workflow = yaml.safe_load(path.read_text(encoding="utf-8"))
+        for name, job in workflow["jobs"].items():
+            for step in job.get("steps", []):
+                if step.get("uses", "").startswith("actions/github-script@"):
+                    found += 1
+                    assert "${{" not in step["with"]["script"], f"{path.name}: {name}"
+    assert found
