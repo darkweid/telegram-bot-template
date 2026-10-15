@@ -577,6 +577,19 @@ def test_containers_left_by_an_interrupted_roll_are_stopped_first(
     assert deploy.running("bot") == ["tg-bot-template-bot-3"]
 
 
+def test_a_worker_with_no_container_rolls_the_stack_back(tmp_path: Path) -> None:
+    """A service with nothing left to inspect would otherwise pass the check, and
+    the new bot would enqueue tasks no worker ever runs."""
+    state = _serving_webhook_stack(_container("bot", 1), pinned=["bot"])
+    state["tasks"] = {LOCAL_IMAGE: "gone 0"}
+    deploy = _deploy(tmp_path, WEBHOOK_ENV, state=state)
+    assert deploy.returncode == 1
+    assert "worker has no container 15s after it started" in deploy.output
+    assert "rolled back; the deploy failed" in deploy.output
+    assert deploy.running("worker") == ["tg-bot-template-worker-1"]
+    assert deploy.running("bot") == ["tg-bot-template-bot-3"]
+
+
 def test_a_failing_worker_rolls_the_webhook_bot_back(tmp_path: Path) -> None:
     """No two versions of the code may keep running together: the bot goes back
     to the previous image through the same roll, with no update refused."""

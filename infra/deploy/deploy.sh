@@ -405,12 +405,19 @@ discard_new_bot() {
 # a crash loop. Callers test it in an `if` or after `||`, so every step checks
 # its own status.
 replace_worker_and_scheduler() {
-  local service id state
+  local service ids id state
   "${COMPOSE[@]}" up -d --no-deps --wait \
     --wait-timeout "$TASKS_HEALTHY_TIMEOUT_SECONDS" worker scheduler || return 1
   sleep "$TASKS_SETTLE_SECONDS"
   for service in worker scheduler; do
-    for id in $("${COMPOSE[@]}" ps -a -q "$service"); do
+    ids="$("${COMPOSE[@]}" ps -a -q "$service")" || return 1
+    # A container removed in the meantime leaves nothing to inspect, which
+    # must not read as healthy.
+    if [ -z "$ids" ]; then
+      echo "[deploy] ${service} has no container ${TASKS_SETTLE_SECONDS}s after it started"
+      return 1
+    fi
+    for id in $ids; do
       state="$(docker inspect -f '{{.State.Status}} {{.RestartCount}}' "$id")" || return 1
       if [ "$state" != "running 0" ]; then
         echo "[deploy] ${service} is ${state:-gone} ${TASKS_SETTLE_SECONDS}s after it started"

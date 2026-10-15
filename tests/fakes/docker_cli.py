@@ -5,7 +5,8 @@ Every call is appended to STUB_LOG as "<BOT_IMAGE> | <arguments>", and a call
 whose record contains STUB_FAIL_ON exits 1 before it has any effect.
 
 Without STUB_STATE it only answers the calls a polling deploy reads from:
-`ps -q bot` with STUB_BOT_ID and `inspect` of an image with sha256:previous.
+`ps -q bot` with STUB_BOT_ID, `inspect` of an image with sha256:previous, and
+one running worker and scheduler.
 
 With STUB_STATE, a JSON file, it keeps the containers and the nginx upstream
 the deploy works on and records what happened in its "events":
@@ -22,7 +23,7 @@ the deploy works on and records what happened in its "events":
 - "nginx_starting": the "starting" of an nginx `up` starts, 0 by default.
 - "bot_health": {image: [...]} for the bot containers `up --scale` starts.
 - "tasks": {image: "<status> <restarts>"} for the worker and the scheduler
-  `up --wait` starts, "running 0" by default.
+  `up --wait` starts, "running 0" by default; "gone 0" leaves none.
 """
 
 import json
@@ -45,8 +46,12 @@ def _legacy(args: list[str]) -> int:
     joined = " ".join(args)
     if joined.endswith("ps -q bot") and os.environ.get("STUB_BOT_ID"):
         print(os.environ["STUB_BOT_ID"])
+    elif args[-4:-1] == ["ps", "-a", "-q"] and args[-1] in ("worker", "scheduler"):
+        print(f"{args[-1]}1")
     elif args[:3] == ["inspect", "-f", "{{.Image}}"]:
         print("sha256:previous")
+    elif args[:3] == ["inspect", "-f", "{{.State.Status}} {{.RestartCount}}"]:
+        print("running 0")
     return 0
 
 
@@ -135,6 +140,8 @@ class Docker:
                 self.containers[:] = [
                     c for c in self.containers if c["service"] != service
                 ]
+                if status == "gone":
+                    continue
                 self._start(service, image, [])
                 self.containers[-1]["status"] = status
                 self.containers[-1]["restarts"] = int(restarts)
