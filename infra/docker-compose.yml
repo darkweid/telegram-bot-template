@@ -1,6 +1,6 @@
 # The bot and the services it needs.
 
-name: tg-bot-template
+name: telegram-bot-template
 services:
   # Every limit below comes from .env (BOT_CPUS, BOT_MEMORY, ...) with the
   # default written here, so a small box lowers them without editing this file.
@@ -12,7 +12,7 @@ services:
       dockerfile: infra/docker/Dockerfile
       args:
         COMMIT_SHA: ${COMMIT_SHA:-unknown}
-    image: ${BOT_IMAGE:-tg-bot-template-bot:latest}
+    image: ${BOT_IMAGE:-telegram-bot-template-bot:latest}
     # Only builds the image; must not start a second bot when the stack comes up.
     command: ["true"]
     networks:
@@ -22,7 +22,7 @@ services:
     build:
       context: ..
       dockerfile: infra/postgres/Dockerfile
-    image: tg-bot-template-postgres:18
+    image: telegram-bot-template-postgres:18
     restart: always
     shm_size: 256m
     # Loopback only: an operator reaches it through an SSH tunnel to 127.0.0.1 on
@@ -55,7 +55,7 @@ services:
   # Applies the migrations baked into the image the bot runs, once, before the
   # bot starts. `make migrate` runs it by hand.
   migrate:
-    image: ${BOT_IMAGE:-tg-bot-template-bot:latest}
+    image: ${BOT_IMAGE:-telegram-bot-template-bot:latest}
     env_file: ../.env
     command: ["alembic", "upgrade", "head"]
     depends_on:
@@ -72,7 +72,7 @@ services:
           memory: ${MIGRATE_MEMORY:-256M}
 
   bot:
-    image: ${BOT_IMAGE:-tg-bot-template-bot:latest}
+    image: ${BOT_IMAGE:-telegram-bot-template-bot:latest}
     env_file: ../.env
     restart: unless-stopped
     # Longer than SHUTDOWN_TIMEOUT_SECONDS (20 by default): SIGTERM makes the
@@ -108,7 +108,7 @@ services:
   # Runs background tasks: one process, up to 20 at once; scale with replicas.
   # Waits for the migrations like the bot: tasks read and write the same tables.
   worker:
-    image: ${BOT_IMAGE:-tg-bot-template-bot:latest}
+    image: ${BOT_IMAGE:-telegram-bot-template-bot:latest}
     env_file: ../.env
     restart: unless-stopped
     command:
@@ -146,7 +146,7 @@ services:
   # Exactly one: taskiq has no duplicate-fire protection, N schedulers fire
   # every cron N times. It also fires the worker's delayed retries.
   scheduler:
-    image: ${BOT_IMAGE:-tg-bot-template-bot:latest}
+    image: ${BOT_IMAGE:-telegram-bot-template-bot:latest}
     env_file: ../.env
     restart: unless-stopped
     command:
@@ -284,17 +284,17 @@ services:
 
 volumes:
   postgres-data:
-    name: tg-bot-template-postgres-data
+    name: telegram-bot-template-postgres-data
   redis-data:
-    name: tg-bot-template-redis-data
+    name: telegram-bot-template-redis-data
   nginx-upstream:
-    name: tg-bot-template-nginx-upstream
+    name: telegram-bot-template-nginx-upstream
   certbot-certs:
-    name: tg-bot-template-certbot-certs
+    name: telegram-bot-template-certbot-certs
   certbot-webroot:
-    name: tg-bot-template-certbot-webroot
+    name: telegram-bot-template-certbot-webroot
 
 networks:
   bot-network:
-    name: tg-bot-template-network
+    name: telegram-bot-template-network
     driver: bridge

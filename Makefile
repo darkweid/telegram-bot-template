@@ -16,7 +16,7 @@ HOST_USER := $(shell id -u):$(shell id -g)
 
 APP_CONTAINER = bot
 # The bot image's name when BOT_IMAGE is unset; matches the default in COMPOSE_BASE.
-LOCAL_BOT_IMAGE = tg-bot-template-bot:latest
+LOCAL_BOT_IMAGE = telegram-bot-template-bot:latest
 # The commit baked into a locally built image; /status and /health show it.
 # Twelve characters, like the sha- tag CI gives the image.
 # Evaluated once; a COMMIT_SHA from the shell or the command line wins.
@@ -43,6 +43,13 @@ ANSIBLE_PLAYBOOK = ANSIBLE_CONFIG=$(ANSIBLE_DIR)/ansible.cfg $(ANSIBLE_BIN)/ansi
 BOOTSTRAP_USER ?= root
 
 .DEFAULT_GOAL := help
+
+##@ Project
+
+.PHONY: init-project
+init-project: ## Turn the template into your bot: make init-project NAME=my-bot [LOCALE=ru]
+	@test -n "$(NAME)" || { echo "NAME is required: make init-project NAME=my-bot"; exit 1; }
+	python3 scripts/init_project.py "$(NAME)" $(if $(LOCALE),--locale "$(LOCALE)")
 
 ##@ Stack
 
@@ -95,18 +102,18 @@ shell: ## Open a bash shell inside the bot container
 
 # Let's Encrypt issues a certificate for the same host at most five times a
 # week, so the certificate volume outlives `make clean`; remove it by hand
-# (`docker volume rm tg-bot-template-certbot-certs`) to start over. compose
+# (`docker volume rm telegram-bot-template-certbot-certs`) to start over. compose
 # labels every volume it creates with the project name, which selects the rest.
 # `rm --volumes` first removes the anonymous volumes images declare (certbot's
 # /var/lib/letsencrypt), which `down` without -v would leave behind.
 # The project name is fixed in compose, so every checkout and worktree of this
 # repository shares these volumes: `make clean` from any of them empties all.
-CERTIFICATE_VOLUME = tg-bot-template-certbot-certs
+CERTIFICATE_VOLUME = telegram-bot-template-certbot-certs
 .PHONY: clean
 clean: ## Remove the stack with its volumes (the certificate kept), local images and orphans
 	$(DOCKER_COMPOSE) --profile webhook rm --stop --force --volumes
 	$(DOCKER_COMPOSE) --profile webhook down --rmi local --remove-orphans
-	docker volume ls -q --filter label=com.docker.compose.project=tg-bot-template \
+	docker volume ls -q --filter label=com.docker.compose.project=telegram-bot-template \
 		| grep -vxF '$(CERTIFICATE_VOLUME)' | xargs -r docker volume rm
 
 .PHONY: clean-resources
@@ -211,7 +218,7 @@ test-cov: ## Run the tests with a coverage report
 .PHONY: test-integration
 test-integration: ## Run the integration suite against a throwaway PostgreSQL and Redis
 	@set -e; \
-	COMPOSE="docker compose -p tg-bot-template-test-$$$$ --env-file .env.test -f $(COMPOSE_TEST)"; \
+	COMPOSE="docker compose -p telegram-bot-template-test-$$$$ --env-file .env.test -f $(COMPOSE_TEST)"; \
 	export POSTGRES_PORT= REDIS_PORT=; \
 	trap "$$COMPOSE down -v --remove-orphans >/dev/null 2>&1" EXIT INT TERM; \
 	$$COMPOSE up -d --wait --wait-timeout 120; \
@@ -231,7 +238,7 @@ test-all: test test-integration ## Run the unit suite and then the integration s
 
 I18N_DIR = locales
 I18N_DOMAIN = messages
-I18N_PROJECT = tg-bot-template
+I18N_PROJECT = telegram-bot-template
 I18N_POT ?= $(I18N_DIR)/$(I18N_DOMAIN).pot
 # `_`, `gettext`, `ngettext` and `N_` are Babel's defaults; `__` is the alias
 # the code uses for lazy_gettext. No locations: line numbers would turn every

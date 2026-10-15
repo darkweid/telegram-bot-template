@@ -107,8 +107,9 @@ Then:
    `.env` is readable by `deploy` only, and `ops` is not in the `docker` group.
    `ssh -p <sshd_port> ops@<host>`, then `sudo -iu deploy` and
    `cd /srv/<app_name>`. Run `make check-env`; in webhook mode issue the
-   certificate (`make cert-issue DOMAIN=<domain>`, see the root README, Webhook
-   mode); then `bash infra/deploy/deploy.sh`.
+   certificate (`make cert-issue DOMAIN=<domain>`, see
+   [nginx and the certificate](../../docs/deployment.md#nginx-and-the-certificate));
+   then `bash infra/deploy/deploy.sh`.
 
 ## Later
 
