@@ -267,8 +267,9 @@ class AnthropicLLMClient:
                 if block is not None
             ]
         except (AttributeError, TypeError):
-            # A tool call whose input is not an object: nothing in the answer
-            # can be used, but it was billed.
+            # A tool call whose input is not an object, or a block the SDK
+            # built without a field it needs: nothing in the answer can be
+            # used, but it was billed.
             raise LLMUnavailable(
                 "Anthropic returned a malformed content block",
                 provider=_PROVIDER,

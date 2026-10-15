@@ -217,11 +217,10 @@ provider's blocks.
 ## Images
 
 `ImageBlock(media_type, data)` goes into a user message next to text:
-JPEG, PNG, GIF or WebP, at most 3,932,160 bytes (`MAX_IMAGE_BYTES`):
-Anthropic's 5 MB limit applies to the base64 form, which is 4/3 of the
-bytes. Anything else
-raises `ValueError` when the block is built; shrinking a photo is the
-domain's job. The log under `LLM_LOG_CONTENT` names an image by type and
+JPEG, PNG, GIF or WebP, at most 3,932,160 bytes (`MAX_IMAGE_BYTES`), so
+that even the base64 form, 4/3 of the bytes, stays under Anthropic's 5 MiB
+limit. Anything else raises `ValueError` when the block is built; shrinking
+a photo is the domain's job. The log under `LLM_LOG_CONTENT` names an image by type and
 size, never its bytes.
 
 ## Fallback
