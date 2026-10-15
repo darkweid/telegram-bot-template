@@ -63,7 +63,7 @@ async def test_the_adapter_gets_every_setting(
     assert config.s3 == {"addressing_style": "path"}
     assert config.connect_timeout == 5
     assert config.read_timeout == 120
-    assert config.retries == {"max_attempts": 3, "mode": "standard"}
+    assert config.retries == {"total_max_attempts": 3, "mode": "standard"}
 
 
 async def test_with_s3_off_the_container_holds_the_disabled_client(

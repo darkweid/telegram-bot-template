@@ -136,7 +136,9 @@ class S3Adapter(S3Client):
             },
             connect_timeout=connect_timeout_seconds,
             read_timeout=read_timeout_seconds,
-            retries={"max_attempts": retry_max_attempts, "mode": retry_mode},
+            # total_max_attempts counts the first request; botocore's
+            # max_attempts would count retries only and allow one more call.
+            retries={"total_max_attempts": retry_max_attempts, "mode": retry_mode},
         )
 
     def _resolve_addressing_style(
