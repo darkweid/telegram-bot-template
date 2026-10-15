@@ -1,0 +1,151 @@
+from aiogram.methods import SendMessage
+from pydantic import BaseModel
+import pytest
+
+from src.core.limiter.limiter import RateLimiter
+from src.core.llm.enums import LLMProviderName
+from src.core.llm.errors import (
+    LLMError,
+    LLMOutputError,
+    LLMRateLimited,
+    LLMRefused,
+    LLMTimeout,
+    LLMUnavailable,
+)
+from src.core.llm.fallback import FallbackLLMClient
+from src.core.llm.types import LLMMessage, LLMRequest, LLMResponse
+from src.core.redis.degradation import RedisDegradationReporter
+from src.core.telegram.alerts import DeveloperAlerter
+from src.core.update_context import UpdateContext, bind_update_context
+from tests.fakes.llm import FakeLLMClient, llm_response
+from tests.fakes.redis import InMemoryRedis
+from tests.fakes.telegram import FakeTelegramSession, make_bot
+from tests.helpers.logs import captured_logs
+
+REQUEST = LLMRequest(
+    purpose="note_summary",
+    messages=[LLMMessage(role="user", content="hi")],
+    model="claude-haiku-5-5",
+)
+FALLBACK_MODEL = "vendor/fallback-model"
+
+
+class Answer(BaseModel):
+    summary: str
+
+
+def _fallback_answer(text: str = "from the fallback") -> LLMResponse:
+    return llm_response(text, provider=LLMProviderName.OPENROUTER, model=FALLBACK_MODEL)
+
+
+def _client(
+    session: FakeTelegramSession | None = None,
+) -> tuple[FallbackLLMClient, FakeLLMClient, FakeLLMClient]:
+    primary, fallback = FakeLLMClient(), FakeLLMClient()
+    alerter = DeveloperAlerter(
+        make_bot(session or FakeTelegramSession()),
+        RateLimiter(
+            InMemoryRedis(),
+            prefix="alerts",
+            reporter=RedisDegradationReporter("Alerts"),
+        ),
+        recipients=(-100500,),
+        cooldown_seconds=300,
+    )
+    return FallbackLLMClient(primary, fallback, alerter), primary, fallback
+
+
+@pytest.mark.parametrize("error_type", [LLMUnavailable, LLMTimeout, LLMRateLimited])
+async def test_a_provider_outage_is_answered_by_the_fallback(
+    error_type: type[LLMError],
+) -> None:
+    """One vendor's outage must not take the bot's answers with it."""
+    client, primary, fallback = _client()
+    primary.queue(error_type("down", provider=LLMProviderName.ANTHROPIC))
+    answer = _fallback_answer()
+    fallback.queue(answer)
+    assert await client.complete(REQUEST) is answer
+
+
+async def test_a_healthy_primary_answers_alone() -> None:
+    client, primary, fallback = _client()
+    answer = llm_response("from the primary")
+    primary.queue(answer)
+    assert await client.complete(REQUEST) is answer
+    assert fallback.calls == []
+
+
+async def test_the_fallback_answers_with_its_own_model() -> None:
+    """An Anthropic model id means nothing to the other vendor; the fallback
+    uses the model it was configured with."""
+    client, primary, fallback = _client()
+    primary.queue(LLMUnavailable("down", provider=LLMProviderName.ANTHROPIC))
+    await client.complete(REQUEST)
+    assert primary.calls[0].model == "claude-haiku-5-5"
+    [sent] = fallback.calls
+    assert sent.model is None
+    assert (sent.purpose, sent.messages) == (REQUEST.purpose, REQUEST.messages)
+
+
+@pytest.mark.parametrize("error_type", [LLMRefused, LLMOutputError])
+async def test_a_failure_of_the_request_is_not_sent_elsewhere(
+    error_type: type[LLMError],
+) -> None:
+    """A refused prompt or an unparsable answer would most likely fail with
+    the other vendor too, and cost twice."""
+    session = FakeTelegramSession()
+    client, primary, fallback = _client(session)
+    primary.queue(error_type("no", provider=LLMProviderName.ANTHROPIC))
+    with pytest.raises(error_type):
+        await client.complete(REQUEST)
+    assert fallback.calls == []
+    assert session.sent(SendMessage) == []
+
+
+async def test_developers_hear_of_a_switch_once_per_cooldown() -> None:
+    """During an outage every call switches: one alert per cooldown is news,
+    one per call is noise."""
+    session = FakeTelegramSession()
+    client, primary, fallback = _client(session)
+    context = UpdateContext(update_id=1, update_type="message", user_id=42, chat_id=42)
+    with bind_update_context(context):
+        for _ in range(3):
+            primary.queue(LLMUnavailable("down", provider=LLMProviderName.ANTHROPIC))
+            await client.complete(REQUEST)
+    assert len(fallback.calls) == 3
+    [alert] = session.sent(SendMessage)
+    assert "LLMUnavailable" in alert.text
+    assert "llm anthropic" in alert.text
+    assert "user 42" in alert.text
+
+
+async def test_when_both_fail_the_fallbacks_error_is_raised() -> None:
+    """The caller answers the user from the error that ended the call."""
+    client, primary, fallback = _client()
+    primary.queue(LLMUnavailable("down", provider=LLMProviderName.ANTHROPIC))
+    error = LLMTimeout("slow", provider=LLMProviderName.OPENROUTER)
+    fallback.queue(error)
+    with pytest.raises(LLMTimeout) as raised:
+        await client.complete(REQUEST)
+    assert raised.value is error
+
+
+async def test_a_structured_call_falls_back_too() -> None:
+    client, primary, fallback = _client()
+    primary.queue(LLMRateLimited("429", provider=LLMProviderName.ANTHROPIC))
+    fallback.queue_structured(Answer(summary="short"))
+    result = await client.structured(REQUEST, Answer)
+    assert result.output == Answer(summary="short")
+    assert fallback.calls[0].model is None
+
+
+async def test_the_switch_is_logged_without_content() -> None:
+    client, primary, _ = _client()
+    primary.queue(LLMUnavailable("down", provider=LLMProviderName.ANTHROPIC))
+    with captured_logs("src.core.llm.fallback") as records:
+        await client.complete(REQUEST)
+    [record] = records
+    assert record.getMessage() == (
+        "LLM anthropic failed for note_summary with LLMUnavailable, "
+        "using the fallback"
+    )

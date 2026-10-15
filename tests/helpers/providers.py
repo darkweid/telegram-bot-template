@@ -12,6 +12,7 @@ from src.core.cache.interface import Cache
 from src.core.cache.memory_cache import InMemoryCache
 from src.core.cache.serializer import JsonSerializer
 from src.core.limiter.limiter import RateLimiter
+from src.core.llm.interface import LLMClient
 from src.core.outbox.interface import TaskPublisher
 from src.core.redis.degradation import RedisDegradationReporter
 from src.core.telegram.alerts import AlertLimiter, AlertSession
@@ -19,6 +20,7 @@ from src.core.telegram.middlewares.throttling import ThrottleLimiter
 from src.core.telegram.session import UnreachableUserRecorder
 from src.main.config import Config
 from src.main.di import build_container
+from tests.fakes.llm import FakeLLMClient
 from tests.fakes.redis import InMemoryRedis
 from tests.fakes.telegram import FakeTelegramSession
 
@@ -95,6 +97,7 @@ class TestOverrides(SessionOnly):
         super().__init__(session, i18n, alert_session=alert_session)
         self.recorder = RecordingUnreachableRecorder()
         self.publisher = RecordingTaskPublisher()
+        self.llm = FakeLLMClient()
 
     @provide(override=True)
     def fsm_storage(self) -> BaseStorage:
@@ -129,6 +132,11 @@ class TestOverrides(SessionOnly):
         # Unit tests record what would be sent; the in-memory broker would run
         # the task inline, inside the test's update.
         return self.publisher
+
+    @provide(override=True)
+    def llm_client(self) -> LLMClient:
+        # No unit test reaches a provider: queue answers on `overrides.llm`.
+        return self.llm
 
     @provide(override=True)
     def alert_limiter(self) -> AlertLimiter:

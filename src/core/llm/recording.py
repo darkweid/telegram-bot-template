@@ -1,7 +1,9 @@
 """Writing one `llm_usage` row per provider call."""
 
+import time
 from typing import Any
 
+from pydantic import BaseModel
 import sentry_sdk
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -10,8 +12,9 @@ from src.core.database.uow import SQLAlchemyUnitOfWork
 from src.core.errors.scrubbed import reportable
 from src.core.llm.enums import LLMCallStatus, LLMProviderName
 from src.core.llm.errors import LLMError, LLMOutputError
+from src.core.llm.interface import LLMClient
 from src.core.llm.repository import LLMUsageRepository
-from src.core.llm.types import LLMRequest, LLMResponse, LLMUsage
+from src.core.llm.types import LLMRequest, LLMResponse, LLMUsage, StructuredResponse
 from src.core.update_context import get_update_context
 from src.core.utils.datetime_utils import get_utc_now
 
@@ -82,3 +85,91 @@ class LLMUsageRecorder:
                 "LLM usage not recorded: %s", type(failure).__name__, exc_info=safe
             )
             sentry_sdk.capture_exception(safe)
+
+
+class RecordingLLMClient:
+    """One provider's client with every call recorded in llm_usage, failed
+    calls included, and with the exchange logged under LLM_LOG_CONTENT.
+
+    Wraps one adapter, not the fallback pair: every attempt is a call the
+    provider may bill, and only here are its provider and default model known
+    when it fails.
+    """
+
+    def __init__(
+        self,
+        inner: LLMClient,
+        recorder: LLMUsageRecorder,
+        *,
+        provider: LLMProviderName,
+        default_model: str,
+        log_content: bool = False,
+    ) -> None:
+        self.inner = inner
+        self._recorder = recorder
+        self._provider = provider
+        self._default_model = default_model
+        self._log_content = log_content
+
+    async def complete(self, request: LLMRequest) -> LLMResponse:
+        started = time.monotonic()
+        try:
+            response = await self.inner.complete(request)
+        except LLMError as error:
+            await self._record_failure(request, error, started)
+            raise
+        await self._record_success(request, response)
+        return response
+
+    async def structured[T: BaseModel](
+        self, request: LLMRequest, output: type[T]
+    ) -> StructuredResponse[T]:
+        started = time.monotonic()
+        try:
+            result = await self.inner.structured(request, output)
+        except LLMError as error:
+            await self._record_failure(request, error, started)
+            raise
+        await self._record_success(request, result.response)
+        return result
+
+    async def _record_success(self, request: LLMRequest, response: LLMResponse) -> None:
+        if self._log_content:
+            logger.info(
+                "LLM exchange for %s: %r -> %r",
+                request.purpose,
+                _transcript(request),
+                response.text,
+            )
+        await self._recorder.record(
+            request,
+            response,
+            None,
+            provider=response.provider,
+            model=response.model,
+            latency_ms=response.latency_ms,
+        )
+
+    async def _record_failure(
+        self, request: LLMRequest, error: LLMError, started: float
+    ) -> None:
+        if self._log_content:
+            logger.info(
+                "LLM exchange for %s: %r -> %s",
+                request.purpose,
+                _transcript(request),
+                type(error).__name__,
+            )
+        await self._recorder.record(
+            request,
+            None,
+            error,
+            provider=self._provider,
+            model=request.model or self._default_model,
+            latency_ms=round((time.monotonic() - started) * 1000),
+        )
+
+
+def _transcript(request: LLMRequest) -> list[tuple[str, str]]:
+    system = [("system", request.system)] if request.system else []
+    return system + [(message.role, message.content) for message in request.messages]

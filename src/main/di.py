@@ -2,6 +2,8 @@
 and released when the container closes."""
 
 from collections.abc import AsyncIterator, Mapping
+from contextlib import AsyncExitStack
+from typing import assert_never
 
 from aiogram import Bot
 from aiogram.client.default import DefaultBotProperties
@@ -40,6 +42,15 @@ from src.core.events.registry import set_event_subscribers
 from src.core.http.user_agent import UserAgent, build_user_agent
 from src.core.i18n import LOCALES_DIR, build_i18n
 from src.core.limiter.limiter import RateLimiter
+from src.core.llm.anthropic import AnthropicLLMClient
+from src.core.llm.disabled import DisabledLLMClient
+from src.core.llm.enums import LLMProviderName
+from src.core.llm.fallback import FallbackLLMClient
+from src.core.llm.interface import LLMClient
+from src.core.llm.openrouter import OpenRouterLLMClient
+from src.core.llm.pricing import PricingTable
+from src.core.llm.recording import LLMUsageRecorder, RecordingLLMClient
+from src.core.llm.repository import LLMUsageRepository
 from src.core.outbox.interface import TaskPublisher
 from src.core.outbox.publisher import OutboxPublisher
 from src.core.redis.core import create_redis_client
@@ -75,6 +86,7 @@ from src.main.config import (
     Config,
     EmailConfig,
     HttpConfig,
+    LLMConfig,
     PostgresConfig,
     RedisConfig,
     S3Config,
@@ -302,6 +314,108 @@ class TelegramProvider(Provider):
         )
 
 
+def _required(value: str, key: str) -> str:
+    # Config's validator refuses a provider without its key or model; a Config
+    # copied around the validator still fails here by the key's name instead
+    # of at the first paid call.
+    if not value:
+        raise RuntimeError(f"{key} is required by the configured LLM provider")
+    return value
+
+
+def _build_adapter(
+    name: LLMProviderName, model: str, llm: LLMConfig, pricing: PricingTable
+) -> AnthropicLLMClient | OpenRouterLLMClient:
+    match name:
+        case LLMProviderName.ANTHROPIC:
+            return AnthropicLLMClient(
+                api_key=_required(
+                    llm.ANTHROPIC_API_KEY.get_secret_value(), "ANTHROPIC_API_KEY"
+                ),
+                model=model,
+                pricing=pricing,
+                timeout_seconds=llm.LLM_TIMEOUT_SECONDS,
+                max_retries=llm.LLM_MAX_RETRIES,
+            )
+        case LLMProviderName.OPENROUTER:
+            return OpenRouterLLMClient(
+                api_key=_required(
+                    llm.OPENROUTER_API_KEY.get_secret_value(), "OPENROUTER_API_KEY"
+                ),
+                model=model,
+                app_url=llm.OPENROUTER_APP_URL,
+                app_title=llm.OPENROUTER_APP_TITLE,
+                timeout_seconds=llm.LLM_TIMEOUT_SECONDS,
+                max_retries=llm.LLM_MAX_RETRIES,
+            )
+        case _:
+            assert_never(name)
+
+
+def _recorded_adapter(
+    name: LLMProviderName,
+    model: str,
+    llm: LLMConfig,
+    pricing: PricingTable,
+    recorder: LLMUsageRecorder,
+    adapters: AsyncExitStack,
+) -> RecordingLLMClient:
+    adapter = _build_adapter(name, model, llm, pricing)
+    adapters.push_async_callback(adapter.aclose)
+    return RecordingLLMClient(
+        adapter,
+        recorder,
+        provider=name,
+        default_model=model,
+        log_content=llm.LLM_LOG_CONTENT,
+    )
+
+
+class LLMProvider(Provider):
+    """The model client, one per process. Its SDK clients close with the
+    container: the bot's at shutdown, the worker's in WorkerLifecycle."""
+
+    scope = Scope.APP
+
+    usage = provide(LLMUsageRepository)
+    recorder = provide(LLMUsageRecorder)
+
+    @provide
+    def pricing(self, config: Config) -> PricingTable:
+        return PricingTable(config.llm.LLM_PRICING_OVERRIDES)
+
+    @provide
+    async def client(
+        self,
+        config: Config,
+        pricing: PricingTable,
+        recorder: LLMUsageRecorder,
+        alerter: DeveloperAlerter,
+    ) -> AsyncIterator[LLMClient]:
+        llm = config.llm
+        if llm.LLM_PROVIDER is None:
+            yield DisabledLLMClient()
+            return
+        # Every adapter built is closed on the way out, the primary included
+        # when the fallback cannot be built.
+        async with AsyncExitStack() as adapters:
+            primary = _recorded_adapter(
+                llm.LLM_PROVIDER, llm.LLM_MODEL, llm, pricing, recorder, adapters
+            )
+            if llm.LLM_FALLBACK_PROVIDER is None:
+                yield primary
+                return
+            fallback = _recorded_adapter(
+                llm.LLM_FALLBACK_PROVIDER,
+                _required(llm.LLM_FALLBACK_MODEL, "LLM_FALLBACK_MODEL"),
+                llm,
+                pricing,
+                recorder,
+                adapters,
+            )
+            yield FallbackLLMClient(primary, fallback, alerter)
+
+
 class AlertProvider(Provider):
     scope = Scope.APP
 
@@ -488,6 +602,7 @@ def build_container(
         AlertProvider(),
         I18nProvider(),
         HttpProvider(),
+        LLMProvider(),
         S3Provider(),
         EmailProvider(),
         BrokerProvider(),
