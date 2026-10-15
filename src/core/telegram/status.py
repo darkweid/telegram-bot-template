@@ -14,6 +14,7 @@ from aiogram.types import InlineKeyboardMarkup, Message
 from aiogram.utils.i18n import I18n
 
 from loggers import get_logger
+from src.core.errors.scrubbed import reportable
 from src.core.i18n import N_
 from src.core.telegram.errors import error_reply_text
 from src.core.telegram.messages import safe_edit_text
@@ -143,7 +144,11 @@ class ProcessingStatus:
         # wait, not await: a cancel of the work itself must still reach it.
         await asyncio.wait([ticker])
         if not ticker.cancelled() and (error := ticker.exception()) is not None:
-            logger.error("Status ticker failed", exc_info=error)
+            logger.error(
+                "Status ticker failed: %s",
+                type(error).__name__,
+                exc_info=reportable(error),
+            )
 
     async def _tick(self) -> None:
         loop = asyncio.get_running_loop()

@@ -11,6 +11,7 @@ from aiogram.methods import (
     TelegramMethod,
 )
 from aiogram.utils.i18n import I18n
+from pydantic import BaseModel, ValidationError
 import pytest
 
 from src.core.errors.exceptions import CoreException
@@ -27,6 +28,10 @@ GENERIC = "Something went wrong. Please try again later."
 
 class NoteGone(CoreException):
     message_key = N_("Note {name} is gone.")
+
+
+class Count(BaseModel):
+    value: int
 
 
 class HoldingSession(FakeTelegramSession):
@@ -381,3 +386,24 @@ async def test_a_progress_edit_refused_for_good_is_skipped(i18n: I18n) -> None:
     assert [r.getMessage() for r in records] == [
         "Status edit failed: TelegramBadRequest"
     ]
+
+
+async def test_a_ticker_failure_reaches_the_log_scrubbed(i18n: I18n) -> None:
+    """A ticker bug must not carry what it was handed into the log or
+    Sentry's breadcrumbs."""
+    session = FakeTelegramSession()
+    status = await _send(session, i18n)
+    typed = {"value": "secret" + "-input"}  # kept off the traceback's source line
+    try:
+        Count.model_validate(typed)
+    except ValidationError as error:
+        session.queue(SendChatAction, error)
+    with captured_logs("src.core.telegram.status") as records:
+        async with status:
+            await session.wait_for(SendChatAction)
+            await status.finish("Done.")
+    [record] = records
+    assert record.getMessage() == "Status ticker failed: ValidationError"
+    assert record.exc_info is not None
+    assert "secret-input" not in logging.Formatter().formatException(record.exc_info)
+    assert _edits(session) == ["Done."]
