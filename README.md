@@ -345,8 +345,8 @@ Developers see the same report with `/status`.
 
 ## Releases
 
-Tag a commit CI built and pushed (from `main` or `stage`) with `vX.Y.Z` and push the tag. The `Release`
-workflow points `ghcr.io/<owner>/<repo>:vX.Y.Z` at the image CI already pushed
+Tag a commit CI built and pushed (from `main` or `stage`) with `vX.Y.Z` and
+push the tag. The `Release` workflow points `ghcr.io/<owner>/<repo>:vX.Y.Z` at the image CI already pushed
 for that commit (`sha-<12>`, same digest, nothing rebuilt) and opens a GitHub
 Release with generated notes. A tag on a commit CI never built fails. Releases
 deploy nothing: CD follows the branches.
@@ -373,7 +373,8 @@ you do).
 ## Project layout
 
 ```text
-.github/            CI, release and update workflows, the Dependabot config, the docs-only change action
+.github/            CI, release and update workflows, the Dependabot config,
+                    the docs-only change action
 infra/              Dockerfiles, compose files, Postgres and Redis config, requirements
 locales/            gettext catalogs, one directory per language
 loggers/            logging setup: plain-text or JSON lines on stdout
