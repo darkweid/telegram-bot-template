@@ -35,7 +35,8 @@ class LLMUsageRecord(UUID7IDMixin, Base):
     cache_read_tokens: Mapped[int] = mapped_column(default=0)
     cache_write_tokens: Mapped[int] = mapped_column(default=0)
     # NULL when the price is unknown, which is not the same as free. Eight
-    # places: a cheap model's token costs a millionth of a dollar.
+    # places, as COST_QUANTUM: one cache-read token of the cheapest priced
+    # model costs a hundred-millionth of a dollar.
     cost_usd: Mapped[Decimal | None] = mapped_column(Numeric(14, 8), default=None)
     latency_ms: Mapped[int]
     status: Mapped[str] = mapped_column(String(16))

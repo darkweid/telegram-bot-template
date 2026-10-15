@@ -27,9 +27,10 @@ PUBLIC_COMMANDS: tuple[BotCommandSpec, ...] = (*USER_COMMANDS, *NOTE_COMMANDS)
 
 
 async def set_bot_commands(bot: Bot, i18n: I18n, roles: Roles) -> None:
-    """Publish the command menu (PUBLIC_COMMANDS): once per supported language, and once
-    without a language for users whose language we do not support. Every
-    admin and developer then gets a menu of their own in their private chat."""
+    """Publish the command menu (PUBLIC_COMMANDS): once per supported
+    language, and once without a language for users whose language we do not
+    support. Every admin and developer then gets a menu of their own in their
+    private chat."""
     await _set_menu(bot, i18n, PUBLIC_COMMANDS, BotCommandScopeAllPrivateChats())
     for chat_id in roles.members:
         specs = list(PUBLIC_COMMANDS)
