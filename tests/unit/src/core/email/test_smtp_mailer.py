@@ -244,6 +244,31 @@ async def test_a_refused_sender_keeps_only_its_reply_code(send_mock: AsyncMock) 
     assert str(raised.value) == "SMTP delivery failed: SMTPSenderRefused (code 553)"
 
 
+@pytest.mark.parametrize(
+    "error",
+    [
+        aiosmtplib.SMTPServerDisconnected("Connection lost to mail.example.com"),
+        aiosmtplib.SMTPConnectError("Could not connect to mail.example.com:587"),
+    ],
+    ids=lambda error: type(error).__name__,
+)
+async def test_a_transport_failure_names_only_its_class(
+    send_mock: AsyncMock, error: aiosmtplib.SMTPException
+) -> None:
+    """Connection errors carry the host in their text and no reply code; the
+    summary must not invent a code and must not keep the original as a chain."""
+    send_mock.side_effect = error
+
+    with pytest.raises(ScrubbedError) as raised:
+        await notify(
+            SmtpMailer(build_settings()), NotificationEmail(title="T", message="M")
+        )
+
+    assert str(raised.value) == f"SMTP delivery failed: {type(error).__name__}"
+    assert raised.value.__cause__ is None
+    assert raised.value.__context__ is None
+
+
 async def test_a_partial_refusal_is_logged_as_a_count(send_mock: AsyncMock) -> None:
     """The server took the email for the other recipients, so nothing raises;
     the log line must still not name who was refused."""
