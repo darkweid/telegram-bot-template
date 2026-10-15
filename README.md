@@ -288,10 +288,10 @@ broadcast counts the users who were actually walked.
 
 The worker sends `BROADCAST_RATE_PER_SECOND` messages a second (25 by default;
 Telegram allows about 30 to different users) and saves its position every
-`BROADCAST_CHECKPOINT_EVERY` recipients (50) and at least once a minute. If the
-worker stops mid-broadcast, a scheduled task resumes it within about five
-minutes from the last saved position, so up to `BROADCAST_CHECKPOINT_EVERY`
-users may get the message twice. Stop takes effect at the next save, within
+`BROADCAST_CHECKPOINT_EVERY` recipients (50), at least once a minute, and after
+every user who blocked the bot. If the worker stops mid-broadcast, a scheduled
+task resumes it within about five minutes from the last saved position, so up
+to `BROADCAST_CHECKPOINT_EVERY` users may get the message twice. Stop takes effect at the next save, within
 about a minute, flood waits included.
 
 A user who blocked the bot is counted as unreachable and marked so; a chat

@@ -198,11 +198,16 @@ class RunBroadcastUseCase:
     async def _send_all(self, run: _Run) -> BroadcastStatus:
         while recipients := await self._next_batch(run):
             for user_id in recipients:
+                unreachable_before = run.unreachable
                 if not await self._deliver(run, user_id):
                     return BroadcastStatus.CANCELLED
                 run.cursor = user_id
                 await self._show_progress(run)
-                if _checkpoint_due(run):
+                # ForbiddenMiddleware has already committed the user as
+                # unreachable, and a resumed run walks reachable users only:
+                # it would never meet this one again, so the outcome is saved
+                # now rather than lost with the run.
+                if run.unreachable > unreachable_before or _checkpoint_due(run):
                     await self._checkpoint(run)
                     if run.stop_requested:
                         return BroadcastStatus.CANCELLED

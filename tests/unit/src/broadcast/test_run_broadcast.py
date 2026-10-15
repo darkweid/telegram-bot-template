@@ -1,3 +1,4 @@
+import asyncio
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from types import SimpleNamespace
@@ -276,6 +277,71 @@ async def test_a_refused_recipient_is_counted_and_the_rest_still_get_it(
     assert _copied_to(telegram) == [10, 20, 30]
     assert _finished_with(broadcasts)[0] == Checkpoint(
         cursor_user_id=30, sent=1, failed=1, unreachable=1
+    )
+
+
+def _forbidden() -> TelegramForbiddenError:
+    return TelegramForbiddenError(
+        method=COPY, message="Forbidden: bot was blocked by the user"
+    )
+
+
+async def test_an_unreachable_recipient_is_checkpointed_before_the_next_copy(
+    settings: Config, i18n: I18n
+) -> None:
+    """The user is marked unreachable at once and a resumed run walks only
+    reachable users, so the outcome must be saved before anything else can
+    stop the run, or the report never counts it."""
+    telegram = FakeTelegramSession()
+    telegram.queue(CopyMessage, _forbidden())
+    broadcasts = _broadcasts()
+    saved: list[tuple[int, Checkpoint]] = []
+
+    def save_checkpoint(*args: object, **kwargs: Any) -> bool:
+        saved.append((len(telegram.sent(CopyMessage)), kwargs["checkpoint"]))
+        return False
+
+    broadcasts.save_checkpoint.side_effect = save_checkpoint
+    await _run(settings, i18n, telegram, broadcasts).execute(BROADCAST_ID)
+    assert saved[0] == (
+        1,
+        Checkpoint(cursor_user_id=10, sent=0, failed=0, unreachable=1),
+    )
+
+
+async def test_a_resumed_run_keeps_the_unreachable_outcome_in_its_report(
+    settings: Config, i18n: I18n
+) -> None:
+    """A worker stopped right after the checkpoint: the resumed run never
+    meets the unreachable user again, yet the report must count them."""
+    telegram = FakeTelegramSession()
+    telegram.queue(CopyMessage, _forbidden())
+    broadcasts = _broadcasts()
+    saved: list[Checkpoint] = []
+
+    def stop_the_worker(*args: object, **kwargs: Any) -> bool:
+        saved.append(kwargs["checkpoint"])
+        raise asyncio.CancelledError
+
+    broadcasts.save_checkpoint.side_effect = stop_the_worker
+    with pytest.raises(asyncio.CancelledError):
+        await _run(settings, i18n, telegram, broadcasts).execute(BROADCAST_ID)
+    [stored] = saved
+
+    resumed_telegram = FakeTelegramSession()
+    resumed = _broadcasts()
+    resumed.claim_run.return_value = _broadcast(
+        cursor_user_id=stored.cursor_user_id,
+        sent=stored.sent,
+        failed=stored.failed,
+        unreachable=stored.unreachable,
+    )
+    status = await _run(settings, i18n, resumed_telegram, resumed).execute(BROADCAST_ID)
+    assert status == BroadcastStatus.COMPLETED
+    assert _copied_to(resumed_telegram) == [20, 30]
+    [report] = resumed_telegram.sent(SendMessage)
+    assert report.text == (
+        "Broadcast finished: 3 of 3\nSent: 2\nUnreachable: 1\nFailed: 0"
     )
 
 
