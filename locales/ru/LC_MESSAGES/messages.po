@@ -112,6 +112,9 @@ msgstr ""
 "\n"
 "Отправьте /help, чтобы узнать, что я умею."
 
+msgid "Interrupted. Please try again."
+msgstr "Прервано. Попробуйте ещё раз."
+
 msgid "Keep"
 msgstr "Оставить"
 
@@ -324,6 +327,9 @@ msgstr "Использование: /{command} ID или /{command} @username"
 #, python-brace-format
 msgid "Without a known price in the last 30 days: {count}"
 msgstr "Без известной цены за 30 дней: {count}"
+
+msgid "Working on it…"
+msgstr "Работаю…"
 
 msgid "Write a note"
 msgstr "Написать заметку"
