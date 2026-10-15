@@ -8,6 +8,9 @@ from src.main import tasks as tasks_module
 from src.main.config import Config
 from src.main.event_subscribers import EVENT_SUBSCRIBERS
 from src.main.tasks import TASKS, build_broker
+from src.note.events import NoteCreated
+from src.note.subscribers import enqueue_note_created
+from src.note.tasks import NOTE_CREATED
 from src.user.cache import DROP_USER_SNAPSHOT
 from src.user.events import UserRegistered
 from src.user.subscribers import enqueue_new_user_notice
@@ -88,3 +91,12 @@ def test_broadcasts_run_once_and_stalled_ones_resume_every_minute() -> None:
     assert specs[RUN_BROADCAST].retry_on_error is False
     assert specs[RUN_BROADCAST].schedule == ()
     assert specs[RESUME_STALLED_BROADCASTS].schedule == ({"cron": "* * * * *"},)
+
+
+def test_the_note_subscriber_is_installed() -> None:
+    """Without it a note is stored and its task never runs."""
+    assert enqueue_note_created in EVENT_SUBSCRIBERS[NoteCreated]
+
+
+def test_the_note_task_is_registered() -> None:
+    assert NOTE_CREATED in {spec.name for spec in TASKS}

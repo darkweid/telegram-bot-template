@@ -12,6 +12,7 @@ from src.core.tasks.broker import create_stream_broker
 from src.core.tasks.middlewares import TaskFailureAlertMiddleware
 from src.core.tasks.registry import TaskSpec, register_tasks
 from src.main.config import Config
+from src.note.tasks import NOTE_TASKS
 from src.user.tasks import USER_TASKS
 
 TASKS: tuple[TaskSpec, ...] = (
@@ -21,6 +22,7 @@ TASKS: tuple[TaskSpec, ...] = (
     TaskSpec("outbox.purge", purge_outbox, schedule=({"cron": "0 3 * * *"},)),
     *USER_TASKS,
     *BROADCAST_TASKS,
+    *NOTE_TASKS,
 )
 
 

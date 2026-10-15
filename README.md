@@ -245,6 +245,13 @@ language. The task runs at most once: run again, it would repeat the message
 to the admins who already got it. `NOTIFY_ADMINS_ON_NEW_USER=false` keeps the event
 and the task and sends nothing.
 
+`src/note` shows the same path on a smaller scale: `CreateNoteUseCase`
+publishes `NoteCreated` inside the note's transaction, the subscriber in
+`src/main/event_subscribers.py` writes an outbox row for the
+`note.note_created` task, and the worker logs the note and user ids. To react
+to an event of your own, add a subscriber there and a `TaskSpec` to `TASKS`
+in `src/main/tasks.py`.
+
 ## Alerts
 
 The bot and the worker tell developers in Telegram when:
