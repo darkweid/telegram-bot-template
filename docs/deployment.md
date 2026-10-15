@@ -31,8 +31,8 @@ for it; `make migrate` runs the same service by hand. With `BOT_IMAGE` set in
 `.env` to an image CI pushed (`ghcr.io/<owner>/<repo>:sha-<12>`), `make run`
 pulls and runs that image instead of building one from the checkout. No target
 builds the checkout under that name: `make build` then builds Postgres only,
-and `make up` starts the stack without building, so it needs the Postgres
-image an earlier `make build` or `make run` built. With
+and `make up` starts the stack without building, so it needs the images an
+earlier `make run` left: the pulled bot image and the built Postgres. With
 `COMPOSE_PROFILES=webhook`, `make run`, `up`, `down`, `logs` and `restart`
 handle nginx and certbot with the rest of the stack. The dev stack
 (`make run-dev`) always polls and leaves them out.
@@ -235,8 +235,8 @@ commit instead.
 
 ## Releases
 
-Tag a commit CI built and pushed (from `main` or `stage`) with `vX.Y.Z` and push the tag. The
-`Release` workflow (`.github/workflows/release.yml`) points
+Tag a commit CI built and pushed (from `main` or `stage`) with `vX.Y.Z` and
+push the tag. The `Release` workflow (`.github/workflows/release.yml`) points
 `ghcr.io/<owner>/<repo>:vX.Y.Z` at the image CI pushed for that commit with
 `docker buildx imagetools create`: the same digest, nothing rebuilt. It then
 opens a GitHub Release with generated notes and the image digest.
