@@ -20,7 +20,7 @@ from src.main.webhook import (
 from tests.factories.updates import build_message_update
 from tests.fakes.telegram import FakeTelegramSession
 from tests.helpers.providers import TestOverrides
-from tests.helpers.runtime import WEBHOOK_SECRET, Gate, Stubs, configured
+from tests.helpers.runtime import WEBHOOK_SECRET, Gate, HeldWork, Stubs, configured
 
 PATH = "/webhook/telegram"
 
@@ -112,6 +112,48 @@ async def test_shutdown_gives_up_on_a_stuck_update(
             await client.close()
     assert gate.cancelled
     assert session.sent(SendMessage) == []
+
+
+async def test_shutdown_waits_for_background_work(settings: Config, i18n: I18n) -> None:
+    """In a webhook roll the new bot already takes the traffic; the old one
+    still owes the user the answer its work is preparing."""
+    work = HeldWork()
+    session = FakeTelegramSession()
+    session.close = AsyncMock()
+    stubs = Stubs(session)
+    config = configured(settings, webhook=True)
+    async with bot_runtime(config, TestOverrides(session, i18n), stubs) as runtime:
+        client = TestClient(TestServer(create_webhook_app(runtime)))
+        await client.start_server()
+        runtime.background.start("probe", work)
+        async with asyncio.timeout(2):
+            await work.started.wait()
+        closing = asyncio.create_task(client.close())
+        await asyncio.sleep(0.05)
+        assert not closing.done()  # still waiting for the work
+        session.close.assert_not_awaited()
+        work.released.set()
+        async with asyncio.timeout(2):
+            await closing
+    assert work.outcome == "finished"
+
+
+async def test_shutdown_cancels_background_work_past_the_timeout(
+    settings: Config, i18n: I18n
+) -> None:
+    work = HeldWork()
+    session = FakeTelegramSession()
+    config = configured(settings, webhook=True, shutdown_timeout=0.05)
+    async with bot_runtime(
+        config, TestOverrides(session, i18n), Stubs(session)
+    ) as runtime:
+        client = TestClient(TestServer(create_webhook_app(runtime)))
+        await client.start_server()
+        runtime.background.start("probe", work)
+        async with asyncio.timeout(2):
+            await work.started.wait()
+            await client.close()
+    assert work.outcome == "cancelled"
 
 
 async def test_the_webhook_app_serves_health_too(settings: Config, i18n: I18n) -> None:

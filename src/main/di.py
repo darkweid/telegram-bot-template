@@ -69,6 +69,7 @@ from src.core.telegram.alerts import (
     AlertSession,
     DeveloperAlerter,
 )
+from src.core.telegram.background import BackgroundRunner
 from src.core.telegram.fsm import create_event_isolation, create_fsm_storage
 from src.core.telegram.middlewares.throttling import (
     Throttle,
@@ -316,6 +317,18 @@ class TelegramProvider(Provider):
             session=session,
             default=_bot_defaults(),
         )
+
+    @provide
+    async def background_runner(
+        self, container: AsyncContainer, alerter: DeveloperAlerter
+    ) -> AsyncIterator[BackgroundRunner]:
+        # An APP factory asking for AsyncContainer gets the root container,
+        # which outlives every update.
+        runner = BackgroundRunner(container, alerter)
+        yield runner
+        # A bot that stopped normally has drained already; a container closed
+        # without that (tests, a failed start) leaves no task behind.
+        await runner.drain(0)
 
 
 def _required(value: str, key: str) -> str:

@@ -15,6 +15,7 @@ from dishka import AsyncContainer, Provider
 
 from loggers import get_logger
 from src.core.http.client import close_http_clients
+from src.core.telegram.background import BackgroundRunner
 from src.core.telegram.roles import Roles
 from src.main.commands import set_bot_commands
 from src.main.config import Config, WebServerConfig
@@ -39,6 +40,7 @@ class BotRuntime:
     container: AsyncContainer
     dp: Dispatcher
     bot: Bot
+    background: BackgroundRunner
 
 
 @asynccontextmanager
@@ -59,7 +61,13 @@ async def bot_runtime(
         await set_bot_commands(
             bot, await container.get(I18n), await container.get(Roles)
         )
-        yield BotRuntime(config=config, container=container, dp=dp, bot=bot)
+        yield BotRuntime(
+            config=config,
+            container=container,
+            dp=dp,
+            bot=bot,
+            background=await container.get(BackgroundRunner),
+        )
     finally:
         # Sessions opened on this loop close before the loop stops; the
         # container then closes the bot session, FSM storage, Redis and the engine.
@@ -107,6 +115,20 @@ async def finish_updates(tasks: set[asyncio.Task[Any]], grace_seconds: float) ->
     for task in pending:
         task.cancel()
     await asyncio.gather(*pending, return_exceptions=True)
+
+
+async def finish_work(
+    updates: set[asyncio.Task[Any]],
+    background: BackgroundRunner,
+    grace_seconds: float,
+) -> None:
+    """Finish the updates in progress, then the background work, within one
+    `grace_seconds` counted from the start: an update can start work up to
+    its last moment, and the deploy waits for both."""
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + grace_seconds
+    await finish_updates(updates, grace_seconds)
+    await background.drain(max(deadline - loop.time(), 0))
 
 
 @asynccontextmanager

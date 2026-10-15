@@ -9,7 +9,7 @@ from aiogram.fsm.storage.base import BaseStorage
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.methods import GetUpdates, SendMessage, TelegramMethod
 from aiogram.types import Update
-from dishka import Provider, Scope, provide
+from dishka import AsyncContainer, Provider, Scope, provide
 from pydantic import SecretStr
 
 from src.main.config import Config
@@ -59,6 +59,24 @@ class Gate:
         except asyncio.CancelledError:
             self.cancelled = True
             raise
+
+
+class HeldWork:
+    """Background work that runs until released, and records how it ended."""
+
+    def __init__(self) -> None:
+        self.started = asyncio.Event()
+        self.released = asyncio.Event()
+        self.outcome: str | None = None
+
+    async def __call__(self, _: AsyncContainer) -> None:
+        self.started.set()
+        try:
+            await self.released.wait()
+        except asyncio.CancelledError:
+            self.outcome = "cancelled"
+            raise
+        self.outcome = "finished"
 
 
 class RecordingStorage(MemoryStorage):

@@ -1,5 +1,5 @@
 from src.main.health import create_web_app
-from src.main.runtime import BotRuntime, finish_updates, serving
+from src.main.runtime import BotRuntime, finish_work, serving
 
 
 async def poll(runtime: BotRuntime) -> None:
@@ -17,13 +17,16 @@ async def poll(runtime: BotRuntime) -> None:
         # start_polling hands each update to a task of its own and returns
         # without waiting for them; tests/unit/src/main/test_polling.py pins
         # the attribute this relies on.
-        await finish_updates(
-            dp._handle_update_tasks, config.bot.SHUTDOWN_TIMEOUT_SECONDS
+        await finish_work(
+            dp._handle_update_tasks,
+            runtime.background,
+            config.bot.SHUTDOWN_TIMEOUT_SECONDS,
         )
 
     dp.shutdown.register(finish_in_progress)
     # First among the shutdown handlers: Dispatcher.__init__ registers closing
-    # the FSM storage, and the updates still finishing need it.
+    # the FSM storage, and the updates and background work still finishing
+    # need it.
     dp.shutdown.handlers.insert(0, dp.shutdown.handlers.pop())
 
     async with serving(create_web_app(runtime.container), config.web_server):

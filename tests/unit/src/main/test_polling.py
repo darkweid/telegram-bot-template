@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import time
 from unittest.mock import AsyncMock
 
 from aiogram.methods import DeleteWebhook, GetUpdates, SendMessage
@@ -12,7 +13,7 @@ from src.main.runtime import BotRuntime, bot_runtime
 from tests.factories.updates import build_message_update
 from tests.helpers.logs import captured_logs
 from tests.helpers.providers import TestOverrides
-from tests.helpers.runtime import Gate, PollingSession, Stubs, configured
+from tests.helpers.runtime import Gate, HeldWork, PollingSession, Stubs, configured
 
 
 async def _until(condition: asyncio.Event) -> None:
@@ -123,3 +124,77 @@ async def test_stopping_gives_up_on_a_stuck_update(
         r.levelno == logging.WARNING and "Cancelling 1 update" in r.getMessage()
         for r in records
     )
+
+
+async def test_stopping_waits_for_background_work(settings: Config, i18n: I18n) -> None:
+    """A model call started by an update is answered before the bot exits,
+    not cut off by the deploy."""
+    work = HeldWork()
+    session = PollingSession()
+    config = configured(settings)
+    async with bot_runtime(
+        config, TestOverrides(session, i18n), Stubs(session)
+    ) as runtime:
+        polling = asyncio.create_task(poll(runtime))
+        await session.wait_for(GetUpdates)
+        runtime.background.start("probe", work)
+        await _until(work.started)
+        stopping = asyncio.create_task(runtime.dp.stop_polling())
+        await asyncio.sleep(0.05)
+        assert not polling.done()  # still waiting for the work
+        work.released.set()
+        async with asyncio.timeout(2):
+            await asyncio.gather(stopping, polling)
+    assert work.outcome == "finished"
+
+
+async def test_stopping_cancels_background_work_past_the_timeout(
+    settings: Config, i18n: I18n
+) -> None:
+    work = HeldWork()
+    session = PollingSession()
+    config = configured(settings, shutdown_timeout=0.05)
+    with captured_logs("src.core.telegram.background") as records:
+        async with bot_runtime(
+            config, TestOverrides(session, i18n), Stubs(session)
+        ) as runtime:
+            polling = asyncio.create_task(poll(runtime))
+            await session.wait_for(GetUpdates)
+            runtime.background.start("probe", work)
+            await _until(work.started)
+            await _stop(runtime, polling)
+    assert work.outcome == "cancelled"
+    assert any(
+        r.levelno == logging.WARNING
+        and "Cancelling 1 background task(s)" in r.getMessage()
+        for r in records
+    )
+
+
+async def test_background_work_gets_what_the_updates_left(
+    settings: Config, i18n: I18n
+) -> None:
+    """One SHUTDOWN_TIMEOUT_SECONDS covers both: the container's
+    stop_grace_period is sized for one, so a second full wait for the work
+    would end in Docker killing the bot."""
+    gate = Gate()
+    work = HeldWork()
+    session = PollingSession(build_message_update("/start"))
+    config = configured(settings, shutdown_timeout=0.5)
+    async with bot_runtime(
+        config, TestOverrides(session, i18n), Stubs(session, gate=gate)
+    ) as runtime:
+        polling = asyncio.create_task(poll(runtime))
+        await _until(gate.entered)
+        runtime.background.start("probe", work)
+        await _until(work.started)
+        started = time.monotonic()
+        stopping = asyncio.create_task(_stop(runtime, polling))
+        await asyncio.sleep(0.4)
+        gate.opened.set()  # the update took 0.4 s of the 0.5 s
+        await stopping
+        elapsed = time.monotonic() - started
+    assert work.outcome == "cancelled"
+    assert len(session.sent(SendMessage)) == 1
+    # 0.5 s in all, not 0.4 s for the update and another 0.5 s for the work.
+    assert elapsed < 0.8
