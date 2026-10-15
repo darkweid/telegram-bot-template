@@ -83,9 +83,9 @@ Top level:
   deploy-time `.env` check (`scripts/ops/check_env.py`), the documentation
   check, the migration heads check, catalog normalizing and requirements
   sorting.
-- `.github/` - workflows (CI, CD, releases, the Ansible check), a local action
-  that tells a documentation-only change apart, and the Dependabot
-  configuration.
+- `.github/` - workflows (CI, CD, releases, the Ansible check, the monthly
+  pre-commit hook update), a local action that tells a documentation-only
+  change apart, and the Dependabot configuration.
 - `tests/` - the test suite, see below.
 - `docs/` - these documents.
 
