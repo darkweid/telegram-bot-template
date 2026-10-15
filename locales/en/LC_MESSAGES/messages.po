@@ -190,6 +190,15 @@ msgstr ""
 msgid "Stopping the broadcast."
 msgstr ""
 
+msgid "Summarize your recent notes"
+msgstr ""
+
+#, python-brace-format
+msgid "Summary of {count} recent note:"
+msgid_plural "Summary of {count} recent notes:"
+msgstr[0] ""
+msgstr[1] ""
+
 msgid "The broadcast was not started."
 msgstr ""
 
@@ -217,6 +226,9 @@ msgid "The language model took too long to answer. Please try again."
 msgstr ""
 
 msgid "The note was not saved."
+msgstr ""
+
+msgid "The summary did not work out this time. Please try again."
 msgstr ""
 
 msgid "This broadcast has already finished."

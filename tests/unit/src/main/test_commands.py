@@ -48,6 +48,7 @@ async def test_menu_is_set_for_every_language_and_the_default(i18n: I18n) -> Non
         ("language", "Сменить язык"),
         ("note", "Написать заметку"),
         ("notes", "Мои заметки"),
+        ("summarize", "Сводка последних заметок"),
     ]
     default = next(call for call in calls if call.language_code is None)
     expected = next(call for call in calls if call.language_code == i18n.default_locale)

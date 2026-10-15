@@ -204,6 +204,16 @@ msgstr "Остановить"
 msgid "Stopping the broadcast."
 msgstr "Останавливаю рассылку."
 
+msgid "Summarize your recent notes"
+msgstr "Сводка последних заметок"
+
+#, python-brace-format
+msgid "Summary of {count} recent note:"
+msgid_plural "Summary of {count} recent notes:"
+msgstr[0] "Сводка по {count} последней заметке:"
+msgstr[1] "Сводка по {count} последним заметкам:"
+msgstr[2] "Сводка по {count} последним заметкам:"
+
 msgid "The broadcast was not started."
 msgstr "Рассылка не запущена."
 
@@ -234,6 +244,9 @@ msgstr "Языковая модель отвечала слишком долго
 
 msgid "The note was not saved."
 msgstr "Заметка не сохранена."
+
+msgid "The summary did not work out this time. Please try again."
+msgstr "Сводка в этот раз не получилась. Попробуйте ещё раз."
 
 msgid "This broadcast has already finished."
 msgstr "Эта рассылка уже завершена."

@@ -1,13 +1,14 @@
-from aiogram import F, Router
-from aiogram.enums import ChatType
+from aiogram import Bot, F, Router, html
+from aiogram.enums import ChatAction, ChatType
 from aiogram.filters import Command, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 from aiogram.utils.callback_answer import CallbackAnswer
-from aiogram.utils.i18n import gettext as _
+from aiogram.utils.i18n import I18n, gettext as _, ngettext
 from dishka import FromDishka
 
 from src.core.telegram.messages import safe_edit_text
+from src.core.telegram.middlewares.throttling import Throttle
 from src.note.callbacks import NoteCancelCallback, NoteDeleteCallback, NotesPageCallback
 from src.note.enums import DeleteAction
 from src.note.exceptions import NoteNotFoundError
@@ -19,6 +20,7 @@ from src.note.usecases.create_note import CreateNoteUseCase
 from src.note.usecases.delete_note import DeleteNoteUseCase
 from src.note.usecases.get_note import GetNoteUseCase
 from src.note.usecases.list_notes import ListNotesUseCase
+from src.note.usecases.summarize_notes import NoteSummaryResult, SummarizeNotesUseCase
 from src.user.schemas import UserProfile
 
 
@@ -129,6 +131,38 @@ async def confirm_delete(
     )
 
 
+async def summarize(
+    message: Message,
+    bot: Bot,
+    i18n: I18n,
+    user: UserProfile,
+    summarize_notes: FromDishka[SummarizeNotesUseCase],
+) -> None:
+    await bot.send_chat_action(message.chat.id, ChatAction.TYPING)
+    result = await summarize_notes.execute(user.id, i18n.current_locale)
+    if result is None:
+        # The msgid of the empty /notes list: one text, one translation.
+        await message.answer(_("You have no notes yet. Send /note to write one."))
+        return
+    await message.answer(_summary_text(result))
+
+
+def _summary_text(result: NoteSummaryResult) -> str:
+    """The model's output comes from what the user typed, so every part of
+    it is escaped for HTML parse mode."""
+    header = ngettext(
+        "Summary of {count} recent note:",
+        "Summary of {count} recent notes:",
+        result.note_count,
+    ).format(count=result.note_count)
+    parts = [header, html.quote(result.summary.summary)]
+    if result.summary.themes:
+        parts.append(
+            "\n".join(f"• {html.quote(theme)}" for theme in result.summary.themes)
+        )
+    return "\n\n".join(parts)
+
+
 def build_note_router() -> Router:
     """A new router per dispatcher: aiogram attaches a router to one parent
     only, and tests build a dispatcher each."""
@@ -158,5 +192,8 @@ def build_note_router() -> Router:
     )
     router.callback_query.register(
         confirm_delete, NoteDeleteCallback.filter(F.action == DeleteAction.CONFIRM)
+    )
+    router.message.register(
+        summarize, Command("summarize"), flags={"throttle": Throttle.LLM}
     )
     return router
