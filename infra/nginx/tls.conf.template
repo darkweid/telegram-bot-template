@@ -19,7 +19,7 @@ server {
     ssl_session_cache shared:SSL:10m;
     ssl_session_timeout 1d;
 
-    include /etc/nginx/bot/security_headers.inc;
+    include /etc/nginx/generated/security_headers.inc;
     # TLS only: browsers ignore it over plain HTTP.
     add_header Strict-Transport-Security "max-age=31536000" always;
 

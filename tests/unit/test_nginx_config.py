@@ -202,7 +202,28 @@ def test_every_answering_server_sends_the_security_headers() -> None:
             if server.children("ssl_reject_handshake"):
                 continue  # refuses the handshake; no response is ever sent
             includes = [include.args for include in server.children("include")]
-            assert ["/etc/nginx/bot/security_headers.inc"] in includes, file_name
+            assert ["/etc/nginx/generated/security_headers.inc"] in includes, file_name
+
+
+def _includes(directives: list[Directive]) -> Iterator[str]:
+    for directive in directives:
+        if directive.name == "include":
+            yield directive.args[0]
+        yield from _includes(directive.block or [])
+
+
+def test_nothing_nginx_loads_is_read_from_the_checkout() -> None:
+    """A reload would read a file from the mounted checkout as soon as `git pull`
+    changed it, untested, and a configuration the running nginx refuses could
+    not be put back: everything nginx includes is rendered or copied first."""
+    for path in sorted(NGINX_DIR.glob("*.template")) + [NGINX_DIR / "main.conf"]:
+        for include in _includes(_parse(path.name)):
+            assert not include.startswith("/etc/nginx/bot/"), (path.name, include)
+    render = (NGINX_DIR / "render.sh").read_text(encoding="utf-8")
+    assert (
+        'cp "$source_dir/security_headers.inc" "$generated/security_headers.inc"'
+        in render
+    )
 
 
 def test_hsts_is_sent_over_tls_only() -> None:

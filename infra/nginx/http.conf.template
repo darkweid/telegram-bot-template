@@ -3,7 +3,7 @@
 server {
     listen 80 default_server;
     server_name _;
-    include /etc/nginx/bot/security_headers.inc;
+    include /etc/nginx/generated/security_headers.inc;
 
     location / {
         return 444;
@@ -13,7 +13,7 @@ server {
 server {
     listen 80;
     server_name ${WEBHOOK_HOST};
-    include /etc/nginx/bot/security_headers.inc;
+    include /etc/nginx/generated/security_headers.inc;
 
     location /.well-known/acme-challenge/ {
         root /var/www/certbot;

@@ -236,10 +236,10 @@ services:
     volumes:
       # The directory, never its files one by one: `git pull` on the box
       # replaces a changed file with a new inode, and a single-file bind mount
-      # stays on the old one, so render.sh would render, and the server blocks
-      # would include, the previous files while `nginx -t` passed the new ones.
-      # A reload reads what render.sh wrote into conf.d, which deploy.sh
-      # renders again in the running nginx before it reloads.
+      # stays on the old one, so render.sh would render the previous files
+      # while `nginx -t` passed the new ones. nginx loads nothing from here: a
+      # reload reads what render.sh wrote into conf.d and generated, which
+      # deploy.sh renders again in the running nginx before it reloads.
       - ./nginx:/etc/nginx/bot:ro
       # The bot upstream's servers, rewritten by infra/deploy/deploy.sh while it
       # rolls the bot. A volume, so the pin outlives a recreation of nginx.

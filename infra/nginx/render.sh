@@ -1,8 +1,9 @@
 #!/bin/sh
-# Renders this directory into /etc/nginx/conf.d for the configured webhook.
-# entrypoint.sh runs it when nginx starts; infra/deploy/deploy.sh runs it in
-# the running nginx before it reloads, since a reload reads conf.d and never
-# this directory. Not named *.conf, so nginx never loads it.
+# Renders this directory into /etc/nginx/conf.d and /etc/nginx/generated for
+# the configured webhook. entrypoint.sh runs it when nginx starts;
+# infra/deploy/deploy.sh runs it in the running nginx before it reloads, since
+# nothing nginx loads is read from this directory: a reload reads only what
+# was rendered. Not named *.conf, so nginx never loads it.
 set -eu
 
 source_dir=/etc/nginx/bot
@@ -19,6 +20,10 @@ fi
 export WEBHOOK_HOST="$host"
 
 mkdir -p "$generated"
+
+# Copied, not included from the mount: a reload would read a changed file
+# before the deploy tested it, and a refused render could not put it back.
+cp "$source_dir/security_headers.inc" "$generated/security_headers.inc"
 
 : >"$generated/telegram_subnets.inc"
 for subnet in $(printf '%s' "$TELEGRAM_ALLOWED_SUBNETS" | tr ',' ' '); do

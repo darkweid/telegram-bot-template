@@ -130,9 +130,10 @@ reload_nginx() {
 }
 
 # Renders this checkout's configuration into the running nginx, tests it there
-# and reloads. render.sh rewrites conf.d in place, so the files it replaces are
-# kept aside and put back when nginx refuses the new ones: the running nginx
-# keeps its configuration, and a restart would start on the same one.
+# and reloads. render.sh rewrites /etc/nginx/conf.d and /etc/nginx/generated in
+# place, so the files it replaces are kept aside and put back when nginx
+# refuses the new ones: the running nginx keeps its configuration, and a
+# restart would start on the same one.
 render_into_running_nginx() {
   # shellcheck disable=SC2016  # expanded by the shell inside the nginx container
   if ! "${COMPOSE[@]}" exec -T -e NGINX_REQUIRE_TLS=1 nginx sh -c '
@@ -492,7 +493,7 @@ if [ "$BOT_MODE" = "webhook" ]; then
   "${COMPOSE[@]}" up -d --no-deps nginx certbot
   # A started or recreated nginx rendered this checkout's configuration on its
   # way up. One left running still serves what it rendered when it started: a
-  # reload reads /etc/nginx/conf.d, never the mounted directory, so the files
+  # reload reads what render.sh wrote, never the mounted directory, so the files
   # tested above are rendered into it here, tested there and reloaded.
   if [ -n "$NGINX_BEFORE" ] && [ "$NGINX_BEFORE" = "$("${COMPOSE[@]}" ps -q nginx)" ]; then
     echo "[deploy] rendering the nginx configuration into the running nginx"
