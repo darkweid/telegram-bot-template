@@ -246,10 +246,15 @@ async def test_structured_gives_up_after_one_repair(server: ScriptedLLMServer) -
     server.reply(message("not json"))
     client = make_client(server)
 
-    with pytest.raises(LLMOutputError) as raised:
-        await client.structured(request(), Summary)
+    with captured_logs("src.core.llm.reporting") as records:
+        with pytest.raises(LLMOutputError) as raised:
+            await client.structured(request(), Summary)
 
     assert len(server.requests) == 2
+    [line] = [record.getMessage() for record in records]
+    assert "outcome=LLMOutputError" in line
+    assert "output_tokens=400" in line
+    assert "cost_usd=0.0112" in line
     assert raised.value.provider is LLMProviderName.ANTHROPIC
     assert "not json" not in str(raised.value)
     assert raised.value.usage is not None
@@ -421,6 +426,44 @@ async def test_a_failed_call_is_logged_with_its_error_class(
 
     [record] = records
     assert record.levelno == logging.WARNING
+    assert "outcome=LLMUnavailable" in record.getMessage()
+    await client.aclose()
+
+
+@pytest.mark.parametrize(
+    ("content", "content_type"),
+    [
+        (b"<html>bad gateway</html>", "text/html"),
+        (b'{"id": "msg_1", "content": [{"type": "te', "application/json"),
+        (b"", "application/json"),
+        (
+            b'{"type": "error", "error": {"type": "api_error", "message": "bad gateway"}}',
+            "application/json",
+        ),
+        (b'{"id": "msg_1", "type": "message", "usage": null}', "application/json"),
+        (
+            b'{"id": "msg_1", "type": "message", "content": null, '
+            b'"usage": {"input_tokens": 1, "output_tokens": 1}}',
+            "application/json",
+        ),
+    ],
+)
+async def test_a_200_that_is_not_a_message_is_unavailable(
+    server: ScriptedLLMServer, content: bytes, content_type: str
+) -> None:
+    """A proxy or an overloaded upstream can answer 200 with garbage; it must
+    switch the fallback like any outage, not escape as a stdlib exception."""
+    server.reply_raw(content, content_type=content_type)
+    client = make_client(server)
+
+    with captured_logs("src.core.llm.reporting") as records:
+        with pytest.raises(LLMUnavailable) as raised:
+            await client.complete(request())
+
+    assert raised.value.__cause__ is None
+    assert raised.value.__suppress_context__
+    assert "bad gateway" not in str(raised.value)
+    [record] = records
     assert "outcome=LLMUnavailable" in record.getMessage()
     await client.aclose()
 
