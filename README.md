@@ -470,8 +470,10 @@ Developers see the same report with `/status`.
 Tag a commit CI built and pushed (from `main` or `stage`) with `vX.Y.Z` and
 push the tag. The `Release` workflow points `ghcr.io/<owner>/<repo>:vX.Y.Z` at
 the image CI already pushed for that commit (`sha-<12>`, same digest, nothing
-rebuilt) and opens a GitHub Release with generated notes. A tag on a commit CI
-never built fails. Releases deploy nothing: CD follows the branches.
+rebuilt) and opens a GitHub Release with generated notes. Wait until CI on
+that commit has finished: a tag pushed before its image exists fails, and so
+does a tag on a commit CI never built, or one not shaped `vX.Y.Z`. Releases
+deploy nothing: CD follows the branches.
 
 ## Coverage
 

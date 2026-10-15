@@ -20,11 +20,18 @@ jobs:
       contents: write
       packages: write
 
+    # No checkout: every step works on the registry and the GitHub API.
     steps:
-      - name: Checkout code
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0
+      # The trigger's glob also matches `v1`, `vnext` or `v1.2.3-rc`; any of them
+      # would publish an image tag no one can tell from a release.
+      - name: Check the version tag
+        env:
+          VERSION: ${{ github.ref_name }}
+        run: |
+          if ! printf '%s' "$VERSION" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::Release tags look like vX.Y.Z (v1.2.3); got '$VERSION'. Delete it and push one of that shape."
+            exit 1
+          fi
 
       - name: Compute image and tags
         id: meta
@@ -79,6 +86,8 @@ jobs:
       - name: Create the GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # gh finds the repository from a checkout otherwise.
+          GH_REPO: ${{ github.repository }}
           IMAGE: ${{ steps.meta.outputs.image }}
           VERSION: ${{ steps.meta.outputs.version }}
         run: |

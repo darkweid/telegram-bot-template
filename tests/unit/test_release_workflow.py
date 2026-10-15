@@ -35,3 +35,28 @@ def test_only_a_version_tag_starts_a_release() -> None:
 
     assert set(triggers) == {"push"}
     assert triggers["push"] == {"tags": ["v*"]}
+
+
+def test_a_release_tag_is_checked_before_anything_is_published() -> None:
+    """The `v*` glob also matches `v1` or `vnext`. Checked after the promotion,
+    such a tag would already have put an image under a name no one can tell
+    from a release."""
+    first = _load()["jobs"]["release"]["steps"][0]
+
+    assert first["env"]["VERSION"] == "${{ github.ref_name }}"
+    assert "^v[0-9]+\\.[0-9]+\\.[0-9]+$" in first["run"]
+    assert "${{" not in first["run"]
+
+
+def test_a_release_runs_without_a_checkout() -> None:
+    """Every step talks to the registry or the API; a checkout would only pull
+    the history, and gh then needs the repository named explicitly."""
+    steps = _load()["jobs"]["release"]["steps"]
+    create = next(
+        step for step in steps if step.get("name") == "Create the GitHub Release"
+    )
+
+    assert not [
+        step for step in steps if step.get("uses", "").startswith("actions/checkout@")
+    ]
+    assert create["env"]["GH_REPO"] == "${{ github.repository }}"
