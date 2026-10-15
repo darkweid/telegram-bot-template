@@ -18,7 +18,7 @@ from src.core.errors.exceptions import CoreException, InfrastructureException
 from src.core.errors.scrubbed import ScrubbedError
 from src.core.i18n import N_
 from src.core.telegram import errors as errors_module
-from src.core.telegram.errors import build_errors_router
+from src.core.telegram.errors import build_errors_router, error_reply_text
 from src.main.config import Config
 from tests.factories.updates import build_message_update
 from tests.fakes.telegram import FakeTelegramSession, make_bot
@@ -440,3 +440,16 @@ async def test_a_blocked_bot_does_not_alert(
     )
     await _raise(_with_developer(settings, 99), i18n, error, alert_session=alerts)
     assert alerts.sent(SendMessage) == []
+
+
+def test_the_reply_text_of_a_core_exception_escapes_its_params(i18n: I18n) -> None:
+    """Background work answers through the same text as the error handler;
+    a param is user input inside an HTML reply."""
+    text = error_reply_text(i18n, "en", Greeting(number="<7>"))
+    assert text == "Order &lt;7&gt; is not available"
+
+
+def test_the_reply_text_of_any_other_error_is_the_generic_one(i18n: I18n) -> None:
+    """An unexpected error's message can quote user input; the user gets the
+    generic text in their language."""
+    assert error_reply_text(i18n, "ru", ValueError("<secret>")) == GENERIC_RU

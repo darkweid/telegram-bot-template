@@ -52,6 +52,25 @@ def update_sleep_budget() -> Iterator[None]:
         _update_sleep_budget.reset(token)
 
 
+_no_flood_retry: ContextVar[bool] = ContextVar("no_flood_retry", default=False)
+
+
+@contextmanager
+def without_flood_retry() -> Iterator[None]:
+    """Make the calls of the block fail on flood control at once instead of
+    sleeping it out: for calls the next one makes obsolete (a progress edit,
+    a typing action), whose sleep would only hold up the work behind them.
+
+    A task started inside the block inherits the mark; one started before it
+    does not see it.
+    """
+    token = _no_flood_retry.set(True)
+    try:
+        yield
+    finally:
+        _no_flood_retry.reset(token)
+
+
 class RetryAfterMiddleware(BaseRequestMiddleware):
     def __init__(
         self,
@@ -74,7 +93,11 @@ class RetryAfterMiddleware(BaseRequestMiddleware):
             try:
                 return await make_request(bot, method)
             except TelegramRetryAfter as error:
-                if retries >= self._attempts or error.retry_after > budget.remaining:
+                if (
+                    _no_flood_retry.get()
+                    or retries >= self._attempts
+                    or error.retry_after > budget.remaining
+                ):
                     raise
                 retries += 1
                 budget.remaining -= error.retry_after

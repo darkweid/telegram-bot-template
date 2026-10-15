@@ -11,6 +11,7 @@ from src.core.telegram.session import (
     ForbiddenMiddleware,
     RetryAfterMiddleware,
     update_sleep_budget,
+    without_flood_retry,
 )
 from tests.fakes.telegram import FakeTelegramSession, make_bot
 
@@ -204,3 +205,27 @@ async def test_a_failing_recorder_does_not_hide_the_telegram_error() -> None:
     session.queue(SendMessage, _forbidden(42))
     with pytest.raises(TelegramForbiddenError):
         await make_bot(session).send_message(chat_id=42, text="x")
+
+
+async def test_a_call_marked_without_retry_raises_at_once() -> None:
+    """A progress edit that sleeps out flood control would hold up the work
+    behind it, and the next edit replaces it anyway."""
+    session, sleeps = FakeTelegramSession(), Sleeps()
+    session.middleware(RetryAfterMiddleware(attempts=3, sleep=sleeps))
+    session.queue(SendMessage, _flood(2))
+    with without_flood_retry(), pytest.raises(TelegramRetryAfter):
+        await make_bot(session).send_message(chat_id=42, text="x")
+    assert sleeps.calls == []
+    assert len(session.sent(SendMessage)) == 1
+
+
+async def test_the_mark_ends_with_its_block() -> None:
+    """The final answer after the progress edits must still get through."""
+    session, sleeps = FakeTelegramSession(), Sleeps()
+    session.middleware(RetryAfterMiddleware(attempts=3, sleep=sleeps))
+    bot = make_bot(session)
+    with without_flood_retry():
+        await bot.send_message(chat_id=42, text="progress")
+    session.queue(SendMessage, _flood(2))
+    await bot.send_message(chat_id=42, text="answer")
+    assert sleeps.calls == [2]
