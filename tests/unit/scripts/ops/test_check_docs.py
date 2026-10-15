@@ -6,6 +6,7 @@ import pytest
 from scripts.ops import check_docs
 from scripts.ops.check_docs import (
     check,
+    check_configuration,
     check_links,
     check_make_calls,
     check_paths,
@@ -253,9 +254,7 @@ def test_a_fence_closes_only_on_the_same_character_and_length() -> None:
 
 def test_an_unterminated_fence_is_reported(tmp_path: Path) -> None:
     """The rest of the file would otherwise be dropped without a word."""
-    _git_tree(tmp_path)
-    (tmp_path / "Makefile").write_text("lint:\n\ttrue\n", encoding="utf-8")
-    (tmp_path / "README.md").write_text("```bash\nmake lint\n", encoding="utf-8")
+    _documented_tree(tmp_path, "```bash\nmake lint\n")
     assert has_unterminated_fence("```bash\nmake lint\n")
     assert check(tmp_path) == ["README.md: a fenced code block is never closed"]
 
@@ -283,6 +282,7 @@ def _documented_tree(root: Path, readme: str) -> None:
     _git_tree(root)
     (root / "Makefile").write_text("lint:\n\ttrue\n", encoding="utf-8")
     (root / "README.md").write_text(readme, encoding="utf-8")
+    _configuration_tree(root, "BOT_TOKEN=x\n", "| `BOT_TOKEN` | required | t |\n")
 
 
 def test_check_collects_links_make_calls_and_paths(tmp_path: Path) -> None:
@@ -346,3 +346,52 @@ def test_make_after_environment_assignments_is_a_call() -> None:
 def test_a_setext_heading_takes_the_whole_paragraph() -> None:
     text = "Quick start\nfor a new bot\n==========\n"
     assert heading_anchors(text) == {"quick-start-for-a-new-bot"}
+
+
+def _configuration_tree(tmp_path: Path, example: str, doc: str) -> set[str]:
+    (tmp_path / "docs").mkdir()
+    (tmp_path / ".env.example").write_text(example, encoding="utf-8")
+    (tmp_path / "docs/configuration.md").write_text(doc, encoding="utf-8")
+    return {".env.example", "docs/configuration.md"}
+
+
+def test_a_key_missing_from_the_configuration_doc_is_reported(tmp_path: Path) -> None:
+    """A setting nobody can find is a setting nobody changes on purpose."""
+    files = _configuration_tree(
+        tmp_path,
+        "BOT_TOKEN=x\n# BOT_IMAGE=\n# A comment, KEY=not a setting\n",
+        "| Key | Default | What it does |\n|---|---|---|\n| `BOT_TOKEN` | - | t |\n",
+    )
+    assert check_configuration(tmp_path, files) == [
+        "docs/configuration.md: BOT_IMAGE from .env.example is not documented"
+    ]
+
+
+def test_a_documented_key_the_example_lacks_is_reported(tmp_path: Path) -> None:
+    files = _configuration_tree(
+        tmp_path,
+        "BOT_TOKEN=x\n",
+        "| `BOT_TOKEN` | - | t |\n| `BOT_TOKENS` | - | typo |\n",
+    )
+    assert check_configuration(tmp_path, files) == [
+        "docs/configuration.md: BOT_TOKENS is not in .env.example"
+    ]
+
+
+def test_a_missing_configuration_doc_is_reported(tmp_path: Path) -> None:
+    (tmp_path / ".env.example").write_text("BOT_TOKEN=x\n", encoding="utf-8")
+    assert check_configuration(tmp_path, {".env.example"}) == [
+        "docs/configuration.md is missing"
+    ]
+
+
+def test_check_reports_an_undocumented_key(tmp_path: Path) -> None:
+    """The hook runs `check`; a key the doc lacks must fail it, not only the
+    function."""
+    _documented_tree(tmp_path, "`make lint`\n")
+    (tmp_path / ".env.example").write_text(
+        "BOT_TOKEN=x\nBOT_MODE=polling\n", encoding="utf-8"
+    )
+    assert check(tmp_path) == [
+        "docs/configuration.md: BOT_MODE from .env.example is not documented"
+    ]

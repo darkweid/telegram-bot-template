@@ -1,6 +1,7 @@
 """Checks that the tracked Markdown still matches the tree: relative links and
 their anchors resolve, every `make <target>` names a Makefile target, and every
-repository path in backticks exists.
+repository path in backticks exists. Every key in .env.example has a row in
+docs/configuration.md, and every row there names a key the example has.
 
 A moved file or a renamed target breaks the documentation silently otherwise.
 It runs as a pre-commit hook, so CI's lint job runs it on every change, a
@@ -59,6 +60,12 @@ PATH_TOKEN = re.compile(
     r"/[\w./<>*{}-]*"
 )
 EXTERNAL = ("http://", "https://", "mailto:")
+CONFIGURATION_DOC = "docs/configuration.md"
+# `KEY=` and `# KEY=` at the start of a line: a setting, set or shown commented
+# out. A prose comment can start that way too (`# BOT_MODE=webhook: ...`); in
+# .env.example every such comment names a real key, so the set is still exact.
+EXAMPLE_KEY = re.compile(r"^#?\s?([A-Z][A-Z0-9_]*)=", re.MULTILINE)
+TABLE_KEY = re.compile(r"^\|\s*`([A-Z][A-Z0-9_]*)`\s*\|", re.MULTILINE)
 
 
 def repository_files(root: Path) -> set[str]:
@@ -284,6 +291,26 @@ def makefile_targets(root: Path) -> set[str]:
     return {name for name in MAKEFILE_RULE.findall(text) if not name.startswith(".")}
 
 
+def check_configuration(root: Path, files: set[str]) -> list[str]:
+    """Every key in .env.example has a row in the configuration doc, and every
+    row names a key the example has."""
+    if CONFIGURATION_DOC not in files:
+        return [f"{CONFIGURATION_DOC} is missing"]
+    example = set(
+        EXAMPLE_KEY.findall((root / ".env.example").read_text(encoding="utf-8"))
+    )
+    documented = set(
+        TABLE_KEY.findall((root / CONFIGURATION_DOC).read_text(encoding="utf-8"))
+    )
+    return [
+        f"{CONFIGURATION_DOC}: {key} from .env.example is not documented"
+        for key in sorted(example - documented)
+    ] + [
+        f"{CONFIGURATION_DOC}: {key} is not in .env.example"
+        for key in sorted(documented - example)
+    ]
+
+
 def check(root: Path) -> list[str]:
     files = repository_files(root)
     targets = makefile_targets(root)
@@ -298,6 +325,7 @@ def check(root: Path) -> list[str]:
         problems += check_paths(root, path, code, files)
         if has_unterminated_fence(text):
             problems.append(f"{path}: a fenced code block is never closed")
+    problems += check_configuration(root, files)
     return problems
 
 
