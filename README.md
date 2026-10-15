@@ -479,7 +479,11 @@ never built fails. Releases deploy nothing: CD follows the branches.
 off until the repository variable `COVERALLS_ENABLED` is `true`; a public
 repository needs no token, the workflow token is enough. With it on, every push
 gets a Coveralls build, including a squash merge whose tests CI skips because
-the same tree already passed: the report of that tree is carried over.
+the same tree already passed: the report of that tree is carried over. A
+report that cannot be carried (expired, or an API error) leaves the commit
+without a Coveralls build and fails nothing. When there is no report to carry,
+the unit tests run again on that push, and a failure there fails CI and holds
+back the image like any other failed test.
 
 ## Dependency updates
 

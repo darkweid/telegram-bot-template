@@ -68,3 +68,20 @@ def test_a_disabled_gate_never_reruns_tests_on_a_verified_tree() -> None:
         f"{GATE} && github.event_name == 'push' && needs.changes.outputs.coverage_run == ''"
         in condition
     )
+
+
+def test_a_carried_report_that_cannot_be_fetched_never_fails_ci() -> None:
+    """The deploy follows only a CI run that succeeded. An expired artifact or
+    a passing API error while carrying a report would fail the run after the
+    image was pushed, and that image would never be deployed."""
+    steps = _jobs()["carry-coverage"]["steps"]
+    download = next(
+        step for step in steps if step.get("name") == "Download the carried report"
+    )
+    after = steps[steps.index(download) + 1 :]
+
+    assert download["continue-on-error"] is True
+    assert after
+    for step in after:
+        assert step["if"] == f"steps.{download['id']}.outcome == 'success'", step
+        assert step["continue-on-error"] is True, step

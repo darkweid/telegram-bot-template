@@ -331,7 +331,12 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      # A carried report is a convenience: an expired artifact or an API error
+      # must not fail CI, which would skip the deploy of an image already pushed.
+      # Without the report this commit has no Coveralls build.
       - name: Download the carried report
+        id: download
+        continue-on-error: true
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -342,6 +347,7 @@ jobs:
       # Saved again under this commit's tree, so the next push finds it one step
       # back instead of walking the whole run of documentation commits.
       - name: Keep the carried report for this tree
+        if: steps.download.outcome == 'success'
         continue-on-error: true
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -350,6 +356,7 @@ jobs:
           retention-days: 30
 
       - name: Upload coverage to Coveralls
+        if: steps.download.outcome == 'success'
         continue-on-error: true
         uses: coverallsapp/github-action@8d6379e14d29928660c4ba802d8e85393440b329 # v2.3.8
         with:
