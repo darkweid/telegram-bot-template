@@ -27,6 +27,8 @@ class Broadcast(UUID7IDMixin, TimestampMixin, Base):
     are the last checkpoint: a restarted run continues after the cursor.
     `run_id` and `checkpoint_at` are the lease of the run that owns the
     broadcast; a lease not renewed for STALE_AFTER may be taken over.
+    `reported_at` is set once the final report has gone out; until then a
+    finished broadcast is claimed again, through the same lease, to resend it.
     """
 
     __tablename__ = "broadcasts"
@@ -56,3 +58,4 @@ class Broadcast(UUID7IDMixin, TimestampMixin, Base):
     checkpoint_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    reported_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

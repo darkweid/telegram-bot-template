@@ -27,9 +27,34 @@ async def test_stalled_broadcasts_are_queued_again(
     session = FakeAsyncSession()
     broadcasts = AsyncMock(spec=BroadcastRepository)
     broadcasts.find_stalled.return_value = [FIRST, SECOND]
+    broadcasts.find_unreported.return_value = []
     use_case = ResumeStalledBroadcastsUseCase(SQLAlchemyUnitOfWork(session), broadcasts)
     assert await use_case.execute() == 2
     assert broadcasts.find_stalled.await_args.args[1] == NOW - STALE_AFTER
+    queued = [
+        (call.args[0].task_name, call.args[0].kwargs)
+        for call in session.add.call_args_list
+    ]
+    assert queued == [
+        (RUN_BROADCAST, {"broadcast_id": str(FIRST)}),
+        (RUN_BROADCAST, {"broadcast_id": str(SECOND)}),
+    ]
+    session.commit.assert_awaited_once()
+
+
+async def test_broadcasts_finished_unreported_are_queued_to_report(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A worker that died between finishing and reporting leaves the admin
+    without a report and with a Stop button that does nothing."""
+    monkeypatch.setattr(resume_module, "get_utc_now", lambda: NOW)
+    session = FakeAsyncSession()
+    broadcasts = AsyncMock(spec=BroadcastRepository)
+    broadcasts.find_stalled.return_value = [FIRST]
+    broadcasts.find_unreported.return_value = [SECOND]
+    use_case = ResumeStalledBroadcastsUseCase(SQLAlchemyUnitOfWork(session), broadcasts)
+    assert await use_case.execute() == 2
+    assert broadcasts.find_unreported.await_args.args[1] == NOW - STALE_AFTER
     queued = [
         (call.args[0].task_name, call.args[0].kwargs)
         for call in session.add.call_args_list

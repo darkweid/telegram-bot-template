@@ -5,7 +5,7 @@ from uuid import UUID
 from sqlalchemy import and_, exists, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.broadcast.enums import ACTIVE_STATUSES, BroadcastStatus
+from src.broadcast.enums import ACTIVE_STATUSES, FINISHED_STATUSES, BroadcastStatus
 from src.broadcast.models import Broadcast
 from src.broadcast.schemas import Checkpoint
 from src.core.database.repositories import BaseRepository
@@ -119,6 +119,55 @@ class BroadcastRepository(BaseRepository[Broadcast]):
         )
         return await session.scalar(query) is not None
 
+    async def claim_report(
+        self,
+        session: AsyncSession,
+        broadcast_id: UUID,
+        run_id: UUID,
+        *,
+        now: datetime,
+        stale_before: datetime,
+    ) -> Broadcast | None:
+        """Make `run_id` the owner of a finished broadcast whose final report
+        never went out, and return the row.
+
+        Takes it only when its lease was last renewed before `stale_before`:
+        `finish` renews it, so the run that finished gets that long to report,
+        and a resent report holds it against a second resend meanwhile.
+        """
+        query = (
+            update(Broadcast)
+            .where(
+                Broadcast.id == broadcast_id,
+                Broadcast.status.in_(FINISHED_STATUSES),
+                Broadcast.reported_at.is_(None),
+                Broadcast.checkpoint_at < stale_before,
+            )
+            .values(run_id=run_id, checkpoint_at=now)
+            .returning(Broadcast)
+        )
+        return await session.scalar(
+            query, execution_options={"populate_existing": True}
+        )
+
+    async def mark_reported(
+        self, session: AsyncSession, broadcast_id: UUID, run_id: UUID, *, now: datetime
+    ) -> bool:
+        """Record that the final report went out; False when `run_id` no longer
+        owns the broadcast or it was already reported."""
+        query = (
+            update(Broadcast)
+            .where(
+                Broadcast.id == broadcast_id,
+                Broadcast.run_id == run_id,
+                Broadcast.status.in_(FINISHED_STATUSES),
+                Broadcast.reported_at.is_(None),
+            )
+            .values(reported_at=now)
+            .returning(Broadcast.id)
+        )
+        return await session.scalar(query) is not None
+
     async def request_stop(self, session: AsyncSession, broadcast_id: UUID) -> bool:
         """False when the broadcast has already finished."""
         query = (
@@ -147,6 +196,23 @@ class BroadcastRepository(BaseRepository[Broadcast]):
                         Broadcast.created_at < stale_before,
                     ),
                 )
+            )
+            .order_by(Broadcast.created_at)
+        )
+        return list((await session.scalars(query)).all())
+
+    async def find_unreported(
+        self, session: AsyncSession, stale_before: datetime
+    ) -> list[UUID]:
+        """Finished broadcasts whose final report never went out and whose
+        last run has been silent since `stale_before` (its worker stopped
+        between finishing and reporting, or the report met a network error)."""
+        query = (
+            select(Broadcast.id)
+            .where(
+                Broadcast.status.in_(FINISHED_STATUSES),
+                Broadcast.reported_at.is_(None),
+                Broadcast.checkpoint_at < stale_before,
             )
             .order_by(Broadcast.created_at)
         )

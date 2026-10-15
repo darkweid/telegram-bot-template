@@ -21,6 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from loggers import get_logger
 from src.broadcast.enums import BroadcastStatus
 from src.broadcast.keyboards import stop_keyboard
+from src.broadcast.models import Broadcast
 from src.broadcast.repositories import BroadcastRepository
 from src.broadcast.schemas import BroadcastProgress, Checkpoint
 from src.broadcast.services import stale_before
@@ -56,6 +57,11 @@ TRANSIENT_RETRY_DELAYS_SECONDS: tuple[float, ...] = (1, 2, 4, 8)
 # Telegram's answer when the broadcast's source message is gone: no copy can
 # succeed, so it fails the broadcast rather than one recipient.
 SOURCE_MISSING_ERROR = "message to copy not found"
+# A report call that failed with one of these may get through on a later try,
+# so the report stays unsent and the resume task sends it again. Any other
+# refusal (the progress message deleted, the admin blocked the bot) would only
+# repeat: the report counts as sent.
+REPORT_RETRY_ERRORS = (TelegramNetworkError, TelegramServerError, TelegramRetryAfter)
 
 
 class _LeaseLostError(Exception):
@@ -110,7 +116,9 @@ class RunBroadcastUseCase:
     Runs in the worker. Every read and write opens its own short session, so
     no connection is held while messages go out. A run owns the broadcast
     through its lease (`run_id`), renewed at each checkpoint; a run that finds
-    its lease taken quits without writing anything.
+    its lease taken quits without writing anything. A run queued for a
+    finished broadcast whose final report never went out only sends the
+    report.
     """
 
     def __init__(
@@ -135,11 +143,10 @@ class RunBroadcastUseCase:
 
     async def execute(self, broadcast_id: UUID) -> BroadcastStatus | None:
         """The final status, or None when another run owns the broadcast or it
-        has already finished."""
+        has already finished and been reported."""
         run = await self._claim(broadcast_id)
         if run is None:
-            logger.info("Broadcast %s is finished or owned by a live run", broadcast_id)
-            return None
+            return await self._report_again(broadcast_id)
         try:
             if run.stop_requested:
                 status = BroadcastStatus.CANCELLED
@@ -173,27 +180,60 @@ class RunBroadcastUseCase:
             )
             if broadcast is None:
                 return None
-            admin = await self._users.get_single(uow.session, id=broadcast.admin_id)
-            candidates = (admin.locale, admin.language_code) if admin else ()
-            run = _Run(
-                id=broadcast.id,
-                run_id=run_id,
-                admin_id=broadcast.admin_id,
-                source_chat_id=broadcast.source_chat_id,
-                source_message_id=broadcast.source_message_id,
-                progress_message_id=broadcast.progress_message_id,
-                registered_by=broadcast.created_at,
-                total=broadcast.total,
-                sent=broadcast.sent,
-                failed=broadcast.failed,
-                unreachable=broadcast.unreachable,
-                cursor=broadcast.cursor_user_id,
-                stop_requested=broadcast.stop_requested,
-                locale=resolve_locale(*candidates, default=self._default_locale),
-                checkpointed_at=time.monotonic(),
-            )
+            run = await self._load_run(uow, broadcast, run_id)
             await uow.commit()
         return run
+
+    async def _report_again(self, broadcast_id: UUID) -> BroadcastStatus | None:
+        """Send the final report of a broadcast that finished without one: its
+        worker stopped in between, or the report met a network error."""
+        run_id = uuid4()
+        now = get_utc_now()
+        async with (
+            self._sessionmaker() as session,
+            SQLAlchemyUnitOfWork(session) as uow,
+        ):
+            broadcast = await self._broadcasts.claim_report(
+                uow.session,
+                broadcast_id,
+                run_id,
+                now=now,
+                stale_before=stale_before(now),
+            )
+            if broadcast is None:
+                logger.info(
+                    "Broadcast %s is finished or owned by a live run", broadcast_id
+                )
+                return None
+            status = broadcast.status
+            run = await self._load_run(uow, broadcast, run_id)
+            await uow.commit()
+        logger.warning("Broadcast %s finished unreported; sending the report", run.id)
+        await self._report(run, status)
+        return status
+
+    async def _load_run(
+        self, uow: SQLAlchemyUnitOfWork, broadcast: Broadcast, run_id: UUID
+    ) -> _Run:
+        admin = await self._users.get_single(uow.session, id=broadcast.admin_id)
+        candidates = (admin.locale, admin.language_code) if admin else ()
+        return _Run(
+            id=broadcast.id,
+            run_id=run_id,
+            admin_id=broadcast.admin_id,
+            source_chat_id=broadcast.source_chat_id,
+            source_message_id=broadcast.source_message_id,
+            progress_message_id=broadcast.progress_message_id,
+            registered_by=broadcast.created_at,
+            total=broadcast.total,
+            sent=broadcast.sent,
+            failed=broadcast.failed,
+            unreachable=broadcast.unreachable,
+            cursor=broadcast.cursor_user_id,
+            stop_requested=broadcast.stop_requested,
+            locale=resolve_locale(*candidates, default=self._default_locale),
+            checkpointed_at=time.monotonic(),
+        )
 
     async def _send_all(self, run: _Run) -> BroadcastStatus:
         while recipients := await self._next_batch(run):
@@ -361,11 +401,14 @@ class RunBroadcastUseCase:
         await self._edit(run, text, markup)
 
     async def _report(self, run: _Run, status: BroadcastStatus) -> None:
+        """Send the final report and record it once neither call is worth
+        repeating; otherwise the resume task has it sent again."""
         with self._i18n.context(), self._i18n.use_locale(run.locale):
             text = progress_text(run.progress(status))
         # The edit drops the Stop button; the new message notifies the admin,
-        # which an edit does not.
-        await self._edit(run, text, None)
+        # which an edit does not. A resent edit that finds the text already in
+        # place is refused as not modified, which counts as done.
+        edited = await self._edit(run, text, None)
         try:
             await self._bot.send_message(
                 run.admin_id, text, request_timeout=TELEGRAM_REQUEST_TIMEOUT_SECONDS
@@ -376,10 +419,28 @@ class RunBroadcastUseCase:
                 run.id,
                 type(error).__name__,
             )
+            notified = not isinstance(error, REPORT_RETRY_ERRORS)
+        else:
+            notified = True
+        if edited and notified:
+            await self._mark_reported(run)
+
+    async def _mark_reported(self, run: _Run) -> None:
+        async with (
+            self._sessionmaker() as session,
+            SQLAlchemyUnitOfWork(session) as uow,
+        ):
+            marked = await self._broadcasts.mark_reported(
+                uow.session, run.id, run.run_id, now=get_utc_now()
+            )
+            await uow.commit()
+        if not marked:
+            logger.warning("Broadcast %s was reported by another run", run.id)
 
     async def _edit(
         self, run: _Run, text: str, reply_markup: InlineKeyboardMarkup | None
-    ) -> None:
+    ) -> bool:
+        """False when the edit failed in a way a later try may get past."""
         try:
             # The progress message is in the admin's private chat, whose id is
             # the admin's user id.
@@ -395,3 +456,5 @@ class RunBroadcastUseCase:
             logger.warning(
                 "Broadcast %s progress edit failed: %s", run.id, type(error).__name__
             )
+            return not isinstance(error, REPORT_RETRY_ERRORS)
+        return True

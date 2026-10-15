@@ -18,7 +18,7 @@ async def resume_stalled_broadcasts(
     resume: FromDishka[ResumeStalledBroadcastsUseCase],
 ) -> str:
     resumed = await resume.execute()
-    return f"Resumed {resumed} broadcasts."
+    return f"Queued {resumed} broadcasts to resume or report."
 
 
 # No retry for either: a failed broadcast is marked FAILED and must stay so,

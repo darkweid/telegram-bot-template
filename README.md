@@ -294,7 +294,12 @@ Telegram allows about 30 to different users) and saves its position every
 every user who blocked the bot. If the worker stops mid-broadcast, a scheduled
 task resumes it within about five minutes from the last saved position, so up
 to `BROADCAST_CHECKPOINT_EVERY` users may get the message twice. Stop takes effect at the next save, within
-about a minute, flood waits included.
+about a minute, flood waits included. The final report is recorded once
+Telegram has taken it, or refused it for good (a deleted progress message, a
+blocked bot). If the worker stops after a broadcast finished but before its
+report went out, or the report met a network error, the same task sends the
+report about five minutes later, from the stored counts; the admin may then
+get the report message twice.
 
 A user who blocked the bot is counted as unreachable and marked so; a chat
 Telegram cannot find counts as failed. Network errors are retried. Anything

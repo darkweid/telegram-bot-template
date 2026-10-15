@@ -11,8 +11,10 @@ logger = get_logger(__name__)
 class ResumeStalledBroadcastsUseCase:
     """Queue a run for every broadcast whose worker went away.
 
-    The run claims the broadcast through its lease, so a run queued for a
-    broadcast that turns out to be alive only exits.
+    That covers a broadcast left mid-run and a finished one whose final report
+    never went out; for the latter the run only sends the report. The run
+    claims the broadcast through its lease, so a run queued for a broadcast
+    that turns out to be alive only exits.
     """
 
     def __init__(
@@ -23,12 +25,16 @@ class ResumeStalledBroadcastsUseCase:
 
     async def execute(self) -> int:
         async with self._uow as uow:
-            stalled = await self._broadcasts.find_stalled(
-                uow.session, stale_before(get_utc_now())
-            )
-            for broadcast_id in stalled:
+            before = stale_before(get_utc_now())
+            stalled = await self._broadcasts.find_stalled(uow.session, before)
+            unreported = await self._broadcasts.find_unreported(uow.session, before)
+            for broadcast_id in (*stalled, *unreported):
                 await uow.enqueue_task(RUN_BROADCAST, broadcast_id=str(broadcast_id))
             await uow.commit()
         for broadcast_id in stalled:
             logger.warning("Broadcast %s stalled; queued to resume", broadcast_id)
-        return len(stalled)
+        for broadcast_id in unreported:
+            logger.warning(
+                "Broadcast %s finished unreported; queued to report", broadcast_id
+            )
+        return len(stalled) + len(unreported)

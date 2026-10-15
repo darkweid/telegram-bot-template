@@ -175,3 +175,112 @@ async def test_stalled_broadcasts_are_found_and_live_ones_are_not(
     stalled = set(await broadcasts.find_stalled(db_session, NOW - STALE_AFTER))
     assert {lost.id, dead.id} <= stalled
     assert {fresh.id, live.id, done.id}.isdisjoint(stalled)
+
+
+async def test_finished_unreported_broadcasts_are_found_once_their_run_is_silent(
+    db_session: AsyncSession,
+) -> None:
+    """The run that finished gets STALE_AFTER to report; after that the resume
+    task sends the report, and never for one already sent or still running."""
+    broadcasts = BroadcastRepository()
+    old = NOW - timedelta(hours=1)
+    unreported = {
+        status: await _broadcast(
+            db_session, status=status, run_id=uuid4(), checkpoint_at=old
+        )
+        for status in (
+            BroadcastStatus.COMPLETED,
+            BroadcastStatus.CANCELLED,
+            BroadcastStatus.FAILED,
+        )
+    }
+    just_finished = await _broadcast(
+        db_session, status=BroadcastStatus.COMPLETED, run_id=uuid4(), checkpoint_at=NOW
+    )
+    reported = await _broadcast(
+        db_session,
+        status=BroadcastStatus.COMPLETED,
+        run_id=uuid4(),
+        checkpoint_at=old,
+        reported_at=old,
+    )
+    dead = await _broadcast(
+        db_session, status=BroadcastStatus.RUNNING, run_id=uuid4(), checkpoint_at=old
+    )
+    found = set(await broadcasts.find_unreported(db_session, NOW - STALE_AFTER))
+    assert {row.id for row in unreported.values()} <= found
+    assert {just_finished.id, reported.id, dead.id}.isdisjoint(found)
+
+
+async def test_a_report_is_claimed_once_and_recorded_by_its_owner(
+    db_session: AsyncSession,
+) -> None:
+    """Two resume rounds queue two runs; only one may send the report, and a
+    run that lost the claim must not record it."""
+    broadcasts = BroadcastRepository()
+    old = NOW - timedelta(hours=1)
+    row = await _broadcast(
+        db_session, status=BroadcastStatus.COMPLETED, run_id=uuid4(), checkpoint_at=old
+    )
+    first, second = uuid4(), uuid4()
+    claimed = await broadcasts.claim_report(
+        db_session, row.id, first, now=NOW, stale_before=NOW - STALE_AFTER
+    )
+    assert claimed is not None
+    assert (claimed.run_id, claimed.checkpoint_at) == (first, NOW)
+    again = await broadcasts.claim_report(
+        db_session, row.id, second, now=NOW, stale_before=NOW - STALE_AFTER
+    )
+    assert again is None
+    assert await broadcasts.mark_reported(db_session, row.id, second, now=NOW) is False
+    assert await broadcasts.mark_reported(db_session, row.id, first, now=NOW) is True
+    later = NOW + timedelta(hours=1)
+    assert (
+        await broadcasts.claim_report(
+            db_session, row.id, second, now=later, stale_before=later - STALE_AFTER
+        )
+        is None
+    )
+    await db_session.refresh(row)
+    assert row.reported_at == NOW
+
+
+async def test_a_running_broadcast_has_no_report_to_claim(
+    db_session: AsyncSession,
+) -> None:
+    """A dead run is resumed by claim_run; claiming its report instead would
+    announce a broadcast that has not finished."""
+    broadcasts = BroadcastRepository()
+    old = NOW - timedelta(hours=1)
+    row = await _broadcast(
+        db_session, status=BroadcastStatus.RUNNING, run_id=uuid4(), checkpoint_at=old
+    )
+    assert (
+        await broadcasts.claim_report(
+            db_session, row.id, uuid4(), now=NOW, stale_before=NOW - STALE_AFTER
+        )
+        is None
+    )
+
+
+async def test_the_run_that_finished_records_its_report(
+    db_session: AsyncSession,
+) -> None:
+    """finish keeps the run's lease, so the normal path records the report
+    without a claim of its own."""
+    broadcasts = BroadcastRepository()
+    row = await _broadcast(db_session)
+    run_id = uuid4()
+    await broadcasts.claim_run(
+        db_session, row.id, run_id, now=NOW, stale_before=NOW - STALE_AFTER
+    )
+    await broadcasts.finish(
+        db_session,
+        row.id,
+        run_id,
+        checkpoint=CHECKPOINT,
+        status=BroadcastStatus.COMPLETED,
+        now=NOW,
+    )
+    assert await broadcasts.mark_reported(db_session, row.id, run_id, now=NOW) is True
+    assert await broadcasts.mark_reported(db_session, row.id, run_id, now=NOW) is False

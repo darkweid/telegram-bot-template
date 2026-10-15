@@ -118,6 +118,8 @@ def _broadcasts() -> AsyncMock:
     broadcasts.claim_run.return_value = _broadcast()
     broadcasts.save_checkpoint.return_value = False
     broadcasts.finish.return_value = True
+    broadcasts.claim_report.return_value = None
+    broadcasts.mark_reported.return_value = True
     return broadcasts
 
 
@@ -715,3 +717,135 @@ async def test_a_not_found_recipient_is_counted_as_failed(
     assert _finished_with(broadcasts)[0] == Checkpoint(
         cursor_user_id=30, sent=2, failed=1, unreachable=0
     )
+
+
+REPORT_EDIT = EditMessageText(text="", chat_id=ADMIN, message_id=PROGRESS_MESSAGE_ID)
+REPORT_SEND = SendMessage(chat_id=ADMIN, text="")
+
+
+def _queue_for_the_report(
+    telegram: FakeTelegramSession, method: type[Any], error: Exception
+) -> None:
+    # The first edit shows the progress before any copy; the report's is the
+    # second, as the run takes less than the edit interval.
+    if method is EditMessageText:
+        telegram.queue(EditMessageText, True)
+    telegram.queue(method, error)
+
+
+async def test_a_delivered_report_is_recorded_under_the_runs_lease(
+    settings: Config, i18n: I18n
+) -> None:
+    """Unrecorded, the resume task would send the admin the same report again."""
+    broadcasts = _broadcasts()
+    await _run(settings, i18n, FakeTelegramSession(), broadcasts).execute(BROADCAST_ID)
+    broadcasts.mark_reported.assert_awaited_once()
+    finish_run_id = broadcasts.finish.await_args.args[2]
+    assert broadcasts.mark_reported.await_args.args[1:3] == (
+        BROADCAST_ID,
+        finish_run_id,
+    )
+
+
+async def test_a_report_cut_off_by_a_stop_is_sent_by_the_next_run(
+    settings: Config, i18n: I18n
+) -> None:
+    """A worker that stops between finishing and reporting leaves the admin
+    with "in progress" and a Stop button forever: the broadcast is finished,
+    so a redelivered run cannot claim it, and only the report run can tell."""
+    telegram = FakeTelegramSession()
+    telegram.queue(SendMessage, asyncio.CancelledError())
+    broadcasts = _broadcasts()
+    with pytest.raises(asyncio.CancelledError):
+        await _run(settings, i18n, telegram, broadcasts).execute(BROADCAST_ID)
+    broadcasts.mark_reported.assert_not_awaited()
+
+    resumed_telegram = FakeTelegramSession()
+    resumed = _broadcasts()
+    resumed.claim_run.return_value = None
+    resumed.claim_report.return_value = _broadcast(
+        status=BroadcastStatus.COMPLETED, sent=3, cursor_user_id=30
+    )
+    status = await _run(settings, i18n, resumed_telegram, resumed).execute(BROADCAST_ID)
+    assert status == BroadcastStatus.COMPLETED
+    [edit] = resumed_telegram.sent(EditMessageText)
+    [report] = resumed_telegram.sent(SendMessage)
+    assert (edit.text, edit.reply_markup) == (FINISHED, None)
+    assert (report.chat_id, report.text) == (ADMIN, FINISHED)
+    assert resumed_telegram.sent(CopyMessage) == []
+    resumed.finish.assert_not_awaited()
+    claim_run_id = resumed.claim_report.await_args.args[2]
+    resumed.mark_reported.assert_awaited_once()
+    assert resumed.mark_reported.await_args.args[2] == claim_run_id
+
+
+async def test_a_reported_broadcast_is_not_reported_again(
+    settings: Config, i18n: I18n
+) -> None:
+    telegram = FakeTelegramSession()
+    broadcasts = _broadcasts()
+    broadcasts.claim_run.return_value = None
+    assert (
+        await _run(settings, i18n, telegram, broadcasts).execute(BROADCAST_ID) is None
+    )
+    assert telegram.requests == []
+    broadcasts.mark_reported.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    ("method", "error"),
+    [
+        (SendMessage, TelegramNetworkError(method=REPORT_SEND, message="timeout")),
+        (SendMessage, TelegramServerError(method=REPORT_SEND, message="Bad Gateway")),
+        (
+            SendMessage,
+            TelegramRetryAfter(method=REPORT_SEND, message="", retry_after=90),
+        ),
+        (EditMessageText, TelegramNetworkError(method=REPORT_EDIT, message="timeout")),
+    ],
+)
+async def test_a_report_that_may_get_through_later_stays_unrecorded(
+    settings: Config, i18n: I18n, method: type[Any], error: Exception
+) -> None:
+    """The request may never have reached Telegram; the resume task tries again."""
+    telegram = FakeTelegramSession()
+    _queue_for_the_report(telegram, method, error)
+    broadcasts = _broadcasts()
+    await _run(settings, i18n, telegram, broadcasts).execute(BROADCAST_ID)
+    broadcasts.mark_reported.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    ("method", "error"),
+    [
+        (
+            SendMessage,
+            TelegramForbiddenError(
+                method=REPORT_SEND, message="Forbidden: bot was blocked by the user"
+            ),
+        ),
+        (
+            EditMessageText,
+            TelegramBadRequest(
+                method=REPORT_EDIT, message="Bad Request: message to edit not found"
+            ),
+        ),
+        (
+            EditMessageText,
+            TelegramBadRequest(
+                method=REPORT_EDIT,
+                message="Bad Request: message is not modified",
+            ),
+        ),
+    ],
+)
+async def test_a_report_refused_for_good_is_recorded(
+    settings: Config, i18n: I18n, method: type[Any], error: Exception
+) -> None:
+    """A blocked bot or a deleted progress message would refuse every resend:
+    retrying it each minute forever only fills the log."""
+    telegram = FakeTelegramSession()
+    _queue_for_the_report(telegram, method, error)
+    broadcasts = _broadcasts()
+    await _run(settings, i18n, telegram, broadcasts).execute(BROADCAST_ID)
+    broadcasts.mark_reported.assert_awaited_once()

@@ -14,3 +14,10 @@ ACTIVE_STATUSES: tuple[BroadcastStatus, ...] = (
     BroadcastStatus.PENDING,
     BroadcastStatus.RUNNING,
 )
+
+# A broadcast in one of these is over; only its final report may be left to send.
+FINISHED_STATUSES: tuple[BroadcastStatus, ...] = (
+    BroadcastStatus.COMPLETED,
+    BroadcastStatus.CANCELLED,
+    BroadcastStatus.FAILED,
+)
