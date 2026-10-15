@@ -93,9 +93,50 @@ KNOWN_KEYS = frozenset(
         # BroadcastConfig
         "BROADCAST_RATE_PER_SECOND",
         "BROADCAST_CHECKPOINT_EVERY",
-        # Refused by name below: a deployment must never write what users
-        # send to a model into its logs, whether or not the image reads it
+        # LLMConfig
+        "LLM_PROVIDER",
+        "LLM_MODEL",
+        "LLM_FALLBACK_PROVIDER",
+        "LLM_FALLBACK_MODEL",
+        "ANTHROPIC_API_KEY",
+        "OPENROUTER_API_KEY",
+        "OPENROUTER_APP_URL",
+        "OPENROUTER_APP_TITLE",
+        "LLM_TIMEOUT_SECONDS",
+        "LLM_MAX_RETRIES",
+        "LLM_PRICING_OVERRIDES",
+        "LLM_USAGE_RETENTION_DAYS",
+        # LLMConfig too, and refused by name below: a deployment must never
+        # write what users send to a model into its logs
         "LLM_LOG_CONTENT",
+        # S3Config
+        "S3_ENABLED",
+        "S3_BUCKET_NAME",
+        "S3_ACCESS_KEY_ID",
+        "S3_SECRET_ACCESS_KEY",
+        "S3_REGION_NAME",
+        "S3_PRE_SIGNED_URL_SECONDS",
+        "S3_ENDPOINT_URL",
+        "S3_ADDRESSING_STYLE",
+        "S3_SIGNATURE_VERSION",
+        "S3_VERIFY_SSL",
+        "S3_CA_BUNDLE",
+        "S3_TREAT_ACCESS_DENIED_AS_MISSING",
+        "S3_CONNECT_TIMEOUT_SECONDS",
+        "S3_READ_TIMEOUT_SECONDS",
+        "S3_RETRY_MAX_ATTEMPTS",
+        "S3_RETRY_MODE",
+        "S3_MAX_UPLOAD_SIZE_BYTES",
+        # EmailConfig
+        "EMAIL_ENABLED",
+        "EMAIL_SERVER",
+        "EMAIL_PORT",
+        "EMAIL_USER",
+        "EMAIL_PASSWORD",
+        "EMAIL_FROM_NAME",
+        "EMAIL_USE_TLS",
+        "EMAIL_STARTTLS",
+        "EMAIL_VALIDATE_CERTS",
         # Build time: refused below, listed so the message says why
         "COMMIT_SHA",
         # compose and nginx

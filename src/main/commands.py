@@ -16,18 +16,24 @@ from src.core.locales import SUPPORTED_LOCALES
 from src.core.telegram.commands import BotCommandSpec
 from src.core.telegram.roles import Roles
 from src.developer.commands import DEVELOPER_COMMANDS
+from src.note.commands import NOTE_COMMANDS
 from src.user.commands import USER_COMMANDS
 
 logger = get_logger(__name__)
 
+# The menu of every private chat and the list /help prints, in this order.
+# A new domain with commands adds its tuple here.
+PUBLIC_COMMANDS: tuple[BotCommandSpec, ...] = (*USER_COMMANDS, *NOTE_COMMANDS)
+
 
 async def set_bot_commands(bot: Bot, i18n: I18n, roles: Roles) -> None:
-    """Publish the command menu: once per supported language, and once
-    without a language for users whose language we do not support. Every
-    admin and developer then gets a menu of their own in their private chat."""
-    await _set_menu(bot, i18n, USER_COMMANDS, BotCommandScopeAllPrivateChats())
+    """Publish the command menu (PUBLIC_COMMANDS): once per supported
+    language, and once without a language for users whose language we do not
+    support. Every admin and developer then gets a menu of their own in their
+    private chat."""
+    await _set_menu(bot, i18n, PUBLIC_COMMANDS, BotCommandScopeAllPrivateChats())
     for chat_id in roles.members:
-        specs = list(USER_COMMANDS)
+        specs = list(PUBLIC_COMMANDS)
         if roles.is_admin(chat_id):
             specs += ADMIN_COMMANDS
         if roles.is_developer(chat_id):

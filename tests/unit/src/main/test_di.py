@@ -1,5 +1,5 @@
 from collections.abc import Awaitable, Callable
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from functools import partial
 import logging
 from typing import Any
@@ -32,6 +32,7 @@ from src.core.events.registry import event_subscribers, set_event_subscribers
 from src.core.events.schemas import DomainEvent
 from src.core.http.user_agent import UserAgent
 from src.core.limiter.pacer import Pacer
+from src.core.llm.tasks import LLMUsageRetention
 from src.core.outbox.interface import TaskPublisher
 from src.core.outbox.models import OutboxMessage
 from src.core.outbox.publisher import UnregisteredTaskError
@@ -632,5 +633,20 @@ async def test_every_broadcast_run_gets_its_own_pacer(
             pacer = await first.get(Pacer)
         async with container() as second:
             assert await second.get(Pacer) is not pacer
+    finally:
+        await container.close()
+
+
+async def test_llm_usage_retention_comes_from_the_config(
+    settings: Config, i18n: I18n
+) -> None:
+    """The purge deletes everything older than this; a wrong unit would empty
+    the table or keep it forever."""
+    config = settings.model_copy(
+        update={"llm": settings.llm.model_copy(update={"LLM_USAGE_RETENTION_DAYS": 45})}
+    )
+    container = build_container(config)
+    try:
+        assert await container.get(LLMUsageRetention) == timedelta(days=45)
     finally:
         await container.close()

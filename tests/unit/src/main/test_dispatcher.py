@@ -202,3 +202,12 @@ async def test_role_routers_come_before_the_user_router(
     assert names.index("admin") < names.index("user")
     assert names.index("developer") < names.index("user")
     assert names.index("broadcast") < names.index("user")
+
+
+async def test_the_note_router_comes_before_the_unmatched_one(
+    settings: Config, i18n: I18n
+) -> None:
+    """After `unmatched`, every note button would only stop the spinner."""
+    async with running_bot(settings, i18n) as running:
+        names = [router.name for router in running.dp.sub_routers]
+    assert names.index("note") < names.index("unmatched")

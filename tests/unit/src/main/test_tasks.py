@@ -3,11 +3,15 @@ from taskiq.middlewares import SmartRetryMiddleware
 from taskiq_redis import RedisStreamBroker
 
 from src.broadcast.task_names import RESUME_STALLED_BROADCASTS, RUN_BROADCAST
+from src.core.llm.tasks import purge_llm_usage
 from src.core.tasks.middlewares import TaskFailureAlertMiddleware
 from src.main import tasks as tasks_module
 from src.main.config import Config
 from src.main.event_subscribers import EVENT_SUBSCRIBERS
 from src.main.tasks import TASKS, build_broker
+from src.note.events import NoteCreated
+from src.note.subscribers import enqueue_note_created
+from src.note.tasks import NOTE_CREATED
 from src.user.cache import DROP_USER_SNAPSHOT
 from src.user.events import UserRegistered
 from src.user.subscribers import enqueue_new_user_notice
@@ -88,3 +92,20 @@ def test_broadcasts_run_once_and_stalled_ones_resume_every_minute() -> None:
     assert specs[RUN_BROADCAST].retry_on_error is False
     assert specs[RUN_BROADCAST].schedule == ()
     assert specs[RESUME_STALLED_BROADCASTS].schedule == ({"cron": "* * * * *"},)
+
+
+def test_the_note_subscriber_is_installed() -> None:
+    """Without it a note is stored and its task never runs."""
+    assert enqueue_note_created in EVENT_SUBSCRIBERS[NoteCreated]
+
+
+def test_the_note_task_is_registered() -> None:
+    assert NOTE_CREATED in {spec.name for spec in TASKS}
+
+
+def test_llm_usage_is_purged_daily() -> None:
+    """The purge keeps llm_usage at LLM_USAGE_RETENTION_DAYS; half an hour
+    after the outbox purge, so the two never run at once."""
+    [spec] = [spec for spec in TASKS if spec.name == "llm_usage.purge"]
+    assert spec.func is purge_llm_usage
+    assert spec.schedule == ({"cron": "30 3 * * *"},)

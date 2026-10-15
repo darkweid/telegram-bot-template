@@ -4,8 +4,14 @@
 #
 #    pip-compile --output-file=dev.txt dev.in
 #
+aioboto3==15.5.0
+    # via -r base.in
+aiobotocore[boto3]==2.25.1
+    # via aioboto3
 aiofiles==25.1.0
-    # via aiogram
+    # via
+    #   aioboto3
+    #   aiogram
 aiogram==3.31.0
     # via -r base.in
 aiohappyeyeballs==2.7.1
@@ -13,10 +19,15 @@ aiohappyeyeballs==2.7.1
 aiohttp==3.14.5
     # via
     #   -r base.in
+    #   aiobotocore
     #   aiogram
     #   taskiq
+aioitertools==0.13.0
+    # via aiobotocore
 aiosignal==1.4.0
     # via aiohttp
+aiosmtplib==5.1.3
+    # via -r base.in
 alembic==1.20.0
     # via
     #   -r base.in
@@ -25,8 +36,13 @@ alembic-postgresql-enum==1.10.0
     # via -r base.in
 annotated-types==0.8.0
     # via pydantic
+anthropic==1.13.0
+    # via -r base.in
 anyio==4.15.1
     # via
+    #   anthropic
+    #   httpx2
+    #   openai
     #   taskiq
     #   watchfiles
 ast-serialize==0.13.0
@@ -39,6 +55,13 @@ babel==2.18.0
     # via -r base.in
 black==26.10.1
     # via -r dev.in
+boto3==1.40.61
+    # via aiobotocore
+botocore==1.40.61
+    # via
+    #   aiobotocore
+    #   boto3
+    #   s3transfer
 build==1.6.1
     # via pip-tools
 certifi==2026.7.22
@@ -58,6 +81,12 @@ dishka==1.10.1
     # via -r base.in
 distlib==0.4.3
     # via virtualenv
+dnspython==2.9.0
+    # via email-validator
+docstring-parser==0.18.0
+    # via anthropic
+email-validator==2.3.0
+    # via -r base.in
 filelock==4.1.1
     # via
     #   python-discovery
@@ -70,16 +99,38 @@ greenlet==3.5.6
     # via sqlalchemy
 grimp==3.17
     # via import-linter
+h11==0.16.0
+    # via httpcore2
+httpcore2==2.13.1
+    # via httpx2
+httpx2==2.13.1
+    # via
+    #   -r base.in
+    #   anthropic
+    #   openai
 identify==2.6.20
     # via pre-commit
 idna==3.20
     # via
     #   anyio
+    #   email-validator
+    #   httpx2
     #   yarl
 import-linter==2.15
     # via -r dev.in
 iniconfig==2.3.1
     # via pytest
+jinja2==3.1.6
+    # via -r base.in
+jiter==0.17.0
+    # via
+    #   anthropic
+    #   openai
+jmespath==1.1.0
+    # via
+    #   aiobotocore
+    #   boto3
+    #   botocore
 librt==0.16.0
     # via mypy
 magic-filter==1.0.12
@@ -91,11 +142,14 @@ mako==1.4.3
 markdown-it-py==4.2.0
     # via rich
 markupsafe==3.0.4
-    # via mako
+    # via
+    #   jinja2
+    #   mako
 mdurl==0.1.2
     # via markdown-it-py
-multidict==7.1.0
+multidict==6.9.1
     # via
+    #   aiobotocore
     #   aiohttp
     #   yarl
 mypy==2.4.0
@@ -106,6 +160,8 @@ mypy-extensions==1.1.0
     #   mypy
 nodeenv==1.11.0
     # via pre-commit
+openai==3.31.0
+    # via -r base.in
 packaging==26.3
     # via
     #   black
@@ -139,6 +195,8 @@ pydantic==2.13.5
     # via
     #   -r base.in
     #   aiogram
+    #   anthropic
+    #   openai
     #   pydantic-settings
     #   taskiq
 pydantic-core==2.46.5
@@ -165,6 +223,10 @@ pytest-cov==7.1.0
     # via -r dev.in
 pytest-randomly==5.0.0
     # via -r dev.in
+python-dateutil==2.9.0.post0
+    # via
+    #   aiobotocore
+    #   botocore
 python-discovery==1.6.2
     # via virtualenv
 python-dotenv==1.2.4
@@ -183,8 +245,16 @@ rich==15.0.0
     # via import-linter
 ruff==0.16.10
     # via -r dev.in
+s3transfer==0.14.0
+    # via boto3
 sentry-sdk==2.72.0
     # via -r base.in
+six==1.17.0
+    # via python-dateutil
+sniffio==1.3.1
+    # via
+    #   anthropic
+    #   openai
 sqlalchemy[asyncio]==2.1.4
     # via
     #   -r base.in
@@ -198,15 +268,21 @@ taskiq-dependencies==1.5.7
     # via taskiq
 taskiq-redis==1.2.4
     # via -r base.in
+truststore==0.10.5
+    # via
+    #   httpcore2
+    #   httpx2
 types-pyyaml==6.0.12.20260906
     # via -r dev.in
 typing-extensions==4.16.0
     # via
     #   aiogram
     #   alembic
+    #   anthropic
     #   anyio
     #   import-linter
     #   mypy
+    #   openai
     #   pydantic
     #   pydantic-core
     #   sqlalchemy
@@ -216,7 +292,9 @@ typing-inspection==0.4.4
     #   pydantic
     #   pydantic-settings
 urllib3==2.8.0
-    # via sentry-sdk
+    # via
+    #   botocore
+    #   sentry-sdk
 uuid6==2025.0.1
     # via -r base.in
 virtualenv==21.14.7
@@ -225,6 +303,8 @@ watchfiles==1.3.0
     # via -r dev.in
 wheel==0.48.0
     # via pip-tools
+wrapt==1.17.3
+    # via aiobotocore
 yarl==1.25.1
     # via aiohttp
 

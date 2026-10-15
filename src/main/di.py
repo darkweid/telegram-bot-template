@@ -2,6 +2,9 @@
 and released when the container closes."""
 
 from collections.abc import AsyncIterator, Mapping
+from contextlib import AsyncExitStack
+from datetime import timedelta
+from typing import assert_never
 
 from aiogram import Bot
 from aiogram.client.default import DefaultBotProperties
@@ -26,20 +29,38 @@ from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from taskiq import AsyncBroker
 
+from src.admin.di import AdminProvider
 from src.broadcast.di import BroadcastProvider
 from src.core.cache.interface import Cache
 from src.core.cache.redis_cache import RedisCache
 from src.core.cache.serializer import JsonSerializer
 from src.core.database.engine import create_engine
 from src.core.database.uow import SQLAlchemyUnitOfWork
+from src.core.email.disabled import DisabledMailer
+from src.core.email.interface import Mailer
+from src.core.email.service import EmailService
+from src.core.email.smtp_mailer import SmtpMailer, SmtpSettings
 from src.core.events.registry import set_event_subscribers
 from src.core.http.user_agent import UserAgent, build_user_agent
 from src.core.i18n import LOCALES_DIR, build_i18n
 from src.core.limiter.limiter import RateLimiter
+from src.core.llm.anthropic import AnthropicLLMClient
+from src.core.llm.disabled import DisabledLLMClient
+from src.core.llm.enums import LLMProviderName
+from src.core.llm.fallback import FallbackLLMClient
+from src.core.llm.interface import LLMClient
+from src.core.llm.openrouter import OpenRouterLLMClient
+from src.core.llm.pricing import PricingTable
+from src.core.llm.recording import LLMUsageRecorder, RecordingLLMClient
+from src.core.llm.repository import LLMUsageRepository
+from src.core.llm.tasks import LLMUsageRetention
 from src.core.outbox.interface import TaskPublisher
 from src.core.outbox.publisher import OutboxPublisher
 from src.core.redis.core import create_redis_client
 from src.core.redis.degradation import DegradationNotifier, RedisDegradationReporter
+from src.core.storage.s3.adapter import S3Adapter
+from src.core.storage.s3.disabled import DisabledS3Client
+from src.core.storage.s3.interface import S3Client
 from src.core.tasks.broker import TasksRedis
 from src.core.telegram.alerts import (
     AlertBot,
@@ -66,15 +87,19 @@ from src.main.config import (
     BroadcastConfig,
     CacheConfig,
     Config,
+    EmailConfig,
     HttpConfig,
+    LLMConfig,
     PostgresConfig,
     RedisConfig,
+    S3Config,
     ThrottlingConfig,
     WebhookConfig,
     WebServerConfig,
 )
 from src.main.event_subscribers import EVENT_SUBSCRIBERS
 from src.main.tasks import build_broker
+from src.note.di import NoteProvider
 from src.system.di import SystemProvider
 from src.user.di import UserProvider
 
@@ -127,6 +152,14 @@ class ConfigProvider(Provider):
     @provide
     def cache(self, config: Config) -> CacheConfig:
         return config.cache
+
+    @provide
+    def s3(self, config: Config) -> S3Config:
+        return config.s3
+
+    @provide
+    def email(self, config: Config) -> EmailConfig:
+        return config.email
 
 
 class DatabaseProvider(Provider):
@@ -284,6 +317,112 @@ class TelegramProvider(Provider):
         )
 
 
+def _required(value: str, key: str) -> str:
+    # Config's validator refuses a provider without its key or model; a Config
+    # copied around the validator still fails here by the key's name instead
+    # of at the first paid call.
+    if not value:
+        raise RuntimeError(f"{key} is required by the configured LLM provider")
+    return value
+
+
+def _build_adapter(
+    name: LLMProviderName, model: str, llm: LLMConfig, pricing: PricingTable
+) -> AnthropicLLMClient | OpenRouterLLMClient:
+    match name:
+        case LLMProviderName.ANTHROPIC:
+            return AnthropicLLMClient(
+                api_key=_required(
+                    llm.ANTHROPIC_API_KEY.get_secret_value(), "ANTHROPIC_API_KEY"
+                ),
+                model=model,
+                pricing=pricing,
+                timeout_seconds=llm.LLM_TIMEOUT_SECONDS,
+                max_retries=llm.LLM_MAX_RETRIES,
+            )
+        case LLMProviderName.OPENROUTER:
+            return OpenRouterLLMClient(
+                api_key=_required(
+                    llm.OPENROUTER_API_KEY.get_secret_value(), "OPENROUTER_API_KEY"
+                ),
+                model=model,
+                app_url=llm.OPENROUTER_APP_URL,
+                app_title=llm.OPENROUTER_APP_TITLE,
+                timeout_seconds=llm.LLM_TIMEOUT_SECONDS,
+                max_retries=llm.LLM_MAX_RETRIES,
+            )
+        case _:
+            assert_never(name)
+
+
+def _recorded_adapter(
+    name: LLMProviderName,
+    model: str,
+    llm: LLMConfig,
+    pricing: PricingTable,
+    recorder: LLMUsageRecorder,
+    adapters: AsyncExitStack,
+) -> RecordingLLMClient:
+    adapter = _build_adapter(name, model, llm, pricing)
+    adapters.push_async_callback(adapter.aclose)
+    return RecordingLLMClient(
+        adapter,
+        recorder,
+        provider=name,
+        default_model=model,
+        log_content=llm.LLM_LOG_CONTENT,
+    )
+
+
+class LLMProvider(Provider):
+    """The model client, one per process. Its SDK clients close with the
+    container: the bot's at shutdown, the worker's in WorkerLifecycle."""
+
+    scope = Scope.APP
+
+    usage = provide(LLMUsageRepository)
+    recorder = provide(LLMUsageRecorder)
+
+    @provide
+    def pricing(self, config: Config) -> PricingTable:
+        return PricingTable(config.llm.LLM_PRICING_OVERRIDES)
+
+    @provide
+    def usage_retention(self, config: Config) -> LLMUsageRetention:
+        return LLMUsageRetention(timedelta(days=config.llm.LLM_USAGE_RETENTION_DAYS))
+
+    @provide
+    async def client(
+        self,
+        config: Config,
+        pricing: PricingTable,
+        recorder: LLMUsageRecorder,
+        alerter: DeveloperAlerter,
+    ) -> AsyncIterator[LLMClient]:
+        llm = config.llm
+        if llm.LLM_PROVIDER is None:
+            yield DisabledLLMClient()
+            return
+        # Every adapter built is closed on the way out, the primary included
+        # when the fallback cannot be built.
+        async with AsyncExitStack() as adapters:
+            primary = _recorded_adapter(
+                llm.LLM_PROVIDER, llm.LLM_MODEL, llm, pricing, recorder, adapters
+            )
+            if llm.LLM_FALLBACK_PROVIDER is None:
+                yield primary
+                return
+            fallback = _recorded_adapter(
+                llm.LLM_FALLBACK_PROVIDER,
+                _required(llm.LLM_FALLBACK_MODEL, "LLM_FALLBACK_MODEL"),
+                llm,
+                pricing,
+                recorder,
+                adapters,
+            )
+            yield FallbackLLMClient(primary, fallback, alerter)
+
+
 class AlertProvider(Provider):
     scope = Scope.APP
 
@@ -357,6 +496,69 @@ class HttpProvider(Provider):
         )
 
 
+def build_s3_adapter(s3: S3Config) -> S3Adapter:
+    """The adapter, not yet entered; S3Config has checked the credentials."""
+    return S3Adapter(
+        bucket=s3.S3_BUCKET_NAME,
+        region=s3.S3_REGION_NAME,
+        access_key=s3.S3_ACCESS_KEY_ID,
+        secret_key=s3.S3_SECRET_ACCESS_KEY.get_secret_value(),
+        default_presign_ttl=s3.S3_PRE_SIGNED_URL_SECONDS,
+        endpoint_url=s3.S3_ENDPOINT_URL,
+        addressing_style=s3.S3_ADDRESSING_STYLE,
+        signature_version=s3.S3_SIGNATURE_VERSION,
+        verify_ssl=s3.S3_VERIFY_SSL,
+        ca_bundle=s3.S3_CA_BUNDLE,
+        treat_access_denied_as_missing=s3.S3_TREAT_ACCESS_DENIED_AS_MISSING,
+        connect_timeout_seconds=s3.S3_CONNECT_TIMEOUT_SECONDS,
+        read_timeout_seconds=s3.S3_READ_TIMEOUT_SECONDS,
+        retry_max_attempts=s3.S3_RETRY_MAX_ATTEMPTS,
+        retry_mode=s3.S3_RETRY_MODE,
+        max_upload_size_bytes=s3.S3_MAX_UPLOAD_SIZE_BYTES,
+    )
+
+
+class S3Provider(Provider):
+    scope = Scope.APP
+
+    @provide
+    async def client(self, s3: S3Config) -> AsyncIterator[S3Client]:
+        if not s3.S3_ENABLED:
+            yield DisabledS3Client()
+            return
+        # Opened on the first request for it and closed with the container:
+        # at the end of bot_runtime in the bot, on worker shutdown in the worker.
+        async with build_s3_adapter(s3) as adapter:
+            yield adapter
+
+
+class EmailProvider(Provider):
+    scope = Scope.APP
+
+    @provide
+    def mailer(self, email: EmailConfig) -> Mailer:
+        if not email.EMAIL_ENABLED:
+            return DisabledMailer()
+        return SmtpMailer(
+            SmtpSettings(
+                host=email.EMAIL_SERVER,
+                port=email.EMAIL_PORT,
+                username=email.EMAIL_USER,
+                password=email.EMAIL_PASSWORD.get_secret_value(),
+                from_name=email.EMAIL_FROM_NAME,
+                use_tls=email.EMAIL_USE_TLS,
+                start_tls=email.EMAIL_STARTTLS,
+                validate_certs=email.EMAIL_VALIDATE_CERTS,
+            )
+        )
+
+    @provide
+    def service(self, mailer: Mailer, email: EmailConfig, s3: S3Config) -> EmailService:
+        return EmailService(
+            mailer, email_enabled=email.EMAIL_ENABLED, s3_enabled=s3.S3_ENABLED
+        )
+
+
 class BrokerProvider(Provider):
     """The bot's side of the task queue: it only sends.
 
@@ -407,9 +609,14 @@ def build_container(
         AlertProvider(),
         I18nProvider(),
         HttpProvider(),
+        LLMProvider(),
+        S3Provider(),
+        EmailProvider(),
         BrokerProvider(),
         UserProvider(),
+        AdminProvider(),
         BroadcastProvider(),
+        NoteProvider(),
         SystemProvider(),
         AiogramProvider(),
         *providers,

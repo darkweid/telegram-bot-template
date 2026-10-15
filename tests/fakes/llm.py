@@ -1,0 +1,91 @@
+"""An LLMClient that answers from a queue, as FakeTelegramSession does for the
+Bot API."""
+
+from collections import deque
+from decimal import Decimal
+
+from pydantic import BaseModel
+
+from src.core.llm.enums import LLMProviderName
+from src.core.llm.types import (
+    LLMRequest,
+    LLMResponse,
+    LLMUsage,
+    StructuredResponse,
+)
+
+
+def llm_response(
+    text: str = "ok",
+    *,
+    model: str = "claude-sonnet-5-5",
+    provider: LLMProviderName = LLMProviderName.ANTHROPIC,
+    input_tokens: int = 10,
+    output_tokens: int = 5,
+    cost_usd: Decimal | None = Decimal("0.00010000"),
+    stop_reason: str | None = "end_turn",
+    latency_ms: int = 100,
+) -> LLMResponse:
+    return LLMResponse(
+        text=text,
+        usage=LLMUsage(
+            input_tokens=input_tokens, output_tokens=output_tokens, cost_usd=cost_usd
+        ),
+        model=model,
+        provider=provider,
+        stop_reason=stop_reason,
+        latency_ms=latency_ms,
+    )
+
+
+type _Queued = LLMResponse | StructuredResponse[BaseModel] | BaseException
+
+
+class FakeLLMClient:
+    """Each call takes the next queued item: a response, a structured output,
+    or an exception to raise. `complete` with nothing queued answers
+    `llm_response()`; `structured` with nothing queued fails the test, since
+    it cannot invent the caller's model."""
+
+    def __init__(self) -> None:
+        self.calls: list[LLMRequest] = []
+        self._queued: deque[_Queued] = deque()
+
+    def queue(self, result: LLMResponse | BaseException) -> None:
+        self._queued.append(result)
+
+    def queue_structured(
+        self, output: BaseModel, response: LLMResponse | None = None
+    ) -> None:
+        self._queued.append(
+            StructuredResponse(
+                output=output,
+                response=response or llm_response(output.model_dump_json()),
+            )
+        )
+
+    async def complete(self, request: LLMRequest) -> LLMResponse:
+        self.calls.append(request)
+        if not self._queued:
+            return llm_response()
+        item = self._queued.popleft()
+        if isinstance(item, BaseException):
+            raise item
+        if isinstance(item, StructuredResponse):
+            raise AssertionError("a structured output is queued, complete() was called")
+        return item
+
+    async def structured[T: BaseModel](
+        self, request: LLMRequest, output: type[T]
+    ) -> StructuredResponse[T]:
+        self.calls.append(request)
+        if not self._queued:
+            raise AssertionError(f"structured({output.__name__}) with nothing queued")
+        item = self._queued.popleft()
+        if isinstance(item, BaseException):
+            raise item
+        if not isinstance(item, StructuredResponse) or not isinstance(
+            item.output, output
+        ):
+            raise AssertionError(f"structured({output.__name__}) found {item!r}")
+        return StructuredResponse(output=item.output, response=item.response)

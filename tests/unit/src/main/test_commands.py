@@ -8,8 +8,7 @@ from src.core.locales import SUPPORTED_LOCALES
 from src.core.telegram.commands import BotCommandSpec
 from src.core.telegram.roles import Roles
 from src.main import commands as commands_module
-from src.main.commands import set_bot_commands
-from src.user.commands import USER_COMMANDS
+from src.main.commands import PUBLIC_COMMANDS, set_bot_commands
 from tests.fakes.telegram import FakeTelegramSession, make_bot
 from tests.helpers.logs import captured_logs
 
@@ -47,6 +46,9 @@ async def test_menu_is_set_for_every_language_and_the_default(i18n: I18n) -> Non
         ("start", "Запустить бота"),
         ("help", "Показать справку"),
         ("language", "Сменить язык"),
+        ("note", "Написать заметку"),
+        ("notes", "Мои заметки"),
+        ("summarize", "Сводка последних заметок"),
     ]
     default = next(call for call in calls if call.language_code is None)
     expected = next(call for call in calls if call.language_code == i18n.default_locale)
@@ -56,15 +58,16 @@ async def test_menu_is_set_for_every_language_and_the_default(i18n: I18n) -> Non
 
 
 @pytest.mark.usefixtures("role_commands")
-async def test_each_role_member_gets_the_user_menu_plus_their_role(
+async def test_each_role_member_gets_the_public_menu_plus_their_role(
     i18n: I18n,
 ) -> None:
     """A chat scope replaces the private-chat menu for that chat, so it has to
-    repeat the user commands, or an admin would lose /start and /help."""
+    repeat PUBLIC_COMMANDS, or an admin would lose /start, /help and the
+    note commands."""
     session = FakeTelegramSession()
     roles = Roles(admins=frozenset({10, 30}), developers=frozenset({20, 30}))
     await set_bot_commands(make_bot(session), i18n, roles)
-    user_part = [spec.command for spec in USER_COMMANDS]
+    user_part = [spec.command for spec in PUBLIC_COMMANDS]
     for chat_id, extra in (
         (10, ["admin_only"]),
         (20, ["developer_only"]),

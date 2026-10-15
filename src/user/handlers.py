@@ -1,3 +1,5 @@
+from collections.abc import Sequence
+
 from aiogram import F, Router, html
 from aiogram.enums import ChatType
 from aiogram.filters import (
@@ -12,9 +14,9 @@ from aiogram.utils.callback_answer import CallbackAnswer
 from aiogram.utils.i18n import I18n, gettext as _
 from dishka import FromDishka
 
+from src.core.telegram.commands import BotCommandSpec
 from src.core.telegram.messages import safe_edit_text
 from src.user.callbacks import LanguageCallback
-from src.user.commands import USER_COMMANDS
 from src.user.keyboards import LANGUAGE_NAMES, language_keyboard
 from src.user.schemas import TelegramProfile
 from src.user.usecases.change_membership import ChangeMembershipUseCase
@@ -30,9 +32,11 @@ async def start(message: Message) -> None:
     )
 
 
-async def help_(message: Message) -> None:
+async def help_(message: Message, public_commands: Sequence[BotCommandSpec]) -> None:
+    """`public_commands` is the menu the composition root assembles from every
+    domain (dispatcher data), so /help and the menu never disagree."""
     lines = [_("Commands:")]
-    lines += [f"/{spec.command} - {_(spec.description)}" for spec in USER_COMMANDS]
+    lines += [f"/{spec.command} - {_(spec.description)}" for spec in public_commands]
     await message.answer("\n".join(lines))
 
 

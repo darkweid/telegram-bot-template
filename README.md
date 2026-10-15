@@ -17,6 +17,14 @@ it on.
   finish.
 - `/start`, `/help` and `/language`, with a per-user language and a command
   menu published in every supported language.
+- A reference domain, `src/note`, to copy for new modules: `/note` writes a
+  note through a dialog with a Cancel button and `/cancel`, `/notes` lists
+  them five per page with keyset pagination in the buttons, each note is
+  deleted after a confirmation, and `/summarize` asks the LLM for a summary
+  of the latest ones. It has its own table, migration, use cases,
+  keyboards, an event and its task, and the full set of tests (handlers on
+  the real dispatcher, use cases on fakes, the repository against
+  PostgreSQL).
 - Users stored on their first private-chat update and kept fresh with
   minimal writes: a row is rewritten only when the Telegram profile changes
   or once per `USER_TOUCH_INTERVAL_SECONDS`.
@@ -45,6 +53,11 @@ it on.
 - Broadcasts to every reachable user, paced under Telegram's limit, with live
   progress and a Stop button, resumed from the last checkpoint after a worker
   restart.
+- An LLM client for Anthropic and OpenRouter: structured output validated by
+  pydantic, a fallback provider with a developer alert, and the cost of every
+  call recorded in `llm_usage` and shown in `/stats`. Off until
+  `LLM_PROVIDER` is set.
+- S3 storage and SMTP email with HTML templates, both off by default.
 - A global error handler that logs the failure, answers the user in their
   Telegram language, and reports unexpected errors to Sentry.
 - `/live`, `/ready` and `/health` probes in both modes; `/health` also reports
@@ -84,6 +97,8 @@ flowchart LR
     Q --> W[Worker]
     W --> UC
     W --> S
+    UC --> L["LLM client<br/>fallback · usage"]
+    L --> P["Anthropic · OpenRouter"]
 ```
 
 Handlers are thin and get their use cases from the dishka container. A use
@@ -101,7 +116,7 @@ from [@BotFather](https://t.me/BotFather).
 git clone https://github.com/darkweid/tg-bot-template.git my-bot && cd my-bot
 python3.13 -m venv .venv && source .venv/bin/activate
 pip install -r infra/requirements/dev.txt
-cp .env.example .env          # set BOT_TOKEN
+cp .env.example .env          # set BOT_TOKEN; the LLM stays off until LLM_PROVIDER is set
 make run-dev                  # compiles catalogs, migrates, starts with autoreload
 make logs s=bot
 ```
@@ -321,7 +336,10 @@ served as usual, but broadcasts skip them and `/stats` counts them as banned
 until they are unbanned with `/unban`.
 
 Admins also get `/stats`: users in total, reachable, banned, and active and
-new in the last 1, 7 and 30 days.
+new in the last 1, 7 and 30 days, then the LLM spending: today since
+midnight UTC, the last 7 and 30 days, with calls that failed or had no
+known price listed only when there are any, and the last 30 days by
+purpose and for the top 5 users.
 
 The role menus are set for each listed id on every start. Removing an id from
 `ADMIN_IDS` or `DEVELOPER_IDS` takes the role away at once, but Telegram keeps
@@ -374,11 +392,14 @@ async with self._uow as uow:
 The task is stored as a row in `outbox_messages` in the same transaction, so it
 exists only if the work that caused it commits. Arguments must be plain JSON
 values (ids, strings, numbers, lists, dicts); anything a JSON round-trip would
-change is refused. Right after commit the bot sends the task to the queue. If
-that send fails, the `outbox.sweep` task, which runs every minute, sends the row
-within a minute or two; the row id is the task id, so a row sent twice runs
-once. `outbox.purge` deletes published rows older than
-`PUBLISHED_RETENTION_DAYS` (7) every day at 03:00 UTC. A row still pending
+change is refused. Tasks carry ids, never what a user typed; the email tasks
+are the exception (see Email). Right after commit the bot sends the task to
+the queue. If that send fails, the `outbox.sweep` task, which runs every
+minute, sends the row within a minute or two; the row id is the task id, so a
+row sent twice runs once. `outbox.purge` deletes published rows older than
+`PUBLISHED_RETENTION_DAYS` (7) every day at 03:00 UTC, and `llm_usage.purge`
+deletes `llm_usage` rows older than `LLM_USAGE_RETENTION_DAYS` at 03:30 UTC;
+both commit each batch of deletions separately. A row still pending
 after that many days is never sent: the sweeper marks it failed and logs it at
 CRITICAL, since the worker remembers a finished task only as long and a late
 send could run it twice.
@@ -401,6 +422,14 @@ every admin in `ADMIN_IDS` who has opened the bot a message in that admin's
 language. The task runs at most once: run again, it would repeat the message
 to the admins who already got it. `NOTIFY_ADMINS_ON_NEW_USER=false` keeps the event
 and the task and sends nothing.
+
+`src/note` shows the same path on a smaller scale: `CreateNoteUseCase`
+publishes `NoteCreated` inside the note's transaction, the subscriber in
+`src/main/event_subscribers.py` writes an outbox row for the
+`note.note_created` task, and the worker logs the note and user ids. To react
+to an event of your own, define the subscriber and the task in your domain,
+map the subscriber to its event in `src/main/event_subscribers.py`, and add
+the domain's task specs to `TASKS` in `src/main/tasks.py`.
 
 ## Alerts
 
@@ -472,6 +501,134 @@ message as the only report.
 A user who blocked the bot is counted as unreachable and marked so; a chat
 Telegram cannot find counts as failed. Network errors are retried. Anything
 else marks the broadcast failed, sends the report and alerts developers.
+
+## LLM
+
+`src/core/llm` gives use cases one `LLMClient` with two calls: `complete()`
+for text and `structured(request, Model)` for an answer validated by a
+pydantic model. A use case gets it from the container and never touches a
+provider SDK:
+
+```python
+response = await llm.structured(
+    LLMRequest(
+        purpose=NOTE_SUMMARY_PURPOSE,
+        system=note_summary_system_prompt(locale),
+        messages=(LLMMessage(role="user", content=note_summary_user_message(texts)),),
+    ),
+    NoteSummary,
+)
+```
+
+- **Providers.** `LLM_PROVIDER` is `anthropic` or `openrouter`, `LLM_MODEL`
+  the model (`claude-sonnet-5-5` by default), with `ANTHROPIC_API_KEY` or
+  `OPENROUTER_API_KEY`. Empty `LLM_PROVIDER` turns the layer off: every call
+  raises `LLMNotConfigured`, and the user is told the feature is off.
+  `.env.example` ships it off, with a working provider and fallback pair in
+  commented lines.
+  `LLM_TIMEOUT_SECONDS` and `LLM_MAX_RETRIES` go to the provider SDK.
+  OpenRouter requests carry `OPENROUTER_APP_URL` and `OPENROUTER_APP_TITLE`.
+- **Fallback.** With `LLM_FALLBACK_PROVIDER` and `LLM_FALLBACK_MODEL` set, a
+  call that times out, is rate limited or finds the provider unavailable is
+  repeated on the fallback with `LLM_FALLBACK_MODEL`, and developers get an
+  alert; the same failure alerts once per `ALERT_COOLDOWN_SECONDS`. The
+  fallback must be the other provider: one vendor's outage must not take
+  down both paths.
+- **Structured output.** Both providers get the pydantic model's JSON
+  schema: Anthropic as `output_config.format`, OpenRouter as a strict
+  `response_format`. An answer that fails validation
+  gets one repair retry with the validation error, then `LLMOutputError`;
+  an answer cut at `max_tokens` gets no retry, so give `max_tokens` room
+  for the longest valid answer. Requests set no `temperature`: current
+  Sonnet and Haiku models reject a non-default value.
+- **Startup checks.** `LLMConfig` refuses to start when a chosen provider,
+  primary or fallback, has no key or model, a model id has the wrong shape
+  for its provider (OpenRouter ids are `vendor/model`), or the fallback is
+  the primary provider again.
+- **Cost.** OpenRouter reports the cost of each call. For Anthropic it comes
+  from the price table in `src/core/llm/pricing.py`; `LLM_PRICING_OVERRIDES`
+  (JSON) adds or replaces models. A model with no price is recorded without
+  a cost, with one warning per process.
+- **Usage.** Every attempt, failed ones included, writes a row to
+  `llm_usage`: provider, model, `purpose`, tokens, cost, latency and the
+  Telegram user id. A call that fell back leaves two rows. A failed call
+  the provider still billed (a refusal, an answer that failed validation, a
+  repair whose request broke off) is stored with what it cost.
+  `/stats` shows spending for today (since midnight UTC), 7 and 30 days, and
+  for the last 30 days by purpose and for the top 5 users; lines for failed
+  calls and for calls without a known price appear only when there are any.
+  The scheduler task `llm_usage.purge` deletes rows older than
+  `LLM_USAGE_RETENTION_DAYS` every day at 03:30 UTC.
+- **Privacy.** Prompts and answers are never logged; each call logs one
+  line with provider, model, purpose, tokens, cost and latency.
+  `LLM_LOG_CONTENT=true` also logs the prompt and the answer (the error
+  class of a failed call) for local debugging. It requires `DEBUG=true`,
+  which turns Sentry off: the bot refuses to start otherwise, since every
+  logged line would reach Sentry as a breadcrumb.
+- **Limits.** A handler that calls a model carries
+  `flags={"throttle": Throttle.LLM}` and gets the tighter
+  `THROTTLE_LLM_LIMIT` per `THROTTLE_LLM_WINDOW_SECONDS`.
+
+Prompts live in the domain's `prompts.py`, in English; the reply language
+is a parameter. `/summarize` in `src/note` is the worked example. Tests use
+`FakeLLMClient` from `tests/fakes/llm.py`, which returns queued answers and
+errors and records every request.
+
+## File storage (S3)
+
+`src/core/storage/s3` is an async client for S3 and S3-compatible storage
+(MinIO, R2) on aioboto3. It is off by default: with `S3_ENABLED=false` the
+container holds a client that raises `S3Disabled` on every call, so a bot that
+stores no files needs no S3 keys. Turn it on with `S3_ENABLED=true` and the
+bucket, keys and region from `.env.example`; the bot refuses to start without
+them.
+
+Use cases and tasks receive the client through dishka as `S3Client`:
+
+```python
+await s3.upload_stream(f"users/{user_id}/avatar.jpg", file, content_type="image/jpeg")
+```
+
+`upload_stream` takes any binary stream (a file from `bot.download`, a file on
+disk), reads it a part at a time and switches to a multipart upload past one
+part. A stream larger than `S3_MAX_UPLOAD_SIZE_BYTES` (20 MiB) fails with
+`S3ObjectTooLarge` and stores nothing. The client opens on first use and
+closes with the bot or the worker.
+
+## Email
+
+`src/core/email` sends email over SMTP (aiosmtplib) from Jinja2 templates in
+`src/core/email/templates`: `base.html`, its components and
+`notification.html` (a title and a message). It is off by default: with
+`EMAIL_ENABLED=false` the mailer raises `EmailDisabled` on every send and
+`EmailService` refuses to queue an email. Turn it on with
+`EMAIL_ENABLED=true` and the `EMAIL_*` settings from `.env.example`; the bot
+refuses to start without the server, the user and the sender name.
+
+A use case queues an email in its own transaction, and the worker sends it
+after commit:
+
+```python
+async with self._uow as uow:
+    ...
+    await self._email.enqueue_template_email(
+        uow,
+        "Your report is ready",
+        address,
+        NOTIFICATION_TEMPLATE,
+        NotificationEmail(title="Report", message=text),
+    )
+    await uow.commit()
+```
+
+`enqueue_email_with_s3_attachments` sends files stored in S3 as attachments
+and, with `cleanup=True`, deletes them once the email went out. Both tasks
+are retried on failure. The email tasks are the exception to "tasks carry
+ids only": the recipients, subject, body and template context are stored in
+the outbox row (kept 7 days) and in the task stream, because the send needs
+them. Logs carry the template name and counts only; an
+SMTP error is reduced to its class and reply code, because the server's
+reply quotes the addresses it refused.
 
 ## Health
 
@@ -551,17 +708,22 @@ scripts/ops/        .env checker and helpers behind make targets and pre-commit 
 src/admin/          admin commands: ban, unban, statistics
 src/broadcast/      broadcasts: model, use cases, tasks, the draft dialog
 src/core/           shared infrastructure: database, outbox, tasks, Redis, cache,
-                    rate limits, HTTP client, errors, i18n, Telegram helpers
+                    rate limits, HTTP client, LLM client, S3 storage, email,
+                    errors, i18n, Telegram helpers
 src/developer/      developer commands: status, test alert
 src/main/           entry points (bot, worker, scheduler), config, dependency
                     container, dispatcher, polling and webhook
+src/note/           notes, the reference domain: handlers, dialog, keyboards,
+                    use cases, repository, an event and its task
 src/system/         health checks behind the probes and /status
 src/user/           users: handlers, keyboards, middleware, use cases, repository
 tests/unit/         tests that need no Docker
 tests/integration/  tests against a throwaway PostgreSQL and Redis
-tests/fakes/        the fake Bot API session, database and Redis fakes
+tests/fakes/        the fake Bot API session, LLM client, S3, mailer, HTTP,
+                    database and Redis fakes
 tests/factories/    Telegram updates and stored users for tests
-tests/helpers/      a running bot on the fake API, provider overrides, log capture
+tests/helpers/      a running bot on the fake API, provider overrides, log
+                    capture, a scripted LLM provider
 ```
 
 ## Development

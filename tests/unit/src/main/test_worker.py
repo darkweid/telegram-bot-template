@@ -6,6 +6,7 @@ from dishka.integrations.taskiq import inject
 import pytest
 from taskiq import InMemoryBroker
 
+from src.core.llm.interface import LLMClient
 from src.core.outbox.interface import TaskPublisher
 from src.core.outbox.publisher import UnregisteredTaskError
 from src.core.tasks.middlewares import FAILURE_REPORTER_STATE
@@ -16,12 +17,17 @@ from src.main.runtime import DependencyUnavailableError
 from src.main.worker import create_worker
 from src.system.schemas import Readiness
 from tests.fakes.telegram import FakeTelegramSession
+from tests.helpers.llm import record_closing, with_llm
 from tests.helpers.providers import SessionOnly, TestOverrides
 from tests.helpers.runtime import Stubs
 
 
 async def echo_version(config: FromDishka[Config]) -> str:
     return config.app.VERSION
+
+
+async def name_llm_client(client: FromDishka[LLMClient]) -> str:
+    return type(client).__name__
 
 
 async def publish_unregistered(publisher: FromDishka[TaskPublisher]) -> str:
@@ -129,3 +135,31 @@ async def test_the_worker_closes_http_clients_on_shutdown(
     await broker.startup()
     await broker.shutdown()
     assert calls == ["http"]
+
+
+async def test_the_worker_closes_the_llm_client_on_shutdown(
+    settings: Config, i18n: I18n, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Tasks call the model too; the worker's SDK client belongs to the
+    worker's loop and must close on it, as the bot's does."""
+    closed: list[str] = []
+    record_closing(monkeypatch, closed)
+    config = with_llm(
+        settings,
+        LLM_PROVIDER="anthropic",
+        LLM_MODEL="claude-sonnet-5-5",
+        ANTHROPIC_API_KEY="sk-ant-not-real",
+    )
+    session = FakeTelegramSession()
+    broker = create_worker(config, SessionOnly(session, i18n), Stubs(session))
+    broker.register_task(
+        inject(name_llm_client, patch_module=True), task_name="test.llm"
+    )
+    await broker.startup()
+    try:
+        task = await broker.find_task("test.llm").kiq()
+        result = await task.wait_result()
+    finally:
+        await broker.shutdown()
+    assert result.return_value == "RecordingLLMClient"
+    assert closed == ["AnthropicLLMClient"]

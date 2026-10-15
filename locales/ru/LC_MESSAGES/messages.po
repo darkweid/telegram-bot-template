@@ -21,6 +21,16 @@ msgid "A broadcast is already running. Wait for it to finish or stop it."
 msgstr "Рассылка уже идёт. Дождитесь её окончания или остановите её."
 
 #, python-brace-format
+msgid "A note can be at most {limit} characters long. This one has {length}."
+msgstr "Заметка может быть не длиннее {limit} символов. В этой — {length}."
+
+msgid "A note cannot be empty."
+msgstr "Заметка не может быть пустой."
+
+msgid "A note is text only. Send the text, or /cancel."
+msgstr "Заметка — только текст. Пришлите текст или /cancel."
+
+#, python-brace-format
 msgid "Active in the last day / week / month: {day} / {week} / {month}"
 msgstr "Активны за день / неделю / месяц: {day} / {week} / {month}"
 
@@ -56,6 +66,9 @@ msgstr "Идёт рассылка: {processed} из {total}"
 msgid "Broadcast stopped: {processed} of {total}"
 msgstr "Рассылка остановлена: {processed} из {total}"
 
+msgid "By purpose, last 30 days:"
+msgstr "По назначению, за 30 дней:"
+
 msgid "Cancel"
 msgstr "Отмена"
 
@@ -68,6 +81,27 @@ msgstr "Выберите язык:"
 msgid "Commands:"
 msgstr "Команды:"
 
+msgid "Delete"
+msgstr "Удалить"
+
+#, python-brace-format
+msgid ""
+"Delete this note?\n"
+"\n"
+"{text}"
+msgstr ""
+"Удалить эту заметку?\n"
+"\n"
+"{text}"
+
+#, python-brace-format
+msgid "Delete {number}"
+msgstr "Удалить {number}"
+
+#, python-brace-format
+msgid "Errors in the last 30 days: {count}"
+msgstr "С ошибкой за 30 дней: {count}"
+
 #, python-brace-format
 msgid ""
 "Hello, {name}!\n"
@@ -78,9 +112,29 @@ msgstr ""
 "\n"
 "Отправьте /help, чтобы узнать, что я умею."
 
+msgid "Keep"
+msgstr "Оставить"
+
+msgid "LLM spending (days are UTC):"
+msgstr "Расходы на LLM (дни по UTC):"
+
 #, python-brace-format
 msgid "Language: {language}"
 msgstr "Язык: {language}"
+
+#, python-brace-format
+msgid "Last 30 days: ${cost}, {count} call"
+msgid_plural "Last 30 days: ${cost}, {count} calls"
+msgstr[0] "За 30 дней: ${cost}, {count} вызов"
+msgstr[1] "За 30 дней: ${cost}, {count} вызова"
+msgstr[2] "За 30 дней: ${cost}, {count} вызовов"
+
+#, python-brace-format
+msgid "Last 7 days: ${cost}, {count} call"
+msgid_plural "Last 7 days: ${cost}, {count} calls"
+msgstr[0] "За 7 дней: ${cost}, {count} вызов"
+msgstr[1] "За 7 дней: ${cost}, {count} вызова"
+msgstr[2] "За 7 дней: ${cost}, {count} вызовов"
 
 #, python-brace-format
 msgid "New in the last day / week / month: {day} / {week} / {month}"
@@ -96,6 +150,15 @@ msgstr "Новый пользователь: {name}, id {id}"
 
 msgid "No such user. They have to start the bot first."
 msgstr "Такого пользователя нет. Сначала он должен запустить бота."
+
+msgid "Note deleted."
+msgstr "Заметка удалена."
+
+msgid "Note saved. Send /notes to see all of them."
+msgstr "Заметка сохранена. Все заметки — /notes."
+
+msgid "Older »"
+msgstr "Старее »"
 
 #, python-brace-format
 msgid "Reachable: {count}"
@@ -121,6 +184,10 @@ msgstr ""
 "Отправьте /cancel, чтобы выйти."
 
 #, python-brace-format
+msgid "Send the text of the note, up to {limit} characters, or /cancel."
+msgstr "Пришлите текст заметки, до {limit} символов, или /cancel."
+
+#, python-brace-format
 msgid ""
 "Sent: {sent}\n"
 "Unreachable: {unreachable}\n"
@@ -143,6 +210,9 @@ msgstr "Состояние бота"
 msgid "Show user statistics"
 msgstr "Статистика пользователей"
 
+msgid "Show your notes"
+msgstr "Мои заметки"
+
 msgid "Something went wrong. Please try again later."
 msgstr "Что-то пошло не так. Попробуйте ещё раз чуть позже."
 
@@ -158,14 +228,61 @@ msgstr "Остановить"
 msgid "Stopping the broadcast."
 msgstr "Останавливаю рассылку."
 
+msgid "Summarize your recent notes"
+msgstr "Сводка последних заметок"
+
+#, python-brace-format
+msgid "Summary of {count} recent note:"
+msgid_plural "Summary of {count} recent notes:"
+msgstr[0] "Сводка по {count} последней заметке:"
+msgstr[1] "Сводка по {count} последним заметкам:"
+msgstr[2] "Сводка по {count} последним заметкам:"
+
 msgid "The broadcast was not started."
 msgstr "Рассылка не запущена."
+
+msgid "The file is too large to store."
+msgstr "Файл слишком большой, сохранить его не получится."
+
+msgid "The language model could not answer. Please try again later."
+msgstr "Языковая модель не смогла ответить. Попробуйте ещё раз чуть позже."
+
+msgid "The language model declined this request."
+msgstr "Языковая модель отказалась выполнять этот запрос."
+
+msgid ""
+"The language model gave an answer the bot could not read. Please try "
+"again."
+msgstr ""
+"Языковая модель дала ответ, который бот не смог разобрать. Попробуйте ещё"
+" раз."
+
+msgid "The language model is busy right now. Please try again in a minute."
+msgstr "Языковая модель сейчас перегружена. Попробуйте через минуту."
+
+msgid "The language model is unavailable right now. Please try again later."
+msgstr "Языковая модель сейчас недоступна. Попробуйте ещё раз чуть позже."
+
+msgid "The language model took too long to answer. Please try again."
+msgstr "Языковая модель отвечала слишком долго. Попробуйте ещё раз."
+
+msgid "The note was not saved."
+msgstr "Заметка не сохранена."
+
+msgid "The summary did not work out this time. Please try again."
+msgstr "Сводка в этот раз не получилась. Попробуйте ещё раз."
 
 msgid "This broadcast has already finished."
 msgstr "Эта рассылка уже завершена."
 
+msgid "This feature is not available in this bot."
+msgstr "В этом боте эта функция недоступна."
+
 msgid "This language is not available."
 msgstr "Этот язык недоступен."
+
+msgid "This message is too old. Send /notes again."
+msgstr "Это сообщение слишком старое. Отправьте /notes ещё раз."
 
 msgid "This message is too old. Start again with /broadcast."
 msgstr "Это сообщение слишком старое. Начните заново с /broadcast."
@@ -177,12 +294,25 @@ msgstr[0] "Это сообщение получит {count} пользовате
 msgstr[1] "Это сообщение получат {count} пользователя. Отправить?"
 msgstr[2] "Это сообщение получат {count} пользователей. Отправить?"
 
+msgid "This note no longer exists."
+msgstr "Этой заметки уже нет."
+
+#, python-brace-format
+msgid "Today: ${cost}, {count} call"
+msgid_plural "Today: ${cost}, {count} calls"
+msgstr[0] "Сегодня: ${cost}, {count} вызов"
+msgstr[1] "Сегодня: ${cost}, {count} вызова"
+msgstr[2] "Сегодня: ${cost}, {count} вызовов"
+
 #, python-brace-format
 msgid "Too many requests. Try again in {seconds} second."
 msgid_plural "Too many requests. Try again in {seconds} seconds."
 msgstr[0] "Слишком много запросов. Попробуйте через {seconds} секунду."
 msgstr[1] "Слишком много запросов. Попробуйте через {seconds} секунды."
 msgstr[2] "Слишком много запросов. Попробуйте через {seconds} секунд."
+
+msgid "Top users, last 30 days:"
+msgstr "Топ пользователей, за 30 дней:"
 
 msgid "Unban a user"
 msgstr "Разбанить пользователя"
@@ -191,8 +321,21 @@ msgstr "Разбанить пользователя"
 msgid "Usage: /{command} USER_ID or /{command} @username"
 msgstr "Использование: /{command} ID или /{command} @username"
 
+#, python-brace-format
+msgid "Without a known price in the last 30 days: {count}"
+msgstr "Без известной цены за 30 дней: {count}"
+
+msgid "Write a note"
+msgstr "Написать заметку"
+
 msgid "You cannot ban yourself."
 msgstr "Себя забанить нельзя."
+
+msgid "You have no notes yet. Send /note to write one."
+msgstr "Заметок пока нет. Напишите первую: /note."
+
+msgid "Your notes:"
+msgstr "Ваши заметки:"
 
 #, python-brace-format
 msgid "{count} user"
@@ -216,3 +359,13 @@ msgstr "{name} ({id}) не забанен."
 #, python-brace-format
 msgid "{name} ({id}) is unbanned."
 msgstr "{name} ({id}) разбанен."
+
+#, python-brace-format
+msgid "{name}: ${cost}, {count} call"
+msgid_plural "{name}: ${cost}, {count} calls"
+msgstr[0] "{name}: ${cost}, {count} вызов"
+msgstr[1] "{name}: ${cost}, {count} вызова"
+msgstr[2] "{name}: ${cost}, {count} вызовов"
+
+msgid "« Newer"
+msgstr "« Новее"
