@@ -230,10 +230,10 @@ The task is stored as a row in `outbox_messages` in the same transaction, so it
 exists only if the work that caused it commits. Arguments must be plain JSON
 values (ids, strings, numbers, lists, dicts); anything a JSON round-trip would
 change is refused. Tasks carry ids, never what a user typed; the email tasks
-are the exception (see Email). Right after commit the bot sends the task to the queue. If
-that send fails, the `outbox.sweep` task, which runs every minute, sends the row
-within a minute or two; the row id is the task id, so a row sent twice runs
-once. `outbox.purge` deletes published rows older than
+are the exception (see Email). Right after commit the bot sends the task to
+the queue. If that send fails, the `outbox.sweep` task, which runs every
+minute, sends the row within a minute or two; the row id is the task id, so a
+row sent twice runs once. `outbox.purge` deletes published rows older than
 `PUBLISHED_RETENTION_DAYS` (7) every day at 03:00 UTC, and `llm_usage.purge`
 deletes `llm_usage` rows older than `LLM_USAGE_RETENTION_DAYS` at 03:30 UTC;
 both commit each batch of deletions separately. A row still pending
@@ -364,13 +364,13 @@ response = await llm.structured(
   `.env.example` ships it off, with a working provider and fallback pair in
   commented lines.
   `LLM_TIMEOUT_SECONDS` and `LLM_MAX_RETRIES` go to the provider SDK.
+  OpenRouter requests carry `OPENROUTER_APP_URL` and `OPENROUTER_APP_TITLE`.
 - **Fallback.** With `LLM_FALLBACK_PROVIDER` and `LLM_FALLBACK_MODEL` set, a
   call that times out, is rate limited or finds the provider unavailable is
   repeated on the fallback with `LLM_FALLBACK_MODEL`, and developers get an
   alert; the same failure alerts once per `ALERT_COOLDOWN_SECONDS`. The
   fallback must be the other provider: one vendor's outage must not take
-  down both paths. OpenRouter requests carry `OPENROUTER_APP_URL` and
-  `OPENROUTER_APP_TITLE`.
+  down both paths.
 - **Structured output.** Both providers get the pydantic model's JSON
   schema: Anthropic as `output_config.format`, OpenRouter as a strict
   `response_format`. An answer that fails validation
@@ -519,9 +519,11 @@ src/system/         health checks behind the probes and /status
 src/user/           users: handlers, keyboards, middleware, use cases, repository
 tests/unit/         tests that need no Docker
 tests/integration/  tests against a throwaway PostgreSQL and Redis
-tests/fakes/        the fake Bot API session, LLM client, database and Redis fakes
+tests/fakes/        the fake Bot API session, LLM client, S3, mailer, HTTP,
+                    database and Redis fakes
 tests/factories/    Telegram updates and stored users for tests
-tests/helpers/      a running bot on the fake API, provider overrides, log capture
+tests/helpers/      a running bot on the fake API, provider overrides, log
+                    capture, a scripted LLM provider
 ```
 
 ## Development
