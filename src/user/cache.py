@@ -6,7 +6,8 @@ from src.core.database.uow import SQLAlchemyUnitOfWork
 USERS_CACHE_NAMESPACE = "users"
 
 # The outbox's copy of the after-commit delete, for a change the bot must not
-# forget across a Redis outage (a ban): the delete there fails open.
+# forget across a Redis outage (a ban): the delete there fails open, and the
+# cache's in-process mark of the failed key does not survive a restart.
 DROP_USER_SNAPSHOT = "user.drop_snapshot"
 
 

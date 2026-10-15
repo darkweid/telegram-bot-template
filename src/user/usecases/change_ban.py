@@ -59,8 +59,9 @@ class ChangeBanUseCase:
             invalidate_user_after_commit(uow, self._cache, target.id)
             # The fast delete above fails open: lost to a Redis outage, the old
             # snapshot would be served again once Redis is back, letting a
-            # banned user through until it expires. The outbox delivers this
-            # one after the outage.
+            # banned user through until it expires. The cache refuses a key
+            # whose delete failed for as long as this process lives; the
+            # outbox delivers this copy after a restart during the outage.
             await uow.enqueue_task(DROP_USER_SNAPSHOT, user_id=target.id)
             await uow.commit()
         logger.info(

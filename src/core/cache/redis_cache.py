@@ -30,6 +30,16 @@ class RedisCache(BaseCache):
     `delete_or_raise`, whose caller asked to know; programmer errors -
     unserializable values, a ttl outside (0, version_ttl], a rejected command -
     are raised. Only a successful write reports recovery.
+
+    A delete that failed open leaves its key marked in this process: once Redis
+    is back the old value is still there, and serving it would undo the change
+    the delete was for (a ban let through by a stale snapshot). A read of a
+    marked key retries the delete and reports a miss whatever the outcome; a
+    delete that lands or a successful write (a value read from the database
+    after the change) clears the mark. The set holds only keys whose delete
+    failed, so it stays as small as the outage. It lives in memory because the
+    bot is one process; a restart during the outage loses it, and the caller's
+    outbox task (`delete_or_raise`) covers that.
     """
 
     def __init__(
@@ -52,6 +62,7 @@ class RedisCache(BaseCache):
         )
         self._redis = redis_client
         self._reporter = reporter or RedisDegradationReporter("Cache")
+        self._failed_deletes: set[CacheKey] = set()
 
     def _namespace_prefix(self, namespace: str) -> str:
         return f"{self._prefix}:{namespace}"
@@ -60,6 +71,11 @@ class RedisCache(BaseCache):
         return await self._redis.eval(script, len(counters), *counters, *args)
 
     async def _read_raw(self, key: CacheKey) -> str | None:
+        if key in self._failed_deletes:
+            # The stored value predates a change whose delete was lost: it is
+            # never served, only dropped once Redis takes the delete.
+            await self._drop(key)
+            return None
         try:
             raw = await self._eval(
                 CACHE_GET_SCRIPT,
@@ -90,6 +106,7 @@ class RedisCache(BaseCache):
         except FAIL_OPEN_ERRORS as error:
             self._on_redis_outage("write", key, error)
             return
+        self._failed_deletes.discard(key)
         # Only a write proves recovery: under OOM a read or a DEL still succeeds,
         # so recovering on one would restart the cooldown on every miss.
         self._reporter.report_recovered()
@@ -98,6 +115,7 @@ class RedisCache(BaseCache):
         try:
             await self._drop_or_raise(key)
         except FAIL_OPEN_ERRORS as error:
+            self._failed_deletes.add(key)
             self._on_redis_outage("delete", key, error)
 
     async def _drop_or_raise(self, key: CacheKey) -> None:
@@ -107,6 +125,7 @@ class RedisCache(BaseCache):
             self._namespace_prefix(key.namespace),
             key.suffix,
         )
+        self._failed_deletes.discard(key)
 
     async def _retire_counters(self, counters: Sequence[str]) -> None:
         try:

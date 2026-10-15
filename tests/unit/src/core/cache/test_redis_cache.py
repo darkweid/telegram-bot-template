@@ -366,3 +366,84 @@ async def test_fake_out_of_memory_refuses_only_the_write(
     assert sentry_capture.call_count == 1
     assert "OutOfMemoryError" in sentry_capture.call_args.args[0]
     assert await cache.get(KEY) is None
+
+
+async def test_a_value_whose_delete_failed_is_never_served_after_recovery(
+    cache: RedisCache, fake_redis: InMemoryRedis
+) -> None:
+    """
+    A lost delete would let Redis serve the old value again once it is back:
+    a banned user's snapshot would let them through until the outbox drops it.
+    """
+    await cache.set(KEY, {"banned": False}, ttl=60)
+    fake_redis.fail_next_commands(1)
+    await cache.delete(KEY)
+
+    assert await cache.get(KEY) is None
+    assert await fake_redis.get(await _value_key(fake_redis, KEY)) is None
+
+
+async def test_a_read_during_the_outage_is_a_miss_and_the_mark_stays(
+    cache: RedisCache, fake_redis: InMemoryRedis
+) -> None:
+    """The retried delete may fail again; the old value must still be refused."""
+    await cache.set(KEY, {"banned": False}, ttl=60)
+    fake_redis.fail_next_commands(2)
+    await cache.delete(KEY)
+
+    assert await cache.get(KEY) is None
+    assert await fake_redis.get(await _value_key(fake_redis, KEY)) is not None
+    assert await cache.get(KEY) is None
+
+
+async def test_a_fresh_write_clears_the_mark(
+    cache: RedisCache, fake_redis: InMemoryRedis
+) -> None:
+    """A write after the change carries the new row, so it may be served."""
+    await cache.set(KEY, {"banned": False}, ttl=60)
+    fake_redis.fail_next_commands(1)
+    await cache.delete(KEY)
+
+    await cache.set(KEY, {"banned": True}, ttl=60)
+
+    assert await cache.get(KEY) == {"banned": True}
+    assert await cache.get(KEY) == {"banned": True}
+
+
+async def test_a_failed_write_keeps_the_mark(
+    cache: RedisCache, fake_redis: InMemoryRedis
+) -> None:
+    """A write Redis refused stored nothing; the old value is still there."""
+    await cache.set(KEY, {"banned": False}, ttl=60)
+    fake_redis.fail_next_commands(2)
+    await cache.delete(KEY)
+    await cache.set(KEY, {"banned": True}, ttl=60)
+
+    assert await cache.get(KEY) is None
+
+
+async def test_a_successful_delete_or_raise_clears_the_mark(
+    cache: RedisCache, fake_redis: InMemoryRedis
+) -> None:
+    """Once the delete landed there is nothing left to refuse, and no extra delete."""
+    await cache.set(KEY, {"banned": False}, ttl=60)
+    fake_redis.fail_next_commands(1)
+    await cache.delete(KEY)
+    await cache.delete_or_raise(KEY)
+    await cache.set(KEY, {"banned": True}, ttl=60)
+    calls = fake_redis.cache_eval_calls
+
+    assert await cache.get(KEY) == {"banned": True}
+    assert fake_redis.cache_eval_calls == calls + 1
+
+
+async def test_an_unmarked_key_reads_in_one_round_trip(
+    cache: RedisCache, fake_redis: InMemoryRedis
+) -> None:
+    """The mark costs nothing on the hot path: only a failed delete adds a call."""
+    await cache.set(KEY, {"banned": False}, ttl=60)
+    await cache.delete(KEY)
+    calls = fake_redis.cache_eval_calls
+
+    assert await cache.get(KEY) is None
+    assert fake_redis.cache_eval_calls == calls + 1
