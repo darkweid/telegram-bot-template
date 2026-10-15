@@ -15,6 +15,7 @@ from pydantic import (
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 from src.core.i18n import SUPPORTED_LOCALES
+from src.core.llm.enums import LLMProviderName
 
 
 class RedisConfig(BaseSettings):
@@ -356,6 +357,96 @@ class HttpConfig(BaseSettings):
         return value.strip()
 
 
+class LLMConfig(BaseSettings):
+    # Empty turns the LLM layer off: the bot starts without any key and every
+    # call raises LLMNotConfigured. Set, it requires that provider's key.
+    LLM_PROVIDER: LLMProviderName | None = None
+    # Anthropic ids as they are; OpenRouter ids are "<vendor>/<model>".
+    LLM_MODEL: str = "claude-sonnet-5-5"
+    # Takes over when the primary is unavailable, times out or is rate limited.
+    LLM_FALLBACK_PROVIDER: LLMProviderName | None = None
+    LLM_FALLBACK_MODEL: str = ""
+    ANTHROPIC_API_KEY: SecretStr = SecretStr("")
+    OPENROUTER_API_KEY: SecretStr = SecretStr("")
+    # OpenRouter's attribution headers (HTTP-Referer, X-Title); blank sends none.
+    OPENROUTER_APP_URL: str = Field("", max_length=256)
+    OPENROUTER_APP_TITLE: str = Field("", max_length=256)
+    # Per attempt; the SDK retries 429, 5xx and network errors LLM_MAX_RETRIES
+    # times, so a caller waits up to timeout x (retries + 1) per provider.
+    LLM_TIMEOUT_SECONDS: float = Field(60, gt=0, le=600)
+    LLM_MAX_RETRIES: int = Field(1, ge=0, le=5)
+    # /stats reports up to 30 days back, so a shorter retention would leave
+    # its 30-day figures short.
+    LLM_USAGE_RETENTION_DAYS: int = Field(90, ge=30)
+    # Logs prompts and answers in full: what users typed. Local debugging only.
+    LLM_LOG_CONTENT: bool = False
+
+    model_config = SettingsConfigDict(extra="ignore", hide_input_in_errors=True)
+
+    @field_validator("LLM_PROVIDER", "LLM_FALLBACK_PROVIDER", mode="before")
+    @classmethod
+    def empty_provider_is_none(cls, value: object) -> object:
+        # `LLM_PROVIDER=` in .env means "off", not an invalid provider name.
+        return None if value == "" else value
+
+    @field_validator("OPENROUTER_APP_URL", "OPENROUTER_APP_TITLE")
+    @classmethod
+    def reject_unprintable(cls, value: str) -> str:
+        # Both go out as HTTP header values, which are ASCII; a control
+        # character in a header is a request-splitting vector.
+        if any(not " " <= character <= "~" for character in value):
+            raise ValueError("OpenRouter app headers must be printable ASCII")
+        return value.strip()
+
+    @model_validator(mode="after")
+    def require_provider_settings(self) -> Self:
+        """A configured provider must be callable at startup, not fail every
+        call later: its key, a model id of its shape, and a fallback that does
+        not share the primary's outage."""
+        if self.LLM_PROVIDER is None:
+            if self.LLM_FALLBACK_PROVIDER is not None:
+                raise ValueError(
+                    "LLM_FALLBACK_PROVIDER is set but LLM_PROVIDER is empty: "
+                    "there is nothing to fall back from"
+                )
+            return self
+        self._require_provider(self.LLM_PROVIDER, self.LLM_MODEL, "LLM_MODEL")
+        if self.LLM_FALLBACK_PROVIDER is None:
+            return self
+        if self.LLM_FALLBACK_PROVIDER == self.LLM_PROVIDER:
+            raise ValueError(
+                "LLM_FALLBACK_PROVIDER must differ from LLM_PROVIDER: one "
+                "provider's outage would stop both"
+            )
+        self._require_provider(
+            self.LLM_FALLBACK_PROVIDER, self.LLM_FALLBACK_MODEL, "LLM_FALLBACK_MODEL"
+        )
+        return self
+
+    def _require_provider(
+        self, provider: LLMProviderName, model: str, model_setting: str
+    ) -> None:
+        if provider is LLMProviderName.ANTHROPIC:
+            key_setting, key = "ANTHROPIC_API_KEY", self.ANTHROPIC_API_KEY
+        else:
+            key_setting, key = "OPENROUTER_API_KEY", self.OPENROUTER_API_KEY
+        if not key.get_secret_value():
+            raise ValueError(f"{key_setting} is required when {provider} is used")
+        if not model:
+            raise ValueError(f"{model_setting} is required when {provider} is used")
+        vendor_prefixed = "/" in model
+        if provider is LLMProviderName.OPENROUTER and not vendor_prefixed:
+            raise ValueError(
+                f"{model_setting}={model}: OpenRouter model ids are "
+                "<vendor>/<model>, e.g. google/gemini-3.8-flash"
+            )
+        if provider is LLMProviderName.ANTHROPIC and vendor_prefixed:
+            raise ValueError(
+                f"{model_setting}={model}: Anthropic model ids carry no vendor "
+                "prefix, e.g. claude-sonnet-5-5"
+            )
+
+
 class Config(BaseModel):
     app: AppConfig
     bot: BotConfig
@@ -368,6 +459,7 @@ class Config(BaseModel):
     cache: CacheConfig
     sentry: SentryConfig
     http: HttpConfig
+    llm: LLMConfig
 
     model_config = ConfigDict(extra="ignore")
 
@@ -425,4 +517,5 @@ def get_settings() -> Config:
         cache=CacheConfig(_env_file=env_file),
         sentry=SentryConfig(_env_file=env_file),
         http=HttpConfig(_env_file=env_file),
+        llm=LLMConfig(_env_file=env_file),
     )

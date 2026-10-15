@@ -93,7 +93,7 @@ from [@BotFather](https://t.me/BotFather).
 git clone https://github.com/darkweid/tg-bot-template.git my-bot && cd my-bot
 python3.13 -m venv .venv && source .venv/bin/activate
 pip install -r infra/requirements/dev.txt
-cp .env.example .env          # set BOT_TOKEN
+cp .env.example .env          # set BOT_TOKEN; LLM keys, or LLM_PROVIDER= to run without LLM
 make run-dev                  # compiles catalogs, migrates, starts with autoreload
 make logs s=bot
 ```

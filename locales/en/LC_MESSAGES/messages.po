@@ -150,7 +150,30 @@ msgstr ""
 msgid "The broadcast was not started."
 msgstr ""
 
+msgid "The language model could not answer. Please try again later."
+msgstr ""
+
+msgid "The language model declined this request."
+msgstr ""
+
+msgid ""
+"The language model gave an answer the bot could not read. Please try "
+"again."
+msgstr ""
+
+msgid "The language model is busy right now. Please try again in a minute."
+msgstr ""
+
+msgid "The language model is unavailable right now. Please try again later."
+msgstr ""
+
+msgid "The language model took too long to answer. Please try again."
+msgstr ""
+
 msgid "This broadcast has already finished."
+msgstr ""
+
+msgid "This feature is not available in this bot."
 msgstr ""
 
 msgid "This language is not available."
