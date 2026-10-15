@@ -124,9 +124,9 @@ Set three variables in `.env`:
 The bot refuses to start in webhook mode without an `https` base URL and a
 secret. Keep `WEB_SERVER_HOST` at `0.0.0.0`: nginx reaches the bot over the
 compose network, and a loopback address would refuse every update
-(`make check-env` refuses one). It sets the
-webhook on every start and keeps it on shutdown, so Telegram queues updates
-while the next container starts.
+(`make check-env` refuses one). The bot sets the webhook on every start and
+keeps it on shutdown, so Telegram queues updates while the next container
+starts.
 
 Run the prod-like stack with `make run`. A one-shot `migrate` service applies
 the migrations baked into the image before the bot starts, and the bot waits
@@ -134,7 +134,8 @@ for it; `make migrate` runs the same service by hand. With `BOT_IMAGE` set in
 `.env` to an image CI pushed (`ghcr.io/<owner>/<repo>:sha-<12>`), `make run`
 pulls and runs that image instead of building one from the checkout. No target
 builds the checkout under that name: `make build` then builds Postgres only,
-and `make up` starts the stack without building.
+and `make up` starts the stack without building, so it needs the Postgres image
+a `make build` or `make run` built before.
 
 Every service except the image builder has a CPU and memory cap taken from
 `.env` (`BOT_CPUS`, `BOT_MEMORY`, `WORKER_MEMORY`, ...; the commented block at
@@ -219,24 +220,26 @@ previous stack still running. Any failure ends with exit code 1 and a
 
 - In webhook mode the new bot starts beside the old one and nginx moves to it
   once it is healthy, so no update is refused. Every reload of the roll waits
-  for nginx's master process (up to 30 seconds after nginx started) and runs
+  for nginx's master process (up to 30 seconds from each reload) and runs
   `nginx -t` in the running container first: `nginx -s reload` alone exits 0
   even when nginx refuses the configuration. A new bot that never turns
   healthy, or that nginx cannot be moved onto, is removed and the old one keeps
   serving. In polling mode the bot is replaced in place: two pollers on one
   token conflict.
 - The worker and the scheduler are recreated with `up --wait`, capped at 180
-  seconds; 15 seconds later each must still be running with no restart
-  (`[deploy] worker is <state> 15s after it started` otherwise).
+  seconds; 15 seconds later each must have a container, still running with no
+  restart (`[deploy] worker is <state> 15s after it started` or
+  `[deploy] worker has no container 15s after it started` otherwise).
 - When the new bot never turns healthy, or the worker or the scheduler fails
   that check, the stack goes back to the image it ran before and the deploy
   fails. Migrations stay applied, so the previous code runs against the new
-  schema. The very first deploy has no previous image and fails. After a
-  rollback or a failed roll, `BOT_IMAGE` in `.env` (or the local tag the build
-  wrote) still names the failed image, and the deploy's last line says so:
-  before any plain
-  `make run` or `docker compose up -d`, deploy the previous release again or
-  pin `BOT_IMAGE` to its tag.
+  schema. The very first deploy has no previous image and fails. A rollback or
+  a failed roll changes neither the checkout nor `.env`: the checkout stays at
+  the new commit, and when the deploy took its image from `BOT_IMAGE` in
+  `.env` or built it under the local tag, that still names the failed image (a
+  CD deploy passes `BOT_IMAGE` in the shell, and a pull never retags). Before
+  any plain `make run`, pin `BOT_IMAGE` to the previous image or deploy it
+  again.
 - The bot is replaced before the worker, and the new bot serves while the old
   worker still runs: a task the old worker does not know is lost. Register a
   new task in one release and enqueue it from a later one.
