@@ -5,8 +5,8 @@
   register: app_checkout_stack_env
 
 # The services meant to stay up are the ones with a restart policy; bot-builder
-# and migrate are one-shots without one. Taken from the compose file, since a service whose
-# container never came back is missing from `ps` altogether.
+# and migrate are one-shots without one. Taken from the compose file, since a
+# service whose container never came back is missing from `ps` altogether.
 - name: Read the services that should be running
   ansible.builtin.command:
     cmd: docker compose --env-file .env -f infra/docker-compose.yml config --format json
