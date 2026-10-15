@@ -171,4 +171,4 @@ class RecordingLLMClient:
 
 def _transcript(request: LLMRequest) -> list[tuple[str, str]]:
     system = [("system", request.system)] if request.system else []
-    return system + [(message.role, message.content) for message in request.messages]
+    return system + [(message.role, message.text) for message in request.messages]

@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 from decimal import Decimal
 from functools import partial
 import time
@@ -28,11 +29,14 @@ from src.core.llm.errors import (
 from src.core.llm.reporting import report_llm_call
 from src.core.llm.structured import validated_with_repair
 from src.core.llm.types import (
+    AnswerBlock,
     LLMMessage,
     LLMRequest,
     LLMResponse,
+    LLMStop,
     LLMUsage,
     StructuredResponse,
+    TextBlock,
 )
 
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
@@ -200,10 +204,15 @@ def _messages(request: LLMRequest) -> list[ChatCompletionMessageParam]:
 
 def _message(message: LLMMessage) -> ChatCompletionMessageParam:
     if message.role == "user":
-        return ChatCompletionUserMessageParam(role="user", content=message.content)
-    return ChatCompletionAssistantMessageParam(
-        role="assistant", content=message.content
-    )
+        return ChatCompletionUserMessageParam(role="user", content=message.text)
+    return ChatCompletionAssistantMessageParam(role="assistant", content=message.text)
+
+
+_STOPS: Mapping[str, LLMStop] = {"tool_calls": "tool_use", "length": "max_tokens"}
+
+
+def _stop(reason: str | None) -> LLMStop:
+    return _STOPS.get(reason or "", "end")
 
 
 def _response(
@@ -223,7 +232,7 @@ def _response(
             provider=_PROVIDER,
             usage=_usage(completion),
         )
-    if structured and finish_reason == "length":
+    if structured and _stop(finish_reason) == "max_tokens":
         # Truncated JSON fails validation again on a repair attempt that has
         # even less room left, so it is not attempted. The answer was billed.
         raise LLMOutputError(
@@ -231,11 +240,14 @@ def _response(
             provider=_PROVIDER,
             usage=_usage(completion),
         )
+    text = choice.message.content or ""
+    content: list[AnswerBlock] = [TextBlock(text)] if text else []
     return LLMResponse(
-        text=choice.message.content or "",
+        content=content,
         usage=_usage(completion),
         model=completion.model,
         provider=_PROVIDER,
+        stop=_stop(finish_reason),
         stop_reason=finish_reason,
         latency_ms=latency_ms,
     )

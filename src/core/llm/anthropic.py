@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 import dataclasses
 from functools import partial
 import time
@@ -20,11 +21,30 @@ from src.core.llm.errors import (
 from src.core.llm.pricing import PricingTable
 from src.core.llm.reporting import report_llm_call
 from src.core.llm.structured import validated_with_repair
-from src.core.llm.types import LLMRequest, LLMResponse, LLMUsage, StructuredResponse
+from src.core.llm.types import (
+    AnswerBlock,
+    LLMRequest,
+    LLMResponse,
+    LLMStop,
+    LLMUsage,
+    StructuredResponse,
+    TextBlock,
+)
 
 ANTHROPIC_BASE_URL = "https://api.anthropic.com"
 
 _PROVIDER = LLMProviderName.ANTHROPIC
+
+_STOPS: Mapping[str, LLMStop] = {
+    "tool_use": "tool_use",
+    "max_tokens": "max_tokens",
+    "model_context_window_exceeded": "max_tokens",
+}
+
+
+def _stop(reason: str | None) -> LLMStop:
+    # end_turn, stop_sequence, pause_turn: the turn is over either way.
+    return _STOPS.get(reason or "", "end")
 
 
 class AnthropicLLMClient:
@@ -111,7 +131,7 @@ class AnthropicLLMClient:
                 max_tokens=request.max_tokens,
                 system=_system(request),
                 messages=[
-                    MessageParam(role=item.role, content=item.content)
+                    MessageParam(role=item.role, content=item.text)
                     for item in request.messages
                 ],
                 output_config=output_config,
@@ -175,21 +195,26 @@ class AnthropicLLMClient:
                 provider=_PROVIDER,
                 usage=usage,
             )
-        if structured and message.stop_reason == "max_tokens":
+        stop = _stop(message.stop_reason)
+        if structured and stop == "max_tokens":
             # Truncated JSON fails validation again on a repair attempt that
             # has even less room left, so it is not attempted. The answer was
             # billed.
             raise LLMOutputError(
                 "structured output cut at max_tokens", provider=_PROVIDER, usage=usage
             )
-        return LLMResponse(
+        content: list[AnswerBlock] = [
             # Thinking blocks are the model's reasoning, not the answer.
-            text="".join(
-                block.text for block in message.content if block.type == "text"
-            ),
+            TextBlock(block.text)
+            for block in message.content
+            if block.type == "text"
+        ]
+        return LLMResponse(
+            content=content,
             usage=usage,
             model=message.model,
             provider=_PROVIDER,
+            stop=stop,
             stop_reason=message.stop_reason,
             latency_ms=latency_ms,
         )

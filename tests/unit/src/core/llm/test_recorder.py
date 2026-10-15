@@ -12,7 +12,13 @@ from src.core.llm.errors import LLMOutputError, LLMRefused, LLMTimeout
 from src.core.llm.models import LLMUsageRecord
 from src.core.llm.recording import LLMUsageRecorder
 from src.core.llm.repository import LLMUsageRepository
-from src.core.llm.types import LLMMessage, LLMRequest, LLMResponse, LLMUsage
+from src.core.llm.types import (
+    LLMMessage,
+    LLMRequest,
+    LLMResponse,
+    LLMUsage,
+    TextBlock,
+)
 from src.core.update_context import UpdateContext, bind_update_context
 from tests.fakes.db import FakeSessionFactory
 from tests.helpers.logs import captured_logs
@@ -34,7 +40,7 @@ def _request() -> LLMRequest:
 
 def _response() -> LLMResponse:
     return LLMResponse(
-        text="secret answer",
+        content=(TextBlock("secret answer"),),
         usage=LLMUsage(
             input_tokens=120,
             output_tokens=40,
@@ -44,6 +50,7 @@ def _response() -> LLMResponse:
         ),
         model="claude-sonnet-5-5",
         provider=LLMProviderName.ANTHROPIC,
+        stop="end",
         stop_reason="end_turn",
         latency_ms=812,
     )
