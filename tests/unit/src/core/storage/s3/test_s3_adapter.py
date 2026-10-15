@@ -251,14 +251,8 @@ async def test_delete_object(
 
 
 def test_round_up_to_megabyte() -> None:
-    adapter = S3Adapter(
-        bucket="bucket",
-        region="us-east-1",
-        access_key="ak",
-        secret_key="sk",
-        default_presign_ttl=60,
-    )
-    assert adapter._round_up_to_megabyte(5 * 1024 * 1024 + 1) == 6 * 1024 * 1024
+    assert adapter_module.round_up_to_megabyte(5 * 1024 * 1024 + 1) == 6 * 1024 * 1024
+    assert adapter_module.round_up_to_megabyte(5 * 1024 * 1024) == 5 * 1024 * 1024
 
 
 async def test_list_objects_yields_metadata_page_by_page(
@@ -546,7 +540,7 @@ def small_part_adapter(
     monkeypatch.setattr(adapter_module.aioboto3, "Session", lambda: session)
     monkeypatch.setattr(adapter_module, "MIN_MULTIPART_PART_SIZE_BYTES", 5)
     monkeypatch.setattr(
-        S3Adapter, "_round_up_to_megabyte", lambda self, size_bytes: size_bytes
+        adapter_module, "round_up_to_megabyte", lambda size_bytes: size_bytes
     )
     client.create_multipart_upload.return_value = {"UploadId": "u1"}
     client.upload_part.side_effect = lambda **kwargs: {

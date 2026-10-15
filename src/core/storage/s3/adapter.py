@@ -20,15 +20,15 @@ from src.core.storage.s3.interface import (
 MIN_MULTIPART_PART_SIZE_BYTES = 5 * 1024 * 1024
 MAX_MULTIPART_PARTS = 10_000
 MAX_LIST_PAGE_SIZE = 1000
+_MEGABYTE = 1024 * 1024
+
+
+def round_up_to_megabyte(size_bytes: int) -> int:
+    return math.ceil(size_bytes / _MEGABYTE) * _MEGABYTE
 
 
 class S3Adapter(S3Client):
-    """
-    Async S3 adapter over aioboto3.
-
-    Usage:
-    async with S3Adapter(...) as s3:
-        await s3.upload_bytes("key", b"data")
+    """S3Client over aioboto3; the client opens on `__aenter__`.
 
     `upload_stream` takes a file of any size up to `max_upload_size_bytes`,
     a part at a time; `download_bytes` holds the whole object in memory. One
@@ -69,7 +69,7 @@ class S3Adapter(S3Client):
         self._max_upload_size_bytes = max_upload_size_bytes
         # The smallest part that still fits the largest allowed upload into
         # S3's 10 000 parts, so a stream within the limit never runs out of them.
-        self._min_part_size_bytes = self._round_up_to_megabyte(
+        self._min_part_size_bytes = round_up_to_megabyte(
             max(
                 MIN_MULTIPART_PART_SIZE_BYTES,
                 math.ceil(max_upload_size_bytes / MAX_MULTIPART_PARTS),
@@ -127,20 +127,17 @@ class S3Adapter(S3Client):
         retry_max_attempts: int,
         retry_mode: str,
     ) -> Config:
-        config_kwargs: dict[str, Any] = {}
-        config_kwargs["signature_version"] = signature_version
-        resolved_addressing_style = self._resolve_addressing_style(
-            addressing_style=addressing_style,
-            endpoint_url=endpoint_url,
+        return Config(
+            signature_version=signature_version,
+            s3={
+                "addressing_style": self._resolve_addressing_style(
+                    addressing_style=addressing_style, endpoint_url=endpoint_url
+                )
+            },
+            connect_timeout=connect_timeout_seconds,
+            read_timeout=read_timeout_seconds,
+            retries={"max_attempts": retry_max_attempts, "mode": retry_mode},
         )
-        config_kwargs["s3"] = {"addressing_style": resolved_addressing_style}
-        config_kwargs["connect_timeout"] = connect_timeout_seconds
-        config_kwargs["read_timeout"] = read_timeout_seconds
-        config_kwargs["retries"] = {
-            "max_attempts": retry_max_attempts,
-            "mode": retry_mode,
-        }
-        return Config(**config_kwargs)
 
     def _resolve_addressing_style(
         self,
@@ -337,10 +334,6 @@ class S3Adapter(S3Client):
         data: bytes = await body.read()
         return data
 
-    def _round_up_to_megabyte(self, size_bytes: int) -> int:
-        megabyte = 1024 * 1024
-        return math.ceil(size_bytes / megabyte) * megabyte
-
     async def delete_object(self, key: str, *, bucket: str | None = None) -> None:
         client = self._ensure_client()
         await client.delete_object(Bucket=self._get_bucket(bucket), Key=key)
@@ -362,7 +355,7 @@ class S3Adapter(S3Client):
         pagination_config: dict[str, int] = {}
         if max_keys is not None:
             pagination_config["MaxItems"] = max_keys
-            pagination_config["PageSize"] = min(max_keys, 1000)
+            pagination_config["PageSize"] = min(max_keys, MAX_LIST_PAGE_SIZE)
 
         paginator = client.get_paginator("list_objects_v2")
         paginate_kwargs = dict(kwargs)
