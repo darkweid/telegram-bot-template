@@ -27,7 +27,7 @@ body:
     id: mode
     attributes:
       label: Bot mode
-      options: [polling, webhook, both]
+      options: [polling, webhook, polling and webhook (reproduces in each)]
     validations:
       required: true
   - type: textarea
