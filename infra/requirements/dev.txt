@@ -243,7 +243,7 @@ redis==8.1.0
     #   taskiq-redis
 rich==15.0.0
     # via import-linter
-ruff==0.16.10
+ruff==0.17.0
     # via -r dev.in
 s3transfer==0.14.0
     # via boto3
