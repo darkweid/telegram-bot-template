@@ -89,14 +89,15 @@ layer; `src/core/llm` stays and has no caller until your own domain adds one.
     and the step that adds a language to `RESPONSE_LANGUAGES`, which lived in
     the note prompts) and `llm.md` (the worked example). Point each example at
     a module you keep, or cut it.
-14. `git grep -n -i note -- README.md docs` and rewrite or cut every hit that
-    describes the module. The documentation check catches a stale path, not a
-    stale sentence.
+14. Delete the note section of this document, then run
+    `git grep -n -i -w -E 'notes?' -- README.md docs` and rewrite or cut every
+    hit that describes the module. The documentation check catches a stale
+    path, not a stale sentence.
 
 Some matches of "note" stay and are correct: the test models `Note` in
 `tests/unit/src/core/database/`, the `note_summary` purpose strings in the LLM
-and `/stats` tests (fixture data, not an import), and `add_note` on exceptions in the S3
-adapter.
+and `/stats` tests (fixture data, not an import), and `add_note` on exceptions
+in the S3 adapter.
 
 Then run `make lint`, `make test` and `make test-integration`.
 
@@ -169,7 +170,8 @@ migrations before it replaces the worker.
       broadcasts under reachability and roles;
     - `architecture.md` lists the package and uses `StartBroadcastUseCase` as
       the advisory-lock example.
-14. `git grep -n -i broadcast -- README.md docs` and rewrite or cut every hit
+14. Delete the broadcast section of this document, then run
+    `git grep -n -i broadcast -- README.md docs` and rewrite or cut every hit
     that describes the module. The documentation check catches a stale path,
     not a stale sentence.
 
