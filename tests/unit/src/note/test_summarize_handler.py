@@ -1,9 +1,10 @@
+import asyncio
 from collections.abc import Sequence
 import traceback
-from typing import cast
+from typing import Any, cast
 from unittest.mock import AsyncMock
 
-from aiogram.methods import SendChatAction, SendMessage
+from aiogram.methods import EditMessageText, SendMessage, TelegramMethod
 from aiogram.utils.i18n import I18n
 from dishka import Provider, Scope, provide
 import pytest
@@ -32,8 +33,9 @@ from tests.helpers.logs import captured_logs
 from tests.helpers.user import UseCases
 
 USER_ID = 42
-# Answered by the error handler with the error's own text; LLMOutputError is
-# turned into NoteSummaryFailedError by the use case.
+STATUS = "⏳ Summarizing your notes…"
+# Shown in the status with the error's own text; LLMOutputError is turned
+# into NoteSummaryFailedError by the use case.
 LLM_ERRORS_SHOWN_AS_IS: tuple[type[LLMError], ...] = (
     LLMNotConfigured,
     LLMRateLimited,
@@ -85,7 +87,10 @@ async def _summarize(
     count: int = 1,
     locale: str | None = None,
     language_code: str = "en",
+    method: type[TelegramMethod[Any]] = EditMessageText,
 ) -> tuple[list[str], FakeLLMClient]:
+    """The texts of every `method` call once the work has settled: by
+    default the edits, the last of which is the answer."""
     async with running_bot(settings, i18n, UseCases(locale), stub) as running:
         llm = await _fake_llm(running, answers)
         for _ in range(count):
@@ -94,7 +99,11 @@ async def _summarize(
                     "/summarize", user_id=USER_ID, language_code=language_code
                 )
             )
-        replies = [reply.text or "" for reply in running.session.sent(SendMessage)]
+        await running.settle()
+        replies = [
+            getattr(request, "text", None) or ""
+            for request in running.session.sent(method)
+        ]
     return replies, llm
 
 
@@ -134,15 +143,25 @@ async def test_the_stored_language_choice_picks_the_summary_language(
     assert reply == "Сводка по 1 последней заметке:\n\nМолоко."
 
 
-async def test_the_typing_indicator_comes_before_the_summary(
+async def test_the_update_ends_before_the_model_answers(
     settings: Config, i18n: I18n
 ) -> None:
-    """The model takes seconds; without it the command looks ignored."""
+    """The model takes seconds: holding the update that long would keep the
+    user's other updates waiting behind its lock. The status shows the
+    command was taken."""
     async with running_bot(settings, i18n, UseCases(), NoteStub("buy milk")) as running:
-        await _fake_llm(running, [NoteSummary(summary="Milk.", themes=[])])
-        await running.feed(build_message_update("/summarize", user_id=USER_ID))
-        kinds = [type(request) for request in running.session.requests]
-    assert kinds.index(SendChatAction) < kinds.index(SendMessage)
+        llm = await _fake_llm(running, [NoteSummary(summary="Milk.", themes=[])])
+        hold = llm.hold()
+        # Bounded: a handler that waits for the model would hang here.
+        async with asyncio.timeout(2):
+            await running.feed(build_message_update("/summarize", user_id=USER_ID))
+            await hold.reached.wait()
+        assert [m.text for m in running.session.sent(SendMessage)] == [STATUS]
+        assert running.session.sent(EditMessageText) == []
+        hold.released.set()
+        await running.settle()
+        [edit] = running.session.sent(EditMessageText)
+    assert edit.text == "Summary of 1 recent note:\n\nMilk."
 
 
 async def test_without_notes_the_user_is_told_and_nothing_is_paid(
@@ -194,14 +213,19 @@ async def test_note_text_stays_out_of_the_logs(settings: Config, i18n: I18n) -> 
     a detail shaped like the adapters' (locations and types only), which the
     use case forwards."""
     secret = "my card PIN is 4931"
-    with captured_logs("src.core.telegram.errors") as records:
+    with (
+        captured_logs("src.core.telegram.background") as background,
+        captured_logs("src.core.telegram.status") as status,
+        captured_logs("src.core.telegram.errors") as errors,
+    ):
         _, llm = await _summarize(
             settings,
             i18n,
             NoteStub(secret),
             LLMOutputError("summary: value_error"),
         )
-    assert records
+    records = [*background, *status, *errors]
+    assert background
     assert llm.calls and secret in llm.calls[0].messages[0].content
     for record in records:
         logged = record.getMessage()
@@ -228,6 +252,8 @@ async def test_summarize_is_limited_by_the_llm_profile(
         NoteStub("buy milk"),
         NoteSummary(summary="Milk.", themes=[]),
         count=2,
+        method=SendMessage,
     )
     assert len(llm.calls) == 1
+    assert replies[0] == STATUS
     assert replies[1].startswith("Too many requests")

@@ -234,6 +234,9 @@ msgstr "Останавливаю рассылку."
 msgid "Summarize your recent notes"
 msgstr "Сводка последних заметок"
 
+msgid "Summarizing your notes…"
+msgstr "Составляю сводку заметок…"
+
 #, python-brace-format
 msgid "Summary of {count} recent note:"
 msgid_plural "Summary of {count} recent notes:"

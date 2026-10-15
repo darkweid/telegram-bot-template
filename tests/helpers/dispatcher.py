@@ -1,3 +1,4 @@
+import asyncio
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -7,6 +8,7 @@ from aiogram.types import Update
 from aiogram.utils.i18n import I18n
 from dishka import AsyncContainer, Provider
 
+from src.core.telegram.background import BackgroundRunner
 from src.main.config import Config
 from src.main.dispatcher import create_dispatcher
 from tests.fakes.telegram import FakeTelegramSession
@@ -22,6 +24,15 @@ class RunningBot:
 
     async def feed(self, update: Update) -> None:
         await self.dp.feed_update(self.bot, update)
+
+    async def settle(self) -> None:
+        """Wait for the background work the updates started, and the work it
+        started in turn; fails after 2 seconds, so work that never ends
+        cannot hang the suite."""
+        runner = await self.container.get(BackgroundRunner)
+        async with asyncio.timeout(2):
+            while runner.tasks:
+                await asyncio.gather(*runner.tasks, return_exceptions=True)
 
 
 @asynccontextmanager

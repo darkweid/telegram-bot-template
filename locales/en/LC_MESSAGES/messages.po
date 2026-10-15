@@ -218,6 +218,9 @@ msgstr ""
 msgid "Summarize your recent notes"
 msgstr ""
 
+msgid "Summarizing your notes…"
+msgstr ""
+
 #, python-brace-format
 msgid "Summary of {count} recent note:"
 msgid_plural "Summary of {count} recent notes:"
