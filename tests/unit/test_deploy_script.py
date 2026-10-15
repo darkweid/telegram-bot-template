@@ -397,6 +397,27 @@ NEW_BOT = "tg-bot-template-bot-2"
 OLD_BOT = "tg-bot-template-bot-1"
 
 
+def test_a_first_webhook_deploy_starts_nginx_and_routes_to_the_new_bot(
+    tmp_path: Path,
+) -> None:
+    """With nothing running yet there is nothing to pin or stop: nginx starts
+    with the configuration it renders on its way up, and goes to the service
+    name once the bot is healthy."""
+    deploy = _deploy(tmp_path, WEBHOOK_ENV, state={"containers": [], "nginx": None})
+    assert deploy.returncode == 0, deploy.output
+    assert deploy.events == [
+        "start nginx",
+        f"start {OLD_BOT} {LOCAL_IMAGE}",
+        f"write {OLD_BOT}",
+        f"reload {OLD_BOT}",
+        "write bot",
+        "reload bot",
+        f"start tg-bot-template-worker-1 {LOCAL_IMAGE}",
+        f"start tg-bot-template-scheduler-1 {LOCAL_IMAGE}",
+    ]
+    assert deploy.running("bot") == [OLD_BOT]
+
+
 def test_a_running_nginx_renders_the_new_configuration_before_the_roll(
     tmp_path: Path,
 ) -> None:
@@ -420,6 +441,67 @@ def test_a_running_nginx_renders_the_new_configuration_before_the_roll(
     assert f"{LOCAL_IMAGE} | {COMPOSE} exec -T -e NGINX_REQUIRE_TLS=1 nginx sh " in (
         "\n".join(deploy.calls)
     )
+
+
+def test_a_webhook_roll_moves_nginx_before_the_old_bot_stops(tmp_path: Path) -> None:
+    """Every update reaches exactly one bot: nginx is pinned to the old
+    container while the new one starts, moved onto the new one once it is
+    healthy, and only then is the old one stopped."""
+    deploy = _deploy(
+        tmp_path,
+        WEBHOOK_ENV,
+        state=_serving_webhook_stack(_container("bot", 1), pinned=["bot"]),
+    )
+    assert deploy.returncode == 0, deploy.output
+    events = deploy.events
+    pinned_old = _position(events, f"reload {OLD_BOT}")
+    started = _position(events, f"start {NEW_BOT} {LOCAL_IMAGE}")
+    pinned_new = _position(events, f"reload {NEW_BOT}")
+    stopped = _position(events, f"stop {OLD_BOT}")
+    assert pinned_old < started < pinned_new < stopped
+    assert events[stopped:][:3] == [f"stop {OLD_BOT}", f"remove {OLD_BOT}", "write bot"]
+    assert deploy.running("bot") == [NEW_BOT]
+    assert deploy.state["nginx"]["applied"] == ["bot"]
+
+
+def test_a_new_bot_that_never_turns_healthy_is_removed(tmp_path: Path) -> None:
+    """A new container that fails its healthcheck has served nothing; it goes,
+    nginx goes back to the old one, and the worker is never touched."""
+    state = _serving_webhook_stack(_container("bot", 1), pinned=["bot"])
+    state["bot_health"] = {LOCAL_IMAGE: ["starting", "unhealthy"]}
+    deploy = _deploy(tmp_path, WEBHOOK_ENV, state=state)
+    assert deploy.returncode == 1
+    assert "rolling the bot failed; the previous one keeps serving" in deploy.output
+    assert "a later 'make run' or 'docker compose up -d' would start it" in (
+        deploy.output
+    )
+    events = deploy.events
+    assert _position(events, f"remove {NEW_BOT}") < len(events) - 1
+    assert f"stop {OLD_BOT}" not in events
+    assert deploy.running("bot") == [OLD_BOT]
+    assert deploy.state["nginx"]["applied"] == ["bot"]
+    assert not any("worker scheduler" in call for call in deploy.calls)
+
+
+def test_containers_left_by_an_interrupted_roll_are_stopped_first(
+    tmp_path: Path,
+) -> None:
+    """After an interrupted cutover nginx is pinned to the container the roll
+    moved it onto; the one it left must not come back into the rotation, and
+    is stopped only once nginx is pinned away from it."""
+    state = _serving_webhook_stack(
+        _container("bot", 1), _container("bot", 2, LOCAL_IMAGE), pinned=[NEW_BOT]
+    )
+    deploy = _deploy(tmp_path, WEBHOOK_ENV, state=state)
+    assert deploy.returncode == 0, deploy.output
+    assert f"stopping {OLD_BOT}, left behind by an interrupted deploy" in deploy.output
+    events = deploy.events
+    assert (
+        _position(events, f"reload {NEW_BOT}")
+        < _position(events, f"stop {OLD_BOT}")
+        < _position(events, f"start tg-bot-template-bot-3 {LOCAL_IMAGE}")
+    )
+    assert deploy.running("bot") == ["tg-bot-template-bot-3"]
 
 
 def test_a_failing_worker_rolls_the_webhook_bot_back(tmp_path: Path) -> None:
