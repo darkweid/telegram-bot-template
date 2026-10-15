@@ -65,8 +65,7 @@ def make_client(server: ScriptedLLMServer) -> OpenRouterLLMClient:
 async def test_tools_go_out_strict_without_parallel_tool_calls(
     server: ScriptedLLMServer,
 ) -> None:
-    """OpenRouter does not know parallel_tool_calls for Anthropic models, and
-    require_parameters would then find no route at all."""
+    """OpenRouter does not know parallel_tool_calls for Anthropic models."""
     server.reply(openrouter_completion())
 
     await make_client(server).complete(request())
@@ -312,3 +311,74 @@ async def test_a_tool_call_cut_at_max_tokens_is_an_output_error(
         await make_client(server).complete(request())
 
     assert caught.value.usage is not None
+
+
+async def test_a_tool_call_that_is_not_a_function_call_is_unavailable(
+    server: ScriptedLLMServer,
+) -> None:
+    server.reply(
+        openrouter_completion(
+            None,
+            tool_calls=[
+                {
+                    "id": "call_1",
+                    "type": "custom",
+                    "custom": {"name": "lookup", "input": "rice"},
+                }
+            ],
+            finish_reason="tool_calls",
+        )
+    )
+
+    with pytest.raises(LLMUnavailable):
+        await make_client(server).complete(request())
+
+
+async def test_effort_on_a_plain_call_sends_no_provider_key(
+    server: ScriptedLLMServer,
+) -> None:
+    server.reply(openrouter_completion())
+
+    await make_client(server).complete(request(tools=(), effort="high"))
+
+    body = server.bodies()[0]
+    assert body["reasoning"] == {"effort": "high"}
+    assert "provider" not in body
+
+
+async def test_a_successful_tool_result_has_no_error_prefix(
+    server: ScriptedLLMServer,
+) -> None:
+    server.reply(openrouter_completion())
+
+    await make_client(server).complete(
+        request(
+            messages=[
+                ASK,
+                LLMMessage(
+                    role="user",
+                    content=[
+                        ToolResultBlock(tool_use_id="call_1", content="rice, 130 kcal")
+                    ],
+                ),
+            ]
+        )
+    )
+
+    assert server.bodies()[0]["messages"][1] == {
+        "role": "tool",
+        "tool_call_id": "call_1",
+        "content": "rice, 130 kcal",
+    }
+
+
+async def test_tool_choice_none_is_sent_with_the_tools(
+    server: ScriptedLLMServer,
+) -> None:
+    server.reply(openrouter_completion())
+
+    await make_client(server).complete(request(tool_choice="none"))
+
+    body = server.bodies()[0]
+    assert body["tool_choice"] == "none"
+    assert body["tools"]
