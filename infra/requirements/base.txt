@@ -75,6 +75,7 @@ httpcore2==2.13.1
     # via httpx2
 httpx2==2.13.1
     # via
+    #   -r base.in
     #   anthropic
     #   openai
 idna==3.20
