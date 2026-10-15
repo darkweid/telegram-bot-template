@@ -18,6 +18,7 @@ every password, and the output lands in CI logs.
 import argparse
 from dataclasses import dataclass, field
 import ipaddress
+import math
 from pathlib import Path
 import re
 import sys
@@ -145,6 +146,7 @@ KNOWN_KEYS = frozenset(
         "COMPOSE_PROFILES",
         "TELEGRAM_ALLOWED_SUBNETS",
         "BOT_IMAGE",
+        "BOT_STOP_GRACE_PERIOD",
         "POSTGRES_HOST_PORT",
         "REDIS_HOST_PORT",
         *(
@@ -196,6 +198,15 @@ CPUS_PATTERN = re.compile(r"[0-9]+(\.[0-9]+)?")
 # compose's byte units: 512M, 1g, 1.5GB, 1048576.
 MEMORY_PATTERN = re.compile(r"[0-9]+(\.[0-9]+)?([bkmgBKMG][bB]?)?")
 HOST_PORT_KEYS = ("POSTGRES_HOST_PORT", "REDIS_HOST_PORT")
+GRACE_PERIOD_PATTERN = re.compile(r"[0-9]+s")
+# The defaults of infra/docker-compose.yml and of BotConfig, which the
+# deployment uses when the keys are absent; a test pins both.
+DEFAULT_STOP_GRACE_PERIOD = "30s"
+DEFAULT_SHUTDOWN_TIMEOUT_SECONDS = 20.0
+# What a stopping bot needs past its own timeout: up to 2 s to record a
+# cancelled model call, up to 2 s to edit a status to "interrupted", and a
+# second to exit.
+STOP_GRACE_MARGIN_SECONDS = 5
 _LINE = re.compile(r"(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)")
 
 
@@ -345,6 +356,37 @@ def _check_limits(env: dict[str, str], report: Report) -> None:
                 report.errors.append(f"{key} must be a size such as 512M or 1G")
 
 
+def _check_stop_grace(env: dict[str, str], report: Report) -> None:
+    # Empty is compose's default, like an empty limit; an empty timeout is
+    # refused, as BotConfig refuses it.
+    grace = env.get("BOT_STOP_GRACE_PERIOD", "") or DEFAULT_STOP_GRACE_PERIOD
+    grace_seconds: int | None = None
+    if GRACE_PERIOD_PATTERN.fullmatch(grace):
+        grace_seconds = int(grace.removesuffix("s"))
+    else:
+        report.errors.append("BOT_STOP_GRACE_PERIOD must be whole seconds such as 30s")
+    raw_timeout = env.get("SHUTDOWN_TIMEOUT_SECONDS")
+    timeout: float | None = DEFAULT_SHUTDOWN_TIMEOUT_SECONDS
+    if raw_timeout is not None:
+        try:
+            timeout = float(raw_timeout)
+        except ValueError:
+            timeout = None
+        if timeout is None or not (math.isfinite(timeout) and timeout > 0):
+            timeout = None
+            report.errors.append(
+                "SHUTDOWN_TIMEOUT_SECONDS must be a positive number of seconds"
+            )
+    if grace_seconds is None or timeout is None:
+        return
+    if grace_seconds < timeout + STOP_GRACE_MARGIN_SECONDS:
+        report.errors.append(
+            "BOT_STOP_GRACE_PERIOD must be at least SHUTDOWN_TIMEOUT_SECONDS + "
+            f"{STOP_GRACE_MARGIN_SECONDS}s: past it Docker kills the bot while it "
+            "is still finishing updates and background work"
+        )
+
+
 def check(env: dict[str, str]) -> Report:
     report = Report()
 
@@ -409,6 +451,7 @@ def check(env: dict[str, str]) -> Report:
             report.errors.append(f"{key} must be a port number")
 
     _check_limits(env, report)
+    _check_stop_grace(env, report)
 
     for key, value in env.items():
         if PLACEHOLDER_MARK in value and not _feature_is_off(env, key):

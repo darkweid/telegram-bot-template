@@ -1,14 +1,18 @@
+from functools import partial
+
 from aiogram import Bot, F, Router, html
-from aiogram.enums import ChatAction, ChatType
+from aiogram.enums import ChatType
 from aiogram.filters import Command, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 from aiogram.utils.callback_answer import CallbackAnswer
 from aiogram.utils.i18n import I18n, gettext as _, ngettext
-from dishka import FromDishka
+from dishka import AsyncContainer, FromDishka
 
+from src.core.telegram.background import BackgroundRunner
 from src.core.telegram.messages import safe_edit_text
 from src.core.telegram.middlewares.throttling import Throttle
+from src.core.telegram.status import ProcessingStatus
 from src.note.callbacks import NoteCancelCallback, NoteDeleteCallback, NotesPageCallback
 from src.note.enums import DeleteAction
 from src.note.exceptions import NoteNotFoundError
@@ -136,15 +140,38 @@ async def summarize(
     bot: Bot,
     i18n: I18n,
     user: UserProfile,
-    summarize_notes: FromDishka[SummarizeNotesUseCase],
+    background: FromDishka[BackgroundRunner],
 ) -> None:
-    await bot.send_chat_action(message.chat.id, ChatAction.TYPING)
-    result = await summarize_notes.execute(user.id, i18n.current_locale)
-    if result is None:
-        # The msgid of the empty /notes list: one text, one translation.
-        await message.answer(_("You have no notes yet. Send /note to write one."))
-        return
-    await message.answer(_summary_text(result))
+    # The model takes seconds: the handler lets go of the update at once and
+    # the work edits the status into the answer.
+    status = await ProcessingStatus.send(
+        bot, message.chat.id, i18n=i18n, text=_("Summarizing your notes…")
+    )
+    background.start(
+        "note.summarize",
+        partial(
+            summarize_in_background,
+            status=status,
+            user_id=user.id,
+            locale=i18n.current_locale,
+        ),
+    )
+
+
+async def summarize_in_background(
+    container: AsyncContainer, *, status: ProcessingStatus, user_id: int, locale: str
+) -> None:
+    """The model is called inside the scope but after the use case's unit of
+    work: no pooled connection waits on it."""
+    async with status:
+        async with container() as scope:
+            summarize_notes = await scope.get(SummarizeNotesUseCase)
+            result = await summarize_notes.execute(user_id, locale)
+        if result is None:
+            # The msgid of the empty /notes list: one text, one translation.
+            await status.finish(_("You have no notes yet. Send /note to write one."))
+            return
+        await status.finish(_summary_text(result))
 
 
 def _summary_text(result: NoteSummaryResult) -> str:

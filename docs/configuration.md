@@ -47,7 +47,7 @@ without it; "empty" means the key may stay blank.
 | `USER_TOUCH_INTERVAL_SECONDS` | `300` | A user row is rewritten when the profile changes or `last_seen_at` is older than this. Too low writes on almost every update. |
 | `USER_CACHE_TTL_SECONDS` | `300` | How long a cached user snapshot answers updates without the database; a row edited by hand shows after at most this long. Must not exceed `CACHE_VERSION_TTL`. |
 | `TELEGRAM_RETRY_ATTEMPTS` | `3` | Flood-wait retries per Bot API call, 0 to 10; all calls of one update share 30 seconds of sleep. |
-| `SHUTDOWN_TIMEOUT_SECONDS` | `20` | How long a stopping bot finishes updates in progress. Keep it below compose's `stop_grace_period` (30s), or Docker kills the bot mid-update. |
+| `SHUTDOWN_TIMEOUT_SECONDS` | `20` | How long a stopping bot finishes updates in progress and then its background work, in one budget. Keep it at least 5 seconds below `BOT_STOP_GRACE_PERIOD`, or Docker kills the bot mid-update; `make check-env` refuses less. |
 | `ADMIN_IDS` | empty | Comma-separated Telegram user ids with `/stats`, `/ban`, `/unban`, `/broadcast` and the new-user notice. A group id is refused; a wrong id grants the role to nobody or to a stranger. |
 | `DEVELOPER_IDS` | empty | Comma-separated user ids with `/status`, `/test_alert` and the developer alerts. |
 | `DEV_ALERT_CHAT_ID` | empty | A chat that gets every developer alert; empty sends each alert to every developer in private. `0` is refused. The bot must be a member of the chat, or alerts are only logged. |
@@ -218,6 +218,7 @@ falls back to the default written in `infra/docker-compose.yml`.
 |---|---|---|
 | `COMPOSE_PROFILES` | empty | `webhook` adds nginx and certbot. Set it exactly when `BOT_MODE=webhook`; `make check-env` and the deploy refuse a mismatch. |
 | `TELEGRAM_ALLOWED_SUBNETS` | `149.154.160.0/20,91.108.4.0/22` | Networks nginx accepts webhook requests from; any other address is dropped without an answer. A missing subnet loses the updates Telegram sends from it. |
+| `BOT_STOP_GRACE_PERIOD` | `30s` | How long Docker waits for a stopping bot before it kills it (the bot's `stop_grace_period`), in whole seconds such as `30s`. Must be at least `SHUTDOWN_TIMEOUT_SECONDS` plus 5 seconds: the margin covers recording a cancelled model call and editing a status to "interrupted". A polling deploy takes no updates while the old bot stops. |
 | `BOT_IMAGE` | `telegram-bot-template-bot:latest` | Image of `migrate`, `bot`, `worker` and `scheduler`. Empty means the local tag built from the checkout; an image CI pushed (`ghcr.io/<owner>/<repo>:sha-<12>`) is pulled instead, and the bot image is not built. |
 | `POSTGRES_HOST_PORT` | `5432` | Host side of PostgreSQL's `127.0.0.1` bind. Change it only when the host port is taken; `POSTGRES_PORT` stays 5432. |
 | `REDIS_HOST_PORT` | `6379` | Host side of Redis's `127.0.0.1` bind. |

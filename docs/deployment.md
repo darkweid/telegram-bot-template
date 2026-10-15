@@ -142,10 +142,14 @@ registry. The steps:
    more bot container starts beside it, it gets up to 120 seconds to turn
    healthy, nginx moves onto it, the nginx workers retired by the reload get
    up to 60 seconds to finish their requests, the old container stops, and
-   nginx goes back to the service name. No update is refused.
+   nginx goes back to the service name. No update is refused. The old bot
+   finishes its background work while the new one already takes the
+   traffic.
 8. Polling mode: nginx and certbot are removed if they were running, and the
    bot is replaced in place (`--force-recreate --wait`, up to 120 seconds).
-   Two pollers on one token conflict, so it never runs two.
+   Two pollers on one token conflict, so it never runs two. Stopping the old
+   bot takes up to `BOT_STOP_GRACE_PERIOD` while it finishes its updates and
+   background work, and no update is taken meanwhile.
 9. The worker and the scheduler are recreated with `up --wait`, up to 180
    seconds. 15 seconds later each must still be running with no restart.
 10. On Linux, images created more than a week ago that no container uses and

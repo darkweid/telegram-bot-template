@@ -4,15 +4,14 @@ The field descriptions of NoteSummary reach the model as part of the output
 schema, so they are prompt text too: change them together with the prompt.
 """
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 import re
 
 from pydantic import BaseModel, Field, field_validator
 
-NOTE_SUMMARY_PURPOSE = "note_summary"
+from src.core.locales import RESPONSE_LANGUAGES
 
-# The English name of every supported locale, as the prompt states it.
-RESPONSE_LANGUAGES: Mapping[str, str] = {"en": "English", "ru": "Russian"}
+NOTE_SUMMARY_PURPOSE = "note_summary"
 
 # Together with the header these fit one 4096-character Telegram message.
 SUMMARY_MAX_CHARS = 1500

@@ -1,8 +1,10 @@
 """An LLMClient that answers from a queue, as FakeTelegramSession does for the
 Bot API."""
 
+import asyncio
 from collections import deque
 from collections.abc import Sequence
+from dataclasses import dataclass, field
 from decimal import Decimal
 import hashlib
 import json
@@ -64,6 +66,12 @@ def tool_call(
 type _Queued = LLMResponse | StructuredResponse[BaseModel] | BaseException
 
 
+@dataclass(frozen=True, slots=True)
+class Hold:
+    reached: asyncio.Event = field(default_factory=asyncio.Event)
+    released: asyncio.Event = field(default_factory=asyncio.Event)
+
+
 class FakeLLMClient:
     """Each call takes the next queued item: a response, a structured output,
     or an exception to raise. `complete` with nothing queued answers
@@ -73,6 +81,15 @@ class FakeLLMClient:
     def __init__(self) -> None:
         self.calls: list[LLMRequest] = []
         self._queued: deque[_Queued] = deque()
+        self._holds: deque[Hold] = deque()
+
+    def hold(self) -> Hold:
+        """The next call is recorded, sets `reached` and waits for
+        `released`: a test can look at the bot while the model is
+        thinking."""
+        hold = Hold()
+        self._holds.append(hold)
+        return hold
 
     def queue(self, result: LLMResponse | BaseException) -> None:
         self._queued.append(result)
@@ -98,6 +115,7 @@ class FakeLLMClient:
 
     async def complete(self, request: LLMRequest) -> LLMResponse:
         self.calls.append(request)
+        await self._wait_if_held()
         if not self._queued:
             return llm_response()
         item = self._queued.popleft()
@@ -112,6 +130,7 @@ class FakeLLMClient:
     ) -> StructuredResponse[T]:
         refuse_tools(request)
         self.calls.append(request)
+        await self._wait_if_held()
         if not self._queued:
             raise AssertionError(f"structured({output.__name__}) with nothing queued")
         item = self._queued.popleft()
@@ -122,3 +141,9 @@ class FakeLLMClient:
         ):
             raise AssertionError(f"structured({output.__name__}) found {item!r}")
         return StructuredResponse(output=item.output, response=item.response)
+
+    async def _wait_if_held(self) -> None:
+        if self._holds:
+            hold = self._holds.popleft()
+            hold.reached.set()
+            await hold.released.wait()

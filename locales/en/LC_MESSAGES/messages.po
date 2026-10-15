@@ -105,6 +105,9 @@ msgid ""
 "Send /help to see what I can do."
 msgstr ""
 
+msgid "Interrupted. Please try again."
+msgstr ""
+
 msgid "Keep"
 msgstr ""
 
@@ -215,6 +218,9 @@ msgstr ""
 msgid "Summarize your recent notes"
 msgstr ""
 
+msgid "Summarizing your notes…"
+msgstr ""
+
 #, python-brace-format
 msgid "Summary of {count} recent note:"
 msgid_plural "Summary of {count} recent notes:"
@@ -301,6 +307,9 @@ msgstr ""
 
 #, python-brace-format
 msgid "Without a known price in the last 30 days: {count}"
+msgstr ""
+
+msgid "Working on it…"
 msgstr ""
 
 msgid "Write a note"

@@ -1,7 +1,5 @@
 """What the bot does when a handler raises."""
 
-import logging
-
 from aiogram import Bot, Router
 from aiogram.dispatcher.middlewares.user_context import UserContextMiddleware
 from aiogram.exceptions import TelegramAPIError, TelegramForbiddenError
@@ -12,6 +10,7 @@ import sentry_sdk
 
 from loggers import get_logger
 from src.core.errors.exceptions import CoreException, format_html
+from src.core.errors.reporting import report_core_exception
 from src.core.errors.scrubbed import reportable
 from src.core.i18n import resolve_locale
 from src.core.telegram.alerts import Alert, DeveloperAlerter
@@ -19,14 +18,6 @@ from src.core.telegram.context import sentry_scope_for, update_context_from
 from src.core.update_context import bind_update_context
 
 logger = get_logger(__name__)
-
-_LEVELS = {
-    "debug": logging.DEBUG,
-    "info": logging.INFO,
-    "warning": logging.WARNING,
-    "error": logging.ERROR,
-    "critical": logging.CRITICAL,
-}
 
 
 async def handle_error(
@@ -54,23 +45,11 @@ async def handle_error(
             return True
 
         if isinstance(error, CoreException):
-            level = _LEVELS[error.log_level]
-            safe = reportable(error)
-            logger.log(
-                level,
-                "%s: %s",
-                type(error).__name__,
-                error.detail or "-",
-                exc_info=safe if level >= logging.ERROR else None,
-            )
-            if error.capture_to_sentry:
-                sentry_sdk.capture_exception(safe)
-            message_key, params = error.message_key, error.params
+            report_core_exception(logger, error)
         else:
             safe = reportable(error)
             logger.error("Unhandled %s", type(error).__name__, exc_info=safe)
             event_id = sentry_sdk.capture_exception(safe)
-            message_key, params = CoreException.message_key, {}
             alert = Alert(
                 safe,
                 origin=f"update {context.update_type}",
@@ -83,21 +62,10 @@ async def handle_error(
             locale = resolve_locale(
                 sender.language_code if sender else None, default=i18n.default_locale
             )
-            template = i18n.gettext(message_key, locale=locale)
             try:
-                text = format_html(template, params)
-            except (KeyError, IndexError, AttributeError, ValueError, TypeError):
-                # A param is missing, lacks an attribute the placeholder reads
-                # or does not fit its format spec: the generic text still
-                # reaches the user. Params can hold what they typed, so only
-                # the key is logged, not the error.
-                logger.warning(
-                    "Cannot format %r with its params; replying generically",
-                    message_key,
+                await bot.send_message(
+                    context.chat_id, error_reply_text(i18n, locale, error)
                 )
-                text = i18n.gettext(CoreException.message_key, locale=locale)
-            try:
-                await bot.send_message(context.chat_id, text)
             except TelegramAPIError as reply_error:
                 logger.warning(
                     "Could not tell the user about the error: %s", reply_error.message
@@ -106,6 +74,31 @@ async def handle_error(
             # After the reply: the user is not kept waiting on the alert chat.
             await alerter.alert_error(alert)
     return True
+
+
+def error_reply_text(i18n: I18n, locale: str, error: BaseException) -> str:
+    """What the user is told about `error` in `locale`: a CoreException's own
+    text with its params escaped for HTML, the generic text for anything else.
+
+    Shared by the update's error handler and ProcessingStatus, so a failure
+    reads the same whether it happened in an update or in background work.
+    """
+    if isinstance(error, CoreException):
+        message_key, params = error.message_key, error.params
+    else:
+        message_key, params = CoreException.message_key, {}
+    template = i18n.gettext(message_key, locale=locale)
+    try:
+        return format_html(template, params)
+    except (KeyError, IndexError, AttributeError, ValueError, TypeError):
+        # A param is missing, lacks an attribute the placeholder reads or
+        # does not fit its format spec: the generic text still reaches the
+        # user. Params can hold what they typed, so only the key is logged,
+        # not the error.
+        logger.warning(
+            "Cannot format %r with its params; replying generically", message_key
+        )
+        return i18n.gettext(CoreException.message_key, locale=locale)
 
 
 def build_errors_router() -> Router:

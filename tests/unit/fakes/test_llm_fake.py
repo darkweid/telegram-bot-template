@@ -1,8 +1,10 @@
+import asyncio
+
 from pydantic import BaseModel
 import pytest
 
 from src.core.llm.types import LLMMessage, LLMRequest, LLMTool
-from tests.fakes.llm import FakeLLMClient, tool_call
+from tests.fakes.llm import FakeLLMClient, llm_response, tool_call
 
 
 class Lookup(BaseModel):
@@ -45,3 +47,23 @@ def test_a_default_call_id_depends_only_on_the_call() -> None:
 
 def test_an_explicit_call_id_wins() -> None:
     assert tool_call("lookup", {"query": "rice"}, id="call_9").id == "call_9"
+
+
+async def test_a_held_call_is_recorded_and_answers_once_released() -> None:
+    """A test looks at the bot while the model is thinking; only the next
+    call is held."""
+    fake = FakeLLMClient()
+    fake.queue(llm_response("first"))
+    hold = fake.hold()
+    request = LLMRequest(
+        purpose="agent", messages=[LLMMessage(role="user", content="rice")]
+    )
+    call = asyncio.create_task(fake.complete(request))
+    async with asyncio.timeout(2):
+        await hold.reached.wait()
+    assert fake.calls == [request]
+    assert not call.done()
+    hold.released.set()
+    async with asyncio.timeout(2):
+        assert (await call).text == "first"
+        assert (await fake.complete(request)).text == "ok"

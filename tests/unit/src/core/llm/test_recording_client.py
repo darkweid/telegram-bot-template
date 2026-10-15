@@ -1,9 +1,12 @@
+import asyncio
 from dataclasses import replace
+import logging
 from unittest.mock import AsyncMock
 
 from pydantic import BaseModel
 import pytest
 
+from src.core.llm import recording as recording_module
 from src.core.llm.enums import LLMProviderName, ModelTier
 from src.core.llm.errors import LLMOutputError, LLMTimeout, LLMUnavailable
 from src.core.llm.recording import LLMUsageRecorder, RecordingLLMClient
@@ -11,7 +14,9 @@ from src.core.llm.types import (
     ImageBlock,
     LLMMessage,
     LLMRequest,
+    LLMResponse,
     ProviderBlock,
+    StructuredResponse,
     ToolResultBlock,
 )
 from tests.fakes.llm import FakeLLMClient, llm_response, tool_call
@@ -198,3 +203,205 @@ async def test_log_content_names_images_and_provider_blocks_without_their_bytes(
     assert "private" not in message
     assert "<tool_result call_8 error found>" in message
     assert '<tool_use lookup {"query": "rice"}>' in message
+
+
+class HangingLLMClient(FakeLLMClient):
+    """Takes the call, then waits until it is cancelled."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.entered = asyncio.Event()
+
+    async def complete(self, request: LLMRequest) -> LLMResponse:
+        self.calls.append(request)
+        self.entered.set()
+        await asyncio.Event().wait()
+        raise AssertionError("unreachable")
+
+    async def structured[T: BaseModel](
+        self, request: LLMRequest, output: type[T]
+    ) -> StructuredResponse[T]:
+        self.calls.append(request)
+        self.entered.set()
+        await asyncio.Event().wait()
+        raise AssertionError("unreachable")
+
+
+async def _cancel_call(
+    client: RecordingLLMClient, inner: HangingLLMClient, request: LLMRequest
+) -> None:
+    task = asyncio.create_task(client.complete(request))
+    async with asyncio.timeout(2):
+        await inner.entered.wait()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+
+async def test_a_cancelled_call_is_recorded_without_usage() -> None:
+    """A provider may bill a call that was cut short; /stats must show it as
+    a failed call of the model the tier asked for."""
+    inner = HangingLLMClient()
+    client, recorder = _client(inner)
+    request = replace(REQUEST, tier=ModelTier.FAST)
+    await _cancel_call(client, inner, request)
+    recorder.record.assert_awaited_once()
+    args, kwargs = recorder.record.await_args
+    assert args == (request, None, None)
+    assert kwargs["cancelled"] is True
+    assert kwargs["model"] == "claude-haiku-5-5"
+    assert kwargs["provider"] == LLMProviderName.ANTHROPIC
+
+
+async def test_a_cancelled_structured_call_is_recorded_too() -> None:
+    """The deadline cuts structured calls the same way."""
+    inner = HangingLLMClient()
+    client, recorder = _client(inner)
+    task = asyncio.create_task(client.structured(REQUEST, Answer))
+    async with asyncio.timeout(2):
+        await inner.entered.wait()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+    assert recorder.record.await_args.kwargs["cancelled"] is True
+
+
+async def test_a_cancelled_call_writes_one_log_line() -> None:
+    """Every call leaves one line, a cancelled one included; the adapter
+    was cut at its await and writes none."""
+    inner = HangingLLMClient()
+    client, _ = _client(inner)
+    with captured_logs("src.core.llm.reporting") as records:
+        await _cancel_call(client, inner, REQUEST)
+    [record] = records
+    assert record.levelno == logging.WARNING
+    assert "outcome=Cancelled" in record.getMessage()
+
+
+async def test_a_deadline_cancel_still_records_and_reads_as_a_timeout() -> None:
+    """The agent's deadline cancels the call through asyncio.timeout: the row
+    is written and the caller still sees its own TimeoutError."""
+    inner = HangingLLMClient()
+    client, recorder = _client(inner)
+    with pytest.raises(TimeoutError):
+        async with asyncio.timeout(0.05):
+            await client.complete(REQUEST)
+    assert recorder.record.await_args.kwargs["cancelled"] is True
+
+
+async def test_a_failed_record_of_a_cancelled_call_does_not_replace_the_cancel() -> (
+    None
+):
+    """A stopping bot must stop: a broken write cannot turn the cancel into
+    an error the caller would handle."""
+    inner = HangingLLMClient()
+    client, recorder = _client(inner)
+    recorder.record.side_effect = RuntimeError("database is gone")
+    with captured_logs("src.core.llm.recording") as records:
+        await _cancel_call(client, inner, REQUEST)
+    assert [r.getMessage() for r in records] == [
+        "Cancelled LLM call not recorded: RuntimeError"
+    ]
+
+
+async def test_a_hung_record_of_a_cancelled_call_gives_up_after_its_bound(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The write runs inside the shutdown budget; a hung database must not
+    eat it."""
+    monkeypatch.setattr(recording_module, "CANCELLED_RECORD_SECONDS", 0.05)
+    inner = HangingLLMClient()
+    client, recorder = _client(inner)
+
+    async def hang(*args: object, **kwargs: object) -> None:
+        await asyncio.Event().wait()
+
+    recorder.record.side_effect = hang
+    with captured_logs("src.core.llm.recording") as records:
+        await _cancel_call(client, inner, REQUEST)
+    assert [r.getMessage() for r in records] == [
+        "Cancelled LLM call not recorded: TimeoutError"
+    ]
+
+
+class SlowRecord:
+    """A record that waits for `release`; `finished` tells it completed."""
+
+    def __init__(self, recorder: AsyncMock) -> None:
+        self.entered = asyncio.Event()
+        self.release = asyncio.Event()
+        self.finished = False
+        recorder.record.side_effect = self.record
+
+    async def record(self, *args: object, **kwargs: object) -> None:
+        self.entered.set()
+        await self.release.wait()
+        self.finished = True
+
+
+async def _cancel_during_the_record(
+    client: RecordingLLMClient, slow: SlowRecord
+) -> None:
+    task = asyncio.create_task(client.complete(REQUEST))
+    async with asyncio.timeout(2):
+        await slow.entered.wait()
+        task.cancel()
+        await asyncio.sleep(0)
+        slow.release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+
+async def test_a_cancel_during_the_success_record_still_records_the_answer() -> None:
+    """The provider answered and billed: a deadline or a shutdown landing
+    while the row is written must not leave the paid call unaccounted, and
+    the write is not repeated: it may have committed already."""
+    inner = FakeLLMClient()
+    response = llm_response("hi", model="claude-sonnet-5-5", latency_ms=640)
+    inner.queue(response)
+    client, recorder = _client(inner)
+    slow = SlowRecord(recorder)
+    await _cancel_during_the_record(client, slow)
+    assert slow.finished
+    recorder.record.assert_awaited_once()
+    args, kwargs = recorder.record.await_args
+    assert args == (REQUEST, response, None)
+    assert kwargs["model"] == "claude-sonnet-5-5"
+
+
+async def test_a_cancel_during_the_failure_record_still_records_the_error() -> None:
+    """A failed call may be billed too; the cancel goes on, the row stays."""
+    inner = FakeLLMClient()
+    error = LLMUnavailable("overloaded", provider=LLMProviderName.ANTHROPIC)
+    inner.queue(error)
+    client, recorder = _client(inner)
+    slow = SlowRecord(recorder)
+    await _cancel_during_the_record(client, slow)
+    assert slow.finished
+    recorder.record.assert_awaited_once()
+    args, _ = recorder.record.await_args
+    assert args == (REQUEST, None, error)
+
+
+async def test_a_hung_record_cut_by_a_cancel_gives_up_after_its_bound(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The write runs on inside the shutdown budget like a cancelled call's
+    own row, and no longer."""
+    monkeypatch.setattr(recording_module, "CANCELLED_RECORD_SECONDS", 0.05)
+    inner = FakeLLMClient()
+    inner.queue(llm_response("hi"))
+    client, recorder = _client(inner)
+    slow = SlowRecord(recorder)
+    task = asyncio.create_task(client.complete(REQUEST))
+    with captured_logs("src.core.llm.recording") as records:
+        async with asyncio.timeout(2):
+            await slow.entered.wait()
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+    assert not slow.finished
+    recorder.record.assert_awaited_once()
+    assert [r.getMessage() for r in records] == [
+        "LLM call cut while recorded, not recorded: TimeoutError"
+    ]

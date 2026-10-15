@@ -16,6 +16,7 @@ def report_llm_call(
     response: LLMResponse | None,
     error: LLMError | None,
     latency_ms: int,
+    cancelled: bool = False,
 ) -> None:
     """Write the one log line of an LLM call.
 
@@ -23,8 +24,14 @@ def report_llm_call(
     never the prompt or the answer: those are user data. Sentry's logging
     integration keeps the line as the call's one breadcrumb. The exchange
     itself is logged only by RecordingLLMClient under LLM_LOG_CONTENT.
+
+    `cancelled` is a call cut short by its caller (a deadline, a stopping
+    bot): no response and no error, outcome `Cancelled`.
     """
-    outcome = "ok" if error is None else type(error).__name__
+    if cancelled:
+        outcome = "Cancelled"
+    else:
+        outcome = "ok" if error is None else type(error).__name__
     # A failed call may still have been billed: a refusal, an answer that
     # failed validation, a repair cut short.
     usage: LLMUsage | None = None
@@ -38,7 +45,7 @@ def report_llm_call(
     cache_write_tokens = 0 if usage is None else usage.cache_write_tokens
     cost = "unknown" if usage is None or usage.cost_usd is None else str(usage.cost_usd)
     logger.log(
-        logging.INFO if error is None else logging.WARNING,
+        logging.INFO if outcome == "ok" else logging.WARNING,
         "LLM call provider=%s model=%s purpose=%s outcome=%s input_tokens=%d "
         "output_tokens=%d cache_read_tokens=%d cache_write_tokens=%d "
         "cost_usd=%s latency_ms=%d",

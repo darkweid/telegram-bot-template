@@ -1,9 +1,12 @@
-from typing import Any, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from src.core.errors.exceptions import CoreException, LogLevel
 from src.core.i18n import N_
 from src.core.llm.enums import LLMProviderName
 from src.core.llm.types import LLMUsage
+
+if TYPE_CHECKING:
+    from src.core.llm.agent import AgentRun
 
 
 class LLMError(CoreException):
@@ -14,6 +17,9 @@ class LLMError(CoreException):
     answer that failed validation, an answer whose tool call cannot be read,
     or the first answer of a repair whose request then failed. llm_usage and
     the log line record the failure with it; None when nothing was billed.
+
+    `agent_run` is set by run_agent when the error ends an agent run: the
+    run up to the error, so the caller can tell whether a tool wrote.
     """
 
     message_key = N_("The language model could not answer. Please try again later.")
@@ -31,6 +37,7 @@ class LLMError(CoreException):
         super().__init__(detail, **params)
         self.provider = provider
         self.usage = usage
+        self.agent_run: AgentRun | None = None
 
 
 class LLMNotConfigured(LLMError):

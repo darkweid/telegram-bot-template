@@ -5,11 +5,12 @@ from aiogram.exceptions import TelegramAPIError
 from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
 from aiohttp import web
 
+from src.core.telegram.background import BackgroundRunner
 from src.main.health import create_web_app
 from src.main.runtime import (
     BotRuntime,
     StartupError,
-    finish_updates,
+    finish_work,
     serving,
     wait_for_stop_signal,
 )
@@ -18,7 +19,8 @@ from src.main.runtime import (
 class GracefulRequestHandler(SimpleRequestHandler):
     """aiogram's handler: checks the secret, answers Telegram at once and
     handles the update in the background. Differs on shutdown: it waits for
-    those background updates, and leaves the bot session to the container."""
+    those updates and then for the work they started, and leaves the bot
+    session to the container."""
 
     def __init__(
         self,
@@ -27,14 +29,20 @@ class GracefulRequestHandler(SimpleRequestHandler):
         *,
         secret_token: str,
         shutdown_timeout: float,
+        background: BackgroundRunner,
     ) -> None:
         super().__init__(dispatcher=dispatcher, bot=bot, secret_token=secret_token)
         self.shutdown_timeout = shutdown_timeout
+        self.background = background
 
     async def close(self) -> None:
         # The base class closes the bot session here, under updates still
         # running. tests/unit/src/main/test_webhook.py pins the attribute.
-        await finish_updates(self._background_feed_update_tasks, self.shutdown_timeout)
+        await finish_work(
+            self._background_feed_update_tasks,
+            self.background,
+            self.shutdown_timeout,
+        )
 
 
 class WebhookRegistrationError(StartupError):
@@ -56,6 +64,7 @@ def create_webhook_app(runtime: BotRuntime) -> web.Application:
         runtime.bot,
         secret_token=secret,
         shutdown_timeout=runtime.config.bot.SHUTDOWN_TIMEOUT_SECONDS,
+        background=runtime.background,
     )
     # Before setup_application: aiohttp runs on_shutdown callbacks in order,
     # so updates in progress finish before the dispatcher shuts down.
