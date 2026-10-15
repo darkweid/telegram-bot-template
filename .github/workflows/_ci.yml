@@ -617,7 +617,7 @@ jobs:
           # shellcheck disable=SC2016  # expanded by the shell inside the container
           code="$("${compose[@]}" run --rm --no-deps -e WEBHOOK_HOST \
             -e TELEGRAM_ALLOWED_SUBNETS=127.0.0.1/32 --entrypoint sh nginx -c '
-              sh /etc/nginx/bot/entrypoint.sh nginx >/dev/null 2>&1
+              sh /etc/nginx/bot/entrypoint.sh nginx >&2
               curl -sk -o /dev/null -w "%{http_code}" -X POST \
                 --resolve "$WEBHOOK_HOST:443:127.0.0.1" "https://$WEBHOOK_HOST$WEBHOOK_PATH"')"
           if [ "$code" != "502" ]; then
