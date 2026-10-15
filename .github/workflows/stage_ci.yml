@@ -31,10 +31,11 @@ jobs:
     # The ceiling for _ci.yml: a called workflow can never hold more than the
     # job that calls it, and this block - not the workflow-level one above -
     # is what that job holds. `packages: write` is for the image push,
-    # `actions: read` for the tree lookup, `pull-requests: read` for
-    # gitleaks, which lists a pull request's commits.
+    # `actions: read` for the tree lookup, `pull-requests: write` for the
+    # Coveralls comment of `unit-tests` (gitleaks only reads a pull request's
+    # commits).
     permissions:
       contents: read
-      pull-requests: read
+      pull-requests: write
       packages: write
       actions: read

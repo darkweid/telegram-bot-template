@@ -343,6 +343,27 @@ outbox row has waited for publishing longer than 5 minutes. The task queue
 never changes the status: there is no backlog that is wrong for every bot.
 Developers see the same report with `/status`.
 
+## Releases
+
+Tag a commit CI built on `main` with `vX.Y.Z` and push the tag. The `Release`
+workflow points `ghcr.io/<owner>/<repo>:vX.Y.Z` at the image CI already pushed
+for that commit (`sha-<12>`, same digest, nothing rebuilt) and opens a GitHub
+Release with generated notes. A tag on a commit CI never built fails. Releases
+deploy nothing: CD follows the branches.
+
+## Coverage
+
+`make test-cov` enforces 90% over `src/`. Uploading the report to Coveralls is
+off until the repository variable `COVERALLS_ENABLED` is `true`; a public
+repository needs no token, the workflow token is enough. With it on, every push
+gets a Coveralls build, including a squash merge whose tests CI skips because
+the same tree already passed: the report of that tree is carried over.
+
+Dependabot opens one grouped pull request a month for Python packages and one
+for GitHub Actions; `pre-commit-autoupdate.yml` does the same for the hook
+revisions (set `PRECOMMIT_BOT_TOKEN` for CI to run on its pull request).
+Container images move by hand.
+
 ## Project layout
 
 ```text
