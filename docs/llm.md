@@ -127,8 +127,9 @@ A request names the kind of work with `tier`, not a model id.
 `ModelTier.STRONG` is the default and uses `LLM_MODEL`; `ModelTier.FAST`
 uses `LLM_MODEL_FAST` and suits cheap, frequent calls such as routing or
 short parsing. An empty `LLM_MODEL_FAST` means the strong model of the same
-provider. The usage table records the model that answered, so `/stats`
-spending can be read per tier.
+provider. Each `llm_usage` row stores the model: the one that answered, or
+the one asked for when the call failed. `/stats` groups spending by purpose
+and by user, not by model or tier.
 
 ## Effort
 
@@ -200,6 +201,13 @@ A tool call cut at `max_tokens` raises `LLMOutputError`: its arguments are
 incomplete. Models that reason spend output tokens on it, so a request with
 tools needs a `max_tokens` well above the longest answer. `structured()`
 takes no tools and refuses a request that has them with `ValueError`.
+A call whose arguments are not a JSON object raises `LLMUnavailable`, which
+still records what the answer cost.
+
+An answer that carries tool calls reads `stop == "tool_use"` even when a
+provider behind OpenRouter reports `stop`; `stop_reason` keeps the raw
+value. Both adapters send a user turn's tool results ahead of its text and
+images, as the APIs require, and leave out empty text blocks.
 
 **Provider blocks.** Anthropic signs its thinking and OpenRouter returns
 `reasoning_details`; both arrive as `ProviderBlock`s and must go back in the
@@ -209,7 +217,9 @@ provider's blocks.
 ## Images
 
 `ImageBlock(media_type, data)` goes into a user message next to text:
-JPEG, PNG, GIF or WebP, at most 5 MB (`MAX_IMAGE_BYTES`). Anything else
+JPEG, PNG, GIF or WebP, at most 3,932,160 bytes (`MAX_IMAGE_BYTES`):
+Anthropic's 5 MB limit applies to the base64 form, which is 4/3 of the
+bytes. Anything else
 raises `ValueError` when the block is built; shrinking a photo is the
 domain's job. The log under `LLM_LOG_CONTENT` names an image by type and
 size, never its bytes.
