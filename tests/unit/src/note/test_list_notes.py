@@ -60,6 +60,22 @@ async def test_a_page_whose_notes_are_gone_falls_back_to_the_first() -> None:
     ]
 
 
+async def test_a_newer_page_whose_notes_are_gone_falls_back_to_the_first() -> None:
+    """The same stranded user, arriving through the Newer button."""
+    session, notes = FakeAsyncSession(), AsyncMock(spec=NoteRepository)
+    notes.page_for_user.side_effect = [
+        NoteRows(notes=[], has_newer=False, has_older=False),
+        NoteRows(notes=[_note(FIRST, "a")], has_newer=False, has_older=False),
+    ]
+    page = await ListNotesUseCase(SQLAlchemyUnitOfWork(session), notes).execute(
+        7, SECOND, PageDirection.NEWER
+    )
+    assert page.notes == (NoteView(id=FIRST, text="a"),)
+    assert notes.page_for_user.await_args_list[1] == call(
+        session, 7, cursor=None, direction=PageDirection.OLDER, size=NOTES_PAGE_SIZE
+    )
+
+
 async def test_listing_writes_nothing() -> None:
     session, notes = FakeAsyncSession(), AsyncMock(spec=NoteRepository)
     notes.page_for_user.return_value = NoteRows(

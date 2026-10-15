@@ -275,6 +275,23 @@ async def test_confirming_deletes_and_shows_the_list_again(
     assert page.text == "Your notes:\n\n1. &lt;b&gt;bold&lt;/b&gt;\n2. a"
 
 
+async def test_a_double_tapped_confirmation_refreshes_the_list(
+    settings: Config, i18n: I18n
+) -> None:
+    """The second press finds the note gone; a stray error message would
+    stack under the list, so the button answers and the list is redrawn."""
+    stub = NoteStub()
+    stub.delete.execute.side_effect = NoteNotFoundError()
+    confirm = NoteDeleteCallback(note_id=FIRST, action=DeleteAction.CONFIRM).pack()
+    async with running_bot(settings, i18n, UseCases(), stub) as running:
+        await running.feed(build_callback_update(confirm))
+    assert running.session.sent(SendMessage) == []
+    [answer] = running.session.sent(AnswerCallbackQuery)
+    assert answer.text == "This note no longer exists."
+    [page] = running.session.sent(EditMessageText)
+    assert page.text == "Your notes:\n\n1. &lt;b&gt;bold&lt;/b&gt;\n2. a"
+
+
 async def test_a_vanished_note_answers_plainly(settings: Config, i18n: I18n) -> None:
     """The note was deleted from another window, or the button was forged
     with someone else's id: either way the user hears the same thing."""

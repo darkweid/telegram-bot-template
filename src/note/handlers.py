@@ -10,6 +10,7 @@ from dishka import FromDishka
 from src.core.telegram.messages import safe_edit_text
 from src.note.callbacks import NoteCancelCallback, NoteDeleteCallback, NotesPageCallback
 from src.note.enums import DeleteAction
+from src.note.exceptions import NoteNotFoundError
 from src.note.keyboards import cancel_keyboard, confirm_delete_keyboard, notes_keyboard
 from src.note.models import NOTE_TEXT_MAX_LENGTH
 from src.note.states import NoteStates
@@ -112,8 +113,14 @@ async def confirm_delete(
     delete_note: FromDishka[DeleteNoteUseCase],
     list_notes: FromDishka[ListNotesUseCase],
 ) -> None:
-    await delete_note.execute(user.id, callback_data.note_id)
-    callback_answer.text = _("Note deleted.")
+    try:
+        await delete_note.execute(user.id, callback_data.note_id)
+    except NoteNotFoundError:
+        # A double tap, or a note deleted from another window: the list is
+        # shown again below, so the stale confirmation goes away.
+        callback_answer.text = _("This note no longer exists.")
+    else:
+        callback_answer.text = _("Note deleted.")
     if not isinstance(callback.message, Message):
         return
     page = await list_notes.execute(user.id)

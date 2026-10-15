@@ -361,7 +361,8 @@ src/core/           shared infrastructure: database, outbox, tasks, Redis, cache
 src/developer/      developer commands: status, test alert
 src/main/           entry points (bot, worker, scheduler), config, dependency
                     container, dispatcher, polling and webhook
-src/note/           notes, the reference domain: handlers, dialog, keyboards, use cases, repository
+src/note/           notes, the reference domain: handlers, dialog, keyboards,
+                    use cases, repository
 src/system/         health checks behind the probes and /status
 src/user/           users: handlers, keyboards, middleware, use cases, repository
 tests/unit/         tests that need no Docker

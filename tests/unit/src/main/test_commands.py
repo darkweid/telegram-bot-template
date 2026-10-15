@@ -57,11 +57,12 @@ async def test_menu_is_set_for_every_language_and_the_default(i18n: I18n) -> Non
 
 
 @pytest.mark.usefixtures("role_commands")
-async def test_each_role_member_gets_the_user_menu_plus_their_role(
+async def test_each_role_member_gets_the_public_menu_plus_their_role(
     i18n: I18n,
 ) -> None:
     """A chat scope replaces the private-chat menu for that chat, so it has to
-    repeat the user commands, or an admin would lose /start and /help."""
+    repeat PUBLIC_COMMANDS, or an admin would lose /start, /help and the
+    note commands."""
     session = FakeTelegramSession()
     roles = Roles(admins=frozenset({10, 30}), developers=frozenset({20, 30}))
     await set_bot_commands(make_bot(session), i18n, roles)
