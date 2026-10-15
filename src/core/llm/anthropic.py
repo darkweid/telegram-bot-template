@@ -9,7 +9,7 @@ from anthropic.types import Message, MessageParam, OutputConfigParam, TextBlockP
 import httpx2
 from pydantic import BaseModel
 
-from src.core.llm.enums import LLMProviderName
+from src.core.llm.enums import LLMProviderName, ModelTier
 from src.core.llm.errors import (
     LLMError,
     LLMOutputError,
@@ -55,6 +55,9 @@ class AnthropicLLMClient:
     LLM_TIMEOUT_SECONDS. The cost is computed from the response's usage with
     the price table: the API does not return one.
 
+    The model is the request's own or the configured one of its tier, and the
+    call is priced by that id.
+
     `structured` asks for JSON through `output_config.format`, not forced
     tool use: claude-sonnet-5-5 and claude-opus-5-5 reject `tool_choice`
     "tool" and "any" with a 400. `LLMRequest.temperature` is not sent: the current
@@ -65,7 +68,7 @@ class AnthropicLLMClient:
         self,
         *,
         api_key: str,
-        model: str,
+        models: Mapping[ModelTier, str],
         pricing: PricingTable,
         timeout_seconds: float,
         max_retries: int,
@@ -80,14 +83,14 @@ class AnthropicLLMClient:
             max_retries=max_retries,
             http_client=http_client,
         )
-        self._model = model
+        self._models = models
         self._pricing = pricing
 
     async def aclose(self) -> None:
         await self._client.close()
 
     async def complete(self, request: LLMRequest) -> LLMResponse:
-        model = request.model or self._model
+        model = request.model or self._models[request.tier]
         started = time.perf_counter()
         try:
             response = await self._send(request, model=model, output_config=omit)
@@ -100,7 +103,7 @@ class AnthropicLLMClient:
     async def structured[T: BaseModel](
         self, request: LLMRequest, output: type[T]
     ) -> StructuredResponse[T]:
-        model = request.model or self._model
+        model = request.model or self._models[request.tier]
         # transform_schema makes the pydantic schema strict (no extra keys)
         # and drops constraints the API cannot enforce; pydantic still checks
         # them on the answer.

@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock
 from pydantic import BaseModel
 import pytest
 
-from src.core.llm.enums import LLMProviderName
+from src.core.llm.enums import LLMProviderName, ModelTier
 from src.core.llm.errors import LLMOutputError, LLMTimeout, LLMUnavailable
 from src.core.llm.recording import LLMUsageRecorder, RecordingLLMClient
 from src.core.llm.types import LLMMessage, LLMRequest
@@ -30,7 +30,10 @@ def _client(
         inner,
         recorder,
         provider=LLMProviderName.ANTHROPIC,
-        default_model="claude-sonnet-5-5",
+        models={
+            ModelTier.STRONG: "claude-sonnet-5-5",
+            ModelTier.FAST: "claude-haiku-5-5",
+        },
         log_content=log_content,
     )
     return client, recorder
@@ -129,3 +132,16 @@ async def test_log_content_shows_the_exchange_for_local_debugging() -> None:
     assert "be brief" in message
     assert "secret note" in message
     assert "the answer" in message
+
+
+async def test_a_failed_fast_call_is_recorded_under_the_fast_model() -> None:
+    """A failure has no response to name its model; recording it under the
+    strong one would put the fast tier's errors on the wrong line of /stats."""
+    inner = FakeLLMClient()
+    inner.queue(LLMTimeout("slow", provider=LLMProviderName.ANTHROPIC))
+    client, recorder = _client(inner)
+
+    with pytest.raises(LLMTimeout):
+        await client.complete(replace(REQUEST, tier=ModelTier.FAST))
+
+    assert recorder.record.await_args.kwargs["model"] == "claude-haiku-5-5"

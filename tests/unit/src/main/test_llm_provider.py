@@ -7,6 +7,7 @@ import pytest
 
 from src.core.llm.anthropic import AnthropicLLMClient
 from src.core.llm.disabled import DisabledLLMClient
+from src.core.llm.enums import ModelTier
 from src.core.llm.errors import LLMNotConfigured
 from src.core.llm.fallback import FallbackLLMClient
 from src.core.llm.interface import LLMClient
@@ -94,6 +95,30 @@ async def test_a_fallback_provider_records_each_provider_apart(
     finally:
         await container.close()
     assert sorted(closed) == ["AnthropicLLMClient", "OpenRouterLLMClient"]
+
+
+async def test_each_provider_gets_a_model_per_tier(
+    settings: Config, i18n: I18n
+) -> None:
+    """An empty fast model means the strong one; a fallback keeps the tier
+    with its own models, since a model in the request is the primary's id."""
+    config = with_llm(settings, **WITH_FALLBACK, LLM_MODEL_FAST="claude-haiku-5-5")
+    container = build_container(config, SessionOnly(FakeTelegramSession(), i18n))
+    try:
+        client = await container.get(LLMClient)
+        assert isinstance(client, FallbackLLMClient)
+        assert isinstance(client.primary, RecordingLLMClient)
+        assert isinstance(client.fallback, RecordingLLMClient)
+        assert dict(client.primary.models) == {
+            ModelTier.STRONG: "claude-sonnet-5-5",
+            ModelTier.FAST: "claude-haiku-5-5",
+        }
+        assert dict(client.fallback.models) == {
+            ModelTier.STRONG: "vendor/fallback-model",
+            ModelTier.FAST: "vendor/fallback-model",
+        }
+    finally:
+        await container.close()
 
 
 async def test_one_price_table_with_the_overrides_serves_the_adapter(

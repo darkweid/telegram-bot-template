@@ -96,8 +96,10 @@ KNOWN_KEYS = frozenset(
         # LLMConfig
         "LLM_PROVIDER",
         "LLM_MODEL",
+        "LLM_MODEL_FAST",
         "LLM_FALLBACK_PROVIDER",
         "LLM_FALLBACK_MODEL",
+        "LLM_FALLBACK_MODEL_FAST",
         "ANTHROPIC_API_KEY",
         "OPENROUTER_API_KEY",
         "OPENROUTER_APP_URL",

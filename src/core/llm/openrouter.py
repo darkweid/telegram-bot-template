@@ -17,7 +17,7 @@ from openai.types.chat import (
 from openai.types.chat.completion_create_params import ResponseFormat
 from pydantic import BaseModel
 
-from src.core.llm.enums import LLMProviderName
+from src.core.llm.enums import LLMProviderName, ModelTier
 from src.core.llm.errors import (
     LLMError,
     LLMOutputError,
@@ -58,7 +58,7 @@ class OpenRouterLLMClient:
         self,
         *,
         api_key: str,
-        model: str,
+        models: Mapping[ModelTier, str],
         app_url: str,
         app_title: str,
         timeout_seconds: float,
@@ -82,13 +82,13 @@ class OpenRouterLLMClient:
             default_headers=attribution,
             http_client=http_client,
         )
-        self._model = model
+        self._models = models
 
     async def aclose(self) -> None:
         await self._client.close()
 
     async def complete(self, request: LLMRequest) -> LLMResponse:
-        model = request.model or self._model
+        model = request.model or self._models[request.tier]
         started = time.perf_counter()
         try:
             response = await self._send(request, model=model, response_format=omit)
@@ -101,7 +101,7 @@ class OpenRouterLLMClient:
     async def structured[T: BaseModel](
         self, request: LLMRequest, output: type[T]
     ) -> StructuredResponse[T]:
-        model = request.model or self._model
+        model = request.model or self._models[request.tier]
         send = partial(
             self._send,
             model=model,

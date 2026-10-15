@@ -8,7 +8,7 @@ from pydantic import BaseModel
 import pytest
 
 from src.core.limiter.limiter import RateLimiter
-from src.core.llm.enums import LLMProviderName
+from src.core.llm.enums import LLMProviderName, ModelTier
 from src.core.llm.errors import (
     LLMError,
     LLMOutputError,
@@ -216,13 +216,19 @@ async def test_a_failed_primary_and_the_answering_fallback_are_two_rows() -> Non
             primary,
             recorder,
             provider=LLMProviderName.ANTHROPIC,
-            default_model="claude-sonnet-5-5",
+            models={
+                ModelTier.STRONG: "claude-sonnet-5-5",
+                ModelTier.FAST: "claude-sonnet-5-5",
+            },
         ),
         RecordingLLMClient(
             fallback,
             recorder,
             provider=LLMProviderName.OPENROUTER,
-            default_model=FALLBACK_MODEL,
+            models={
+                ModelTier.STRONG: FALLBACK_MODEL,
+                ModelTier.FAST: FALLBACK_MODEL,
+            },
         ),
         _alerter(),
     )

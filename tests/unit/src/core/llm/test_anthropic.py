@@ -8,7 +8,7 @@ from pydantic import BaseModel, field_validator
 import pytest
 
 from src.core.llm.anthropic import AnthropicLLMClient
-from src.core.llm.enums import LLMProviderName
+from src.core.llm.enums import LLMProviderName, ModelTier
 from src.core.llm.errors import (
     LLMOutputError,
     LLMRateLimited,
@@ -23,6 +23,8 @@ from tests.helpers.logs import captured_logs
 
 SECRET_PROMPT = "my diary entry about the surgery"
 MODEL = "claude-sonnet-5-5"
+FAST_MODEL = "claude-haiku-5-5"
+MODELS = {ModelTier.STRONG: MODEL, ModelTier.FAST: FAST_MODEL}
 
 
 class Summary(BaseModel):
@@ -87,7 +89,7 @@ def make_client(
 ) -> AnthropicLLMClient:
     return AnthropicLLMClient(
         api_key="sk-ant-not-real",
-        model=MODEL,
+        models=MODELS,
         pricing=PricingTable(),
         timeout_seconds=7.0,
         max_retries=max_retries,
@@ -507,7 +509,7 @@ async def test_aclose_closes_the_http_client(server: ScriptedLLMServer) -> None:
     http_client = server.http_client()
     client = AnthropicLLMClient(
         api_key="sk-ant-not-real",
-        model=MODEL,
+        models=MODELS,
         pricing=PricingTable(),
         timeout_seconds=7.0,
         max_retries=0,
@@ -517,3 +519,17 @@ async def test_aclose_closes_the_http_client(server: ScriptedLLMServer) -> None:
     await client.aclose()
 
     assert http_client.is_closed
+
+
+async def test_a_fast_request_calls_and_prices_the_fast_model(
+    server: ScriptedLLMServer,
+) -> None:
+    """A fast call billed at the strong model's rate would overstate the
+    spend tenfold."""
+    server.reply(message(model=FAST_MODEL))
+    client = make_client(server)
+
+    response = await client.complete(request(tier=ModelTier.FAST))
+
+    assert server.bodies()[0]["model"] == FAST_MODEL
+    assert response.usage.cost_usd == PricingTable().cost(FAST_MODEL, response.usage)

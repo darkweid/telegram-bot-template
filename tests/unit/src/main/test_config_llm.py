@@ -306,15 +306,64 @@ def test_every_shipped_anthropic_model_has_a_price() -> None:
     shows nothing spent; the defaults a new bot starts with, and the models
     .env.example shows, must be priced."""
     shown = re.findall(
-        r"^(?:# )?LLM_(?:FALLBACK_)?MODEL=(.+)$", ENV_EXAMPLE, re.MULTILINE
+        r"^(?:# )?LLM_(?:FALLBACK_)?MODEL(?:_FAST)?=(.+)$", ENV_EXAMPLE, re.MULTILINE
     )
     # OpenRouter ids are "<vendor>/<model>" (LLMConfig enforces it), so an id
     # without a vendor is an Anthropic one.
     anthropic_models = {
         model
-        for model in [LLMConfig.model_fields["LLM_MODEL"].default, *shown]
-        if "/" not in model
+        for model in [
+            LLMConfig.model_fields["LLM_MODEL"].default,
+            LLMConfig.model_fields["LLM_MODEL_FAST"].default,
+            *shown,
+        ]
+        if model and "/" not in model
     }
 
     assert anthropic_models
     assert anthropic_models <= set(PRICES)
+
+
+def test_an_empty_fast_model_is_allowed() -> None:
+    """A bot with one model leaves the fast tier empty and gets the strong one."""
+    config = LLMConfig(
+        _env_file=None,
+        LLM_PROVIDER="anthropic",
+        ANTHROPIC_API_KEY="sk-ant-not-real",
+        LLM_MODEL_FAST="",
+    )
+    assert config.LLM_MODEL_FAST == ""
+
+
+@pytest.mark.parametrize(
+    ("values", "key"),
+    [
+        (
+            {
+                "LLM_PROVIDER": "openrouter",
+                "OPENROUTER_API_KEY": "sk-or-not-real",
+                "LLM_MODEL": "vendor/model",
+                "LLM_MODEL_FAST": "claude-haiku-5-5",
+            },
+            "LLM_MODEL_FAST",
+        ),
+        (
+            {
+                "LLM_PROVIDER": "anthropic",
+                "ANTHROPIC_API_KEY": "sk-ant-not-real",
+                "LLM_FALLBACK_PROVIDER": "openrouter",
+                "OPENROUTER_API_KEY": "sk-or-not-real",
+                "LLM_FALLBACK_MODEL": "vendor/model",
+                "LLM_FALLBACK_MODEL_FAST": "claude-haiku-5-5",
+            },
+            "LLM_FALLBACK_MODEL_FAST",
+        ),
+    ],
+)
+def test_a_fast_model_of_the_wrong_shape_is_refused_by_its_key(
+    values: dict[str, str], key: str
+) -> None:
+    """The example's Anthropic fast model left in place after switching to
+    OpenRouter would fail every fast call; startup names the key instead."""
+    with pytest.raises(ValidationError, match=key):
+        LLMConfig(_env_file=None, **values)

@@ -1,5 +1,6 @@
 """Writing one `llm_usage` row per provider call."""
 
+from collections.abc import Mapping
 import time
 from typing import Any
 
@@ -10,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from loggers import get_logger
 from src.core.database.uow import SQLAlchemyUnitOfWork
 from src.core.errors.scrubbed import reportable
-from src.core.llm.enums import LLMCallStatus, LLMProviderName
+from src.core.llm.enums import LLMCallStatus, LLMProviderName, ModelTier
 from src.core.llm.errors import LLMError
 from src.core.llm.interface import LLMClient
 from src.core.llm.repository import LLMUsageRepository
@@ -91,7 +92,7 @@ class RecordingLLMClient:
     calls included, and with the exchange logged under LLM_LOG_CONTENT.
 
     Wraps one adapter, not the fallback pair: every attempt is a call the
-    provider may bill, and only here are its provider and default model known
+    provider may bill, and only here are its provider and models known
     when it fails.
     """
 
@@ -101,13 +102,13 @@ class RecordingLLMClient:
         recorder: LLMUsageRecorder,
         *,
         provider: LLMProviderName,
-        default_model: str,
+        models: Mapping[ModelTier, str],
         log_content: bool = False,
     ) -> None:
         self.inner = inner
         self._recorder = recorder
         self._provider = provider
-        self._default_model = default_model
+        self.models = models
         self._log_content = log_content
 
     async def complete(self, request: LLMRequest) -> LLMResponse:
@@ -164,7 +165,7 @@ class RecordingLLMClient:
             None,
             error,
             provider=self._provider,
-            model=request.model or self._default_model,
+            model=request.model or self.models[request.tier],
             latency_ms=int((time.perf_counter() - started) * 1000),
         )
 
