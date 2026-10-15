@@ -1,7 +1,5 @@
 import logging
 
-import sentry_sdk
-
 from loggers import get_logger
 from src.core.llm.enums import LLMProviderName
 from src.core.llm.errors import LLMError
@@ -19,11 +17,12 @@ def report_llm_call(
     error: LLMError | None,
     latency_ms: int,
 ) -> None:
-    """Write the one log line and the one Sentry breadcrumb of an LLM call.
+    """Write the one log line of an LLM call.
 
-    Both carry the provider, model, purpose, token counts, cost and latency -
-    never the prompt or the answer: those are user data. The exchange itself
-    is logged only by RecordingLLMClient under LLM_LOG_CONTENT.
+    It carries the provider, model, purpose, token counts, cost and latency -
+    never the prompt or the answer: those are user data. Sentry's logging
+    integration keeps the line as the call's one breadcrumb. The exchange
+    itself is logged only by RecordingLLMClient under LLM_LOG_CONTENT.
     """
     outcome = "ok" if error is None else type(error).__name__
     # A failed call may still have been billed: a refusal, an answer that
@@ -53,21 +52,4 @@ def report_llm_call(
         cache_write_tokens,
         cost,
         latency_ms,
-    )
-    sentry_sdk.add_breadcrumb(
-        category="llm",
-        message="LLM call",
-        level="info" if error is None else "warning",
-        data={
-            "provider": str(provider),
-            "model": model,
-            "purpose": request.purpose,
-            "outcome": outcome,
-            "input_tokens": input_tokens,
-            "output_tokens": output_tokens,
-            "cache_read_tokens": cache_read_tokens,
-            "cache_write_tokens": cache_write_tokens,
-            "cost_usd": cost,
-            "latency_ms": latency_ms,
-        },
     )

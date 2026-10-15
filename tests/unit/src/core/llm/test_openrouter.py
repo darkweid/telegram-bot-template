@@ -6,7 +6,6 @@ from typing import Any
 import httpx2
 from pydantic import BaseModel, field_validator
 import pytest
-import sentry_sdk
 
 from src.core.llm.enums import LLMProviderName
 from src.core.llm.errors import (
@@ -379,15 +378,9 @@ async def test_sdk_retries_follow_the_configured_count(
     await client.aclose()
 
 
-async def test_one_log_line_and_breadcrumb_without_content(
-    server: ScriptedLLMServer, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_one_log_line_without_content(server: ScriptedLLMServer) -> None:
     """Prompts and answers are user data: the call is visible in logs and
     Sentry by its numbers only."""
-    breadcrumbs: list[dict[str, Any]] = []
-    monkeypatch.setattr(
-        sentry_sdk, "add_breadcrumb", lambda **crumb: breadcrumbs.append(crumb)
-    )
     server.reply(completion("the answer about the surgery"))
     client = make_client(server)
 
@@ -409,9 +402,6 @@ async def test_one_log_line_and_breadcrumb_without_content(
     ):
         assert part in line
     assert "surgery" not in line
-    [crumb] = breadcrumbs
-    assert crumb["category"] == "llm"
-    assert "surgery" not in repr(crumb)
     await client.aclose()
 
 
