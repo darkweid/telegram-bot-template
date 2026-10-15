@@ -401,14 +401,18 @@ class RunBroadcastUseCase:
         await self._edit(run, text, markup)
 
     async def _report(self, run: _Run, status: BroadcastStatus) -> None:
-        """Send the final report and record it once neither call is worth
-        repeating; otherwise the resume task has it sent again."""
+        """Edit the progress message, then notify the admin, and record the
+        report once neither call is worth repeating; otherwise the resume task
+        has it sent again."""
         with self._i18n.context(), self._i18n.use_locale(run.locale):
             text = progress_text(run.progress(status))
         # The edit drops the Stop button; the new message notifies the admin,
         # which an edit does not. A resent edit that finds the text already in
         # place is refused as not modified, which counts as done.
-        edited = await self._edit(run, text, None)
+        if not await self._edit(run, text, None):
+            # The notice waits for the edit: sent now, it would go out again
+            # with every retry of an edit that keeps failing.
+            return
         try:
             await self._bot.send_message(
                 run.admin_id, text, request_timeout=TELEGRAM_REQUEST_TIMEOUT_SECONDS
@@ -422,7 +426,7 @@ class RunBroadcastUseCase:
             notified = not isinstance(error, REPORT_RETRY_ERRORS)
         else:
             notified = True
-        if edited and notified:
+        if notified:
             await self._mark_reported(run)
 
     async def _mark_reported(self, run: _Run) -> None:

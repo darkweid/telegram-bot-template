@@ -815,6 +815,21 @@ async def test_a_report_that_may_get_through_later_stays_unrecorded(
     broadcasts.mark_reported.assert_not_awaited()
 
 
+async def test_the_notice_waits_for_an_edit_that_may_get_through_later(
+    settings: Config, i18n: I18n
+) -> None:
+    """Sent beside a failed edit, the notice would go out again with every
+    resend until the edit lands."""
+    telegram = FakeTelegramSession()
+    _queue_for_the_report(
+        telegram,
+        EditMessageText,
+        TelegramNetworkError(method=REPORT_EDIT, message="timeout"),
+    )
+    await _run(settings, i18n, telegram, _broadcasts()).execute(BROADCAST_ID)
+    assert not telegram.sent(SendMessage)
+
+
 @pytest.mark.parametrize(
     ("method", "error"),
     [
