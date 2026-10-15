@@ -1,3 +1,5 @@
+from unittest.mock import AsyncMock
+
 from aiogram.methods import SendMessage
 from pydantic import BaseModel
 import pytest
@@ -13,6 +15,7 @@ from src.core.llm.errors import (
     LLMUnavailable,
 )
 from src.core.llm.fallback import FallbackLLMClient
+from src.core.llm.recording import LLMUsageRecorder, RecordingLLMClient
 from src.core.llm.types import LLMMessage, LLMRequest, LLMResponse
 from src.core.redis.degradation import RedisDegradationReporter
 from src.core.telegram.alerts import DeveloperAlerter
@@ -38,11 +41,8 @@ def _fallback_answer(text: str = "from the fallback") -> LLMResponse:
     return llm_response(text, provider=LLMProviderName.OPENROUTER, model=FALLBACK_MODEL)
 
 
-def _client(
-    session: FakeTelegramSession | None = None,
-) -> tuple[FallbackLLMClient, FakeLLMClient, FakeLLMClient]:
-    primary, fallback = FakeLLMClient(), FakeLLMClient()
-    alerter = DeveloperAlerter(
+def _alerter(session: FakeTelegramSession | None = None) -> DeveloperAlerter:
+    return DeveloperAlerter(
         make_bot(session or FakeTelegramSession()),
         RateLimiter(
             InMemoryRedis(),
@@ -52,7 +52,13 @@ def _client(
         recipients=(-100500,),
         cooldown_seconds=300,
     )
-    return FallbackLLMClient(primary, fallback, alerter), primary, fallback
+
+
+def _client(
+    session: FakeTelegramSession | None = None,
+) -> tuple[FallbackLLMClient, FakeLLMClient, FakeLLMClient]:
+    primary, fallback = FakeLLMClient(), FakeLLMClient()
+    return FallbackLLMClient(primary, fallback, _alerter(session)), primary, fallback
 
 
 @pytest.mark.parametrize("error_type", [LLMUnavailable, LLMTimeout, LLMRateLimited])
@@ -149,3 +155,39 @@ async def test_the_switch_is_logged_without_content() -> None:
         "LLM anthropic failed for note_summary with LLMUnavailable, "
         "using the fallback"
     )
+
+
+async def test_a_failed_primary_and_the_answering_fallback_are_two_rows() -> None:
+    """Each attempt is a call the provider may bill: the usage rows must name
+    the provider that failed and the one that answered."""
+    primary, fallback = FakeLLMClient(), FakeLLMClient()
+    recorder = AsyncMock(spec=LLMUsageRecorder)
+    error = LLMUnavailable("down", provider=LLMProviderName.ANTHROPIC)
+    primary.queue(error)
+    answer = _fallback_answer()
+    fallback.queue(answer)
+    client = FallbackLLMClient(
+        RecordingLLMClient(
+            primary,
+            recorder,
+            provider=LLMProviderName.ANTHROPIC,
+            default_model="claude-sonnet-5-5",
+        ),
+        RecordingLLMClient(
+            fallback,
+            recorder,
+            provider=LLMProviderName.OPENROUTER,
+            default_model=FALLBACK_MODEL,
+        ),
+        _alerter(),
+    )
+
+    assert await client.complete(REQUEST) is answer
+
+    first, second = recorder.record.await_args_list
+    assert first.args == (REQUEST, None, error)
+    assert first.kwargs["provider"] is LLMProviderName.ANTHROPIC
+    assert second.args[1] is answer
+    assert second.args[2] is None
+    assert second.kwargs["provider"] is LLMProviderName.OPENROUTER
+    assert second.kwargs["model"] == FALLBACK_MODEL

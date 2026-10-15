@@ -112,7 +112,7 @@ class RecordingLLMClient:
         self._log_content = log_content
 
     async def complete(self, request: LLMRequest) -> LLMResponse:
-        started = time.monotonic()
+        started = time.perf_counter()
         try:
             response = await self.inner.complete(request)
         except LLMError as error:
@@ -124,7 +124,7 @@ class RecordingLLMClient:
     async def structured[T: BaseModel](
         self, request: LLMRequest, output: type[T]
     ) -> StructuredResponse[T]:
-        started = time.monotonic()
+        started = time.perf_counter()
         try:
             result = await self.inner.structured(request, output)
         except LLMError as error:
@@ -166,7 +166,7 @@ class RecordingLLMClient:
             error,
             provider=self._provider,
             model=request.model or self._default_model,
-            latency_ms=round((time.monotonic() - started) * 1000),
+            latency_ms=int((time.perf_counter() - started) * 1000),
         )
 
 

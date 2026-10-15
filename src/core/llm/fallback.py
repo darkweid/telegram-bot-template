@@ -14,9 +14,10 @@ from src.core.update_context import get_update_context
 
 logger = get_logger(__name__)
 
-# Failures of the provider, not of the request: another vendor can answer the
-# same request. A refusal or an unparsable answer would most likely repeat
-# there, and be paid for twice.
+# Failures of the provider rather than of the request's content: another vendor
+# can answer the same request. `LLMUnavailable` also covers a refused key and a
+# malformed request, which switch too. A refusal or an unparsable answer would
+# most likely repeat at the other vendor, and be paid for twice.
 _SWITCH_ON = (LLMUnavailable, LLMTimeout, LLMRateLimited)
 
 

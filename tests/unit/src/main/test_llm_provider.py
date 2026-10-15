@@ -1,3 +1,6 @@
+from decimal import Decimal
+import json
+
 from aiogram.utils.i18n import I18n
 from pydantic import SecretStr
 import pytest
@@ -8,9 +11,10 @@ from src.core.llm.errors import LLMNotConfigured
 from src.core.llm.fallback import FallbackLLMClient
 from src.core.llm.interface import LLMClient
 from src.core.llm.openrouter import OpenRouterLLMClient
+from src.core.llm.pricing import PricingTable
 from src.core.llm.recording import RecordingLLMClient
 from src.core.llm.repository import LLMUsageRepository
-from src.core.llm.types import LLMMessage, LLMRequest
+from src.core.llm.types import LLMMessage, LLMRequest, LLMUsage
 from src.main.config import Config
 from src.main.di import build_container
 from tests.fakes.llm import FakeLLMClient
@@ -90,6 +94,36 @@ async def test_a_fallback_provider_records_each_provider_apart(
     finally:
         await container.close()
     assert sorted(closed) == ["AnthropicLLMClient", "OpenRouterLLMClient"]
+
+
+async def test_one_price_table_with_the_overrides_serves_the_adapter(
+    settings: Config, i18n: I18n
+) -> None:
+    """LLM_PRICING_OVERRIDES must reach the cost of every call, and every
+    consumer must read the same table."""
+    overrides = json.dumps(
+        {
+            "claude-sonnet-5-5": {
+                "input_per_mtok": "1",
+                "output_per_mtok": "2",
+                "cache_write_per_mtok": "3",
+                "cache_read_per_mtok": "4",
+            }
+        }
+    )
+    config = with_llm(settings, **ANTHROPIC, LLM_PRICING_OVERRIDES=overrides)
+    container = build_container(config, SessionOnly(FakeTelegramSession(), i18n))
+    try:
+        table = await container.get(PricingTable)
+        client = await container.get(LLMClient)
+        assert isinstance(client, RecordingLLMClient)
+        assert isinstance(client.inner, AnthropicLLMClient)
+        assert client.inner._pricing is table
+        assert table.cost(
+            "claude-sonnet-5-5", LLMUsage(input_tokens=1_000_000, output_tokens=0)
+        ) == Decimal("1")
+    finally:
+        await container.close()
 
 
 async def test_a_missing_key_fails_by_its_name(
