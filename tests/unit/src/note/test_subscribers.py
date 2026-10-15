@@ -1,18 +1,26 @@
+from dataclasses import dataclass
 from datetime import UTC, datetime
+from typing import ClassVar
 from uuid import UUID
 
 import pytest
 
 from src.core.database.uow import SQLAlchemyUnitOfWork
-from src.core.events.schemas import Actor, PublishedEvent
+from src.core.events.schemas import Actor, DomainEvent, PublishedEvent
 from src.core.outbox.models import OutboxMessage
 from src.note.events import NoteCreated
 from src.note.subscribers import enqueue_note_created
 from src.note.tasks import NOTE_CREATED
-from src.user.events import UserRegistered
 from tests.fakes.db import FakeAsyncSession
 
 NOTE_ID = UUID("01900000-0000-7000-8000-000000000001")
+
+
+@dataclass(frozen=True, slots=True)
+class Stranger(DomainEvent):
+    """An event no subscriber under test is mapped to."""
+
+    code: ClassVar[str] = "test.stranger"
 
 
 async def test_a_new_note_enqueues_its_task() -> None:
@@ -41,11 +49,11 @@ async def test_an_event_of_another_type_is_refused() -> None:
     session = FakeAsyncSession()
     uow = SQLAlchemyUnitOfWork(session)
     published = PublishedEvent(
-        event=UserRegistered(user_id=7),
+        event=Stranger(),
         actor=Actor.telegram_user(7),
         occurred_at=datetime(2026, 1, 1, tzinfo=UTC),
     )
     async with uow:
-        with pytest.raises(TypeError, match="UserRegistered"):
+        with pytest.raises(TypeError, match="Stranger"):
             await enqueue_note_created(uow, published)
     session.add.assert_not_called()

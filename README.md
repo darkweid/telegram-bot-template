@@ -20,8 +20,9 @@ pull requests.
   note through a dialog with a Cancel button and `/cancel`, `/notes` lists
   them five per page with keyset pagination in the buttons, and each note is
   deleted after a confirmation. It has its own table, migration, use cases,
-  keyboards, an event and its task, and the full set of tests (handlers on the real dispatcher, use
-  cases on fakes, the repository against PostgreSQL).
+  keyboards, an event and its task, and the full set of tests (handlers on
+  the real dispatcher, use cases on fakes, the repository against
+  PostgreSQL).
 - Users stored on their first private-chat update and kept fresh with
   minimal writes: a row is rewritten only when the Telegram profile changes
   or once per `USER_TOUCH_INTERVAL_SECONDS`.
