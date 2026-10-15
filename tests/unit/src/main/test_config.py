@@ -621,3 +621,19 @@ def test_an_email_port_out_of_range_fails_at_startup() -> None:
 def test_the_email_password_stays_out_of_the_config_repr() -> None:
     config = EmailConfig(EMAIL_PASSWORD="example-password-not-real")
     assert "example-password-not-real" not in repr(config)
+
+
+def test_llm_log_content_requires_debug() -> None:
+    """The logged exchange is what users typed; outside DEBUG, which turns
+    Sentry off, it would also reach Sentry as breadcrumbs of the next event."""
+    settings = get_settings()
+    logging_llm = settings.llm.model_copy(update={"LLM_LOG_CONTENT": True})
+    production = settings.app.model_copy(update={"DEBUG": False})
+    debugging = settings.app.model_copy(update={"DEBUG": True})
+
+    with pytest.raises(ValidationError) as raised:
+        Config.model_validate(_config(app=production, llm=logging_llm).model_dump())
+    assert "LLM_LOG_CONTENT=true requires DEBUG=true" in str(raised.value)
+
+    config = Config.model_validate(_config(app=debugging, llm=logging_llm).model_dump())
+    assert config.llm.LLM_LOG_CONTENT

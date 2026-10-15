@@ -391,7 +391,8 @@ class LLMConfig(BaseSettings):
     # /stats reports up to 30 days back, so a shorter retention would leave
     # its 30-day figures short.
     LLM_USAGE_RETENTION_DAYS: int = Field(90, ge=30)
-    # Logs prompts and answers in full: what users typed. Local debugging only.
+    # Logs prompts and answers in full: what users typed. Local debugging only;
+    # Config refuses it without DEBUG.
     LLM_LOG_CONTENT: bool = False
 
     model_config = SettingsConfigDict(extra="ignore", hide_input_in_errors=True)
@@ -578,6 +579,18 @@ class Config(BaseModel):
         # its version counter, which would fail every update that caches a user.
         if self.bot.USER_CACHE_TTL_SECONDS > self.cache.CACHE_VERSION_TTL:
             raise ValueError("USER_CACHE_TTL_SECONDS must not exceed CACHE_VERSION_TTL")
+        return self
+
+    @model_validator(mode="after")
+    def llm_content_is_logged_only_while_debugging(self) -> Self:
+        # Every INFO record becomes a Sentry breadcrumb, which would carry the
+        # logged prompts and answers out with the next event. DEBUG turns
+        # Sentry off, so only there may the exchange be logged.
+        if self.llm.LLM_LOG_CONTENT and not self.app.DEBUG:
+            raise ValueError(
+                "LLM_LOG_CONTENT=true requires DEBUG=true: the logged prompts and "
+                "answers would otherwise reach Sentry"
+            )
         return self
 
     @model_validator(mode="after")

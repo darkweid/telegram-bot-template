@@ -397,7 +397,9 @@ response = await llm.structured(
 - **Privacy.** Prompts and answers are never logged; each call logs one
   line with provider, model, purpose, tokens, cost and latency.
   `LLM_LOG_CONTENT=true` also logs the prompt and the answer (the error
-  class of a failed call) for local debugging; never set it in production.
+  class of a failed call) for local debugging. It requires `DEBUG=true`,
+  which turns Sentry off: the bot refuses to start otherwise, since every
+  logged line would reach Sentry as a breadcrumb.
 - **Limits.** A handler that calls a model carries
   `flags={"throttle": Throttle.LLM}` and gets the tighter
   `THROTTLE_LLM_LIMIT` per `THROTTLE_LLM_WINDOW_SECONDS`.
