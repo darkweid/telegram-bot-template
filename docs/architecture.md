@@ -113,15 +113,18 @@ Top level:
 - `src/core/email` - the mailer protocol, the SMTP mailer, the email service,
   the email tasks and the Jinja2 templates;
 - `src/core/http` - the HTTP client for third-party APIs;
-- `src/core/llm` - the LLM client contract, the provider adapters, the fallback
-  and the usage accounting;
-- `src/core/errors` - `CoreException` and the scrubbing helpers;
+- `src/core/llm` - the LLM client contract, the provider adapters, the fallback,
+  the usage accounting and the agent loop;
+- `src/core/errors` - `CoreException`, the scrubbing helpers and
+  `report_core_exception`;
 - `src/core/i18n` - `build_i18n`, `N_` and the locale middleware;
 - `src/core/telegram` - the error handler, the Bot API session middlewares,
-  roles, developer alerts, the update middlewares, FSM storage and
-  `safe_edit_text`;
+  roles, developer alerts, the update middlewares, FSM storage,
+  `safe_edit_text`, background work (`BackgroundRunner`) and the processing
+  status (`ProcessingStatus`);
 - `src/core/utils` - `get_utc_now`, the application clock;
-- `src/core/locales.py` - the supported locales, free of aiogram;
+- `src/core/locales.py` - the supported locales and the language a model
+  answers in for each, free of aiogram;
 - `src/core/update_context.py` - the ids of the update being handled, for logs
   and Sentry.
 
@@ -170,7 +173,8 @@ Two scopes:
   when the container closes. The engine and the sessionmaker, the Redis
   clients, the FSM storage, the `Bot` and its session, the cache, the
   limiters, the alert bot, the broker and the publisher, the HTTP, LLM, S3 and
-  email clients, and every repository (they are stateless).
+  email clients, the background runner, and every repository (they are
+  stateless).
 - **REQUEST**: one per update in the bot and one per task in the worker. The
   `AsyncSession`, the unit of work and the use cases.
 
@@ -192,7 +196,8 @@ The unit of work is provided with `cache=False`: one update can run several
 use cases over its one session (`UserMiddleware`'s, then the handler's), and a
 unit of work is single-use, so every use case receives a fresh one. Code that
 runs outside an update (the readiness probes, the startup check) opens its own
-scope with `async with container() as scope`.
+scope with `async with container() as scope`. Background work gets the root
+container from `BackgroundRunner` and opens its scopes the same way.
 
 A domain contributes a provider of its own (`NoteProvider` in `src/note/di.py`)
 that `build_container` lists next to the others.

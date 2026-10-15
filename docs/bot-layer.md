@@ -30,11 +30,15 @@ traceback and exits with status 1. An unreachable database and a refused
 `setWebhook` both end this way; the webhook message names the error class and
 Telegram's description, never the secret.
 
-On SIGTERM or SIGINT the bot stops taking updates, gives the ones in progress
-`SHUTDOWN_TIMEOUT_SECONDS` (20) to finish and cancels the rest, then closes the
-HTTP clients and the container. Keep the timeout below the compose
-`stop_grace_period` of the bot service (30 seconds), or Docker kills the process
-before it closes its connections.
+On SIGTERM or SIGINT the bot stops taking updates and gives the ones in
+progress `SHUTDOWN_TIMEOUT_SECONDS` (20) to finish. The background work they
+started (see [Background work](#background-work)) gets what is left of the
+same timeout; whatever still runs then is cancelled, and the bot waits for its
+cleanup: a cancelled model call is recorded and its status reads
+"Interrupted", each within 2 seconds. Then the bot closes the HTTP clients and
+the container. Docker waits `BOT_STOP_GRACE_PERIOD` (30s) before it kills the
+process; `make check-env` refuses a grace period shorter than the timeout
+plus 5 seconds.
 
 ## Middleware chain
 
@@ -224,6 +228,64 @@ is alerted once per `ALERT_COOLDOWN_SECONDS` (300), a fallback switch included,
 and a task id once in 24 hours however often it is redelivered. A failed
 delivery is logged and never raised into the code being reported on.
 `/test_alert` sends a test through the same path, past the cooldown.
+
+## Background work
+
+A handler that would hold its update for seconds (a model call, an agent run)
+starts background work instead and returns. The update ends at once, so the
+user's next updates do not wait behind its event-isolation lock, and the work
+answers by editing a status message. `/summarize` (`src/note/handlers.py`) is
+the example:
+
+```python
+status = await ProcessingStatus.send(
+    bot, message.chat.id, i18n=i18n, text=_("Summarizing your notes…")
+)
+background.start(
+    "note.summarize",
+    partial(
+        summarize_in_background,
+        status=status,
+        user_id=user.id,
+        locale=i18n.current_locale,
+    ),
+)
+```
+
+`BackgroundRunner` (`src/core/telegram/background.py`, APP scope, a handler
+takes it as `FromDishka[BackgroundRunner]`) runs each piece of work in a task
+of its own:
+
+- The work receives the root container and opens `async with container() as
+  scope` for each transaction or service it needs: the update's scope closes
+  with the update, long before the work ends.
+- The task copies the update's context: the update's ids stamp every log
+  line, and `_()` translates in the user's locale. It gets a flood-control
+  sleep budget of its own, since the update may have spent its budget.
+- The runner reports what the work raises the way the error handler would: a
+  `CoreException` at its own level (`report_core_exception`,
+  `src/core/errors/reporting.py`), a `TelegramForbiddenError` at info,
+  anything else as an error, to Sentry and to the developers with origin
+  `background <name>`. It never writes to the user: the status does.
+
+`ProcessingStatus` (`src/core/telegram/status.py`) is the message the user
+watches. The handler sends it ("⏳ Working on it…" or its own text) in the
+user's locale. The work enters `async with status:`, calls
+`status.update(text)` as it goes and ends with `await status.finish(answer)`.
+Inside the block the status keeps the typing indicator on and shows the
+latest update at most once a second; `update` never waits for Telegram, and
+a text overtaken before it was shown is dropped. `finish` waits out flood
+control and sends the answer as a new message when the user deleted the
+status. Leaving the block with an exception edits the status into the text
+the error handler would have sent; a cancel edits it into "Interrupted.
+Please try again."; leaving without `finish` is a bug and raises
+`RuntimeError`. Texts are HTML: put user values through `html.quote`.
+
+Calls whose result is about to be replaced anyway (the typing action, a
+progress edit) run under `without_flood_retry()`
+(`src/core/telegram/session.py`): `RetryAfterMiddleware` raises the flood
+wait at once instead of sleeping it out, and the status stays quiet for that
+long. The answer is retried as usual.
 
 ## Health
 

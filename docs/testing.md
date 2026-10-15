@@ -76,6 +76,12 @@ prompt, saved = running.session.sent(SendMessage)
   `await running.container.get(LLMClient)`. `SessionOnly` overrides only the
   two Telegram sessions and the catalogs, for a test of a production provider
   that `TestOverrides` would replace.
+- **Background work.** A handler that starts background work returns before
+  the work ends. `await running.settle()` waits for every task the runner
+  holds, and the tasks they start, and fails after 2 seconds.
+  `FakeLLMClient.hold()` returns a `Hold`: the next call made waits for
+  `hold.released` once it set `hold.reached`, so a test can look at the bot
+  while the model is thinking.
 - **Your providers** come after `i18n`. `UseCases` (`tests/helpers/user.py`)
   replaces the user use cases with mocks and stores a user with a chosen
   locale or ban. The container runs with strict validation: every overriding
@@ -114,7 +120,7 @@ touches the dev stack.
 | Name | Where | What it stands in for |
 |---|---|---|
 | `InMemoryRedis` | `tests/fakes/redis.py` | Redis, including every Lua script the code runs (rate limiter, cache, task claim). |
-| `FakeLLMClient` | `tests/fakes/llm.py` | `LLMClient`: `queue()` a response or an exception, `queue_structured()` an output model, read `calls`. |
+| `FakeLLMClient` | `tests/fakes/llm.py` | `LLMClient`: `queue()` a response or an exception, `queue_structured()` an output model, `hold()` the next call, read `calls`. |
 | `ScriptedLLMServer` | `tests/helpers/llm_server.py` | The provider's HTTP API, as an `httpx2` mock transport for the adapter tests (`tests/unit/src/core/llm/test_anthropic.py`, `test_openrouter.py`). |
 | `InMemoryS3Client` | `tests/fakes/s3.py` | The `S3Client` protocol over in-memory buckets. |
 | `FakeMailer` | `tests/fakes/email.py` | The SMTP mailer; records every send, or raises the `error` you set. |

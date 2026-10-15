@@ -18,7 +18,8 @@ you switch it on.
 ## Features
 
 - Polling and webhook modes; on SIGTERM the bot stops taking updates and gives
-  the ones in progress `SHUTDOWN_TIMEOUT_SECONDS` to finish.
+  the ones in progress, and the background work they started,
+  `SHUTDOWN_TIMEOUT_SECONDS` to finish.
   [Details](docs/bot-layer.md#modes)
 - `/start`, `/help` and `/language`, with a per-user language and a command
   menu published in every supported language. [Details](docs/i18n.md)
@@ -48,7 +49,7 @@ you switch it on.
   progress and a Stop button, resumed from the last checkpoint after a worker
   restart. [Details](docs/broadcast.md)
 - An LLM client for Anthropic and OpenRouter: structured output validated by
-  pydantic, tools, images, two model tiers, a fallback provider, and the cost
+  pydantic, tools and an agent loop over them, images, two model tiers, a fallback provider, and the cost
   of every call recorded and shown in `/stats`. Off until `LLM_PROVIDER` is set. [Details](docs/llm.md)
 - S3 storage and SMTP email with HTML templates, both off by default.
   [S3](docs/background-jobs.md#file-storage-s3), [email](docs/background-jobs.md#email)

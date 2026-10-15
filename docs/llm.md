@@ -110,13 +110,16 @@ response = await self._llm.structured(request, NoteSummary)
 - is registered with `flags={"throttle": Throttle.LLM}`, which gives it the
   tighter `THROTTLE_LLM_LIMIT` per `THROTTLE_LLM_WINDOW_SECONDS` instead of
   the default limit;
-- sends `ChatAction.TYPING` first, so the command does not look ignored while
-  the model works;
+- sends a status ("⏳ Summarizing your notes…") and runs the use case in
+  background work, which edits the status into the summary (see
+  [Background work](bot-layer.md#background-work)): the update ends before the
+  model answers;
 - passes every part of the answer through `html.quote`: the model's text is
   built from what the user typed, and an unescaped `<` would break the HTML
   reply;
-- catches nothing. An `LLMError` is a `CoreException`, and the common error
-  handler answers with its message: "busy" for `LLMRateLimited`, "took too
+- catches nothing. An `LLMError` is a `CoreException`; leaving the status
+  block with it edits the status into its message, the same text the error
+  handler of an update sends: "busy" for `LLMRateLimited`, "took too
   long" for `LLMTimeout`, "declined" for `LLMRefused`, "unavailable" for
   `LLMUnavailable`. A use case turns an error into a domain one where the
   user needs other words: `SummarizeNotesUseCase` raises
@@ -215,6 +218,67 @@ images, as the APIs require, and leave out empty text blocks.
 history unchanged, which `assistant_turn` does. An adapter drops the other
 provider's blocks.
 
+`run_agent` (see [Agent loop](#agent-loop)) runs this loop for you; write it
+by hand only when the loop does not fit.
+
+## Agent loop
+
+`run_agent` (`src/core/llm/agent.py`) asks the model, runs the tools it
+calls and sends the results back, until the model answers in text, a tool
+ends the run, the steps run out or the deadline passes:
+
+```python
+run = await run_agent(
+    llm,
+    LLMRequest(purpose=PANTRY_PURPOSE, system=system, messages=history),
+    [FindItem(repository), StoreItem(repository)],
+    max_steps=6,
+    deadline_seconds=40,
+    on_step=partial(show_step, status),
+)
+```
+
+A tool is any object with `name`, `description`, `args` (a pydantic model,
+under the rules of [Tools](#tools)) and `async run(args) -> ToolResult`.
+`ToolResult.content` goes back to the model; `payload` is the domain's own
+value, collected in `run.payloads` in call order; `ends_run=True` stops the
+loop after the current batch of calls; `wrote=True` says the tool changed
+stored data.
+
+- The base request carries the prompt, model, tier, effort and limits, and no
+  tools. They stay the same on every step, so the provider's prompt cache
+  keeps working. Tools in the base request, `max_steps` below 1, a deadline
+  that is not positive and two tools with one name raise `ValueError`.
+- The calls of one answer run in order and their results go back in one
+  message. Arguments that fail validation, a tool that does not exist and a
+  `CoreException` from a tool go back to the model as an error result (the
+  exception's English text with its params, never its `detail`), so the
+  model can correct itself. Any other exception from a tool or from
+  `on_step` ends the run and is raised as it is.
+- `deadline_seconds` bounds every model call and every tool, not `on_step`.
+  A tool the deadline cut counts as `wrote`, since it may have written; it
+  and the calls after it get a "not run" result. A cancel from outside, a stopping
+  bot, is raised as a cancel, never turned into a deadline.
+- `AgentRun.stop` is `answer`, `tool_ended`, `steps_exhausted` or `deadline`;
+  `final_text` is the last answer's text, `messages` the history with every
+  turn the loop added, the final answer included, `usage` the sum of every
+  call (`cost_usd` None when any cost was unknown). The caller decides what
+  the user hears: after `deadline` or `steps_exhausted` with `wrote`, part of
+  a change may be saved.
+- An `LLMError` ends the run and carries the run so far in
+  `error.agent_run`, so the caller can still tell whether a tool wrote.
+- `on_step(StepEvent(step, tool_names))` runs before the step's tools: show
+  progress there, with `ProcessingStatus.update`.
+
+Each run logs one line: purpose, steps, outcome, the tools called with their
+counts, whether a tool wrote, and the cost; never the prompt, the arguments or
+the answers.
+
+A run takes seconds: start it in [background work](bot-layer.md#background-work),
+never in the handler. `tests/unit/src/core/test_agent_in_background.py` is
+the worked example: the handler sends a status and starts the work, the work
+runs the loop, shows each step and edits the status into the answer.
+
 ## Images
 
 `ImageBlock(media_type, data)` goes into a user message next to text:
@@ -263,6 +327,12 @@ with what it cost. The row is written in a short transaction of its own, so
 a call made by a worker task is recorded too, and a failed write is logged
 and sent to Sentry without failing the call. There is no foreign key to
 `users`: deleting a user keeps what their calls cost.
+
+**Cancelled calls.** A call its caller cut short (the agent's deadline, a
+stopping bot) is a row too: status error, error class `Cancelled`, no tokens
+and no cost, whatever the provider billed; its log line reads `Cancelled`.
+The row gets 2 seconds to be written and is dropped after that, so a
+stopping bot is not held up.
 
 **Prices.** OpenRouter reports the cost of each call. For Anthropic the cost
 comes from the price table in `src/core/llm/pricing.py` (US dollars per
