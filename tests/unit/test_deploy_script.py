@@ -256,6 +256,10 @@ def test_a_failing_polling_bot_goes_back_to_the_previous_image(
         "--wait-timeout 120 bot"
     )
     assert not any("worker" in call for call in deploy.calls)
+    # .env and the local tag still name the failed image after the rollback.
+    assert "a later 'make run' or 'docker compose up -d' would start it again" in (
+        deploy.output
+    )
 
 
 @pytest.mark.parametrize(

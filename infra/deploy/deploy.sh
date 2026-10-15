@@ -10,9 +10,10 @@
 #               CI built and pushed (the CD path: a broken build fails in CI,
 #               not halfway through a deploy). Defaults to 0 when BOT_IMAGE is
 #               set and to 1 otherwise.
-#   PRUNE     - 1 (default) removes images and build cache unused for a week at
-#               the end; 0 keeps them. Skipped on anything but Linux, so a run
-#               on a developer's machine never empties its Docker.
+#   PRUNE     - 1 (default) removes, at the end, images created more than a
+#               week ago that no container uses, and build cache unused for a
+#               week; 0 keeps them. Skipped on anything but Linux, so a run on a
+#               developer's machine never empties its Docker.
 #
 # Order matters: the checks first, then data services, migrations, the bot,
 # then the worker and the scheduler. A failed check or migration aborts with
@@ -91,6 +92,9 @@ TASKS_HEALTHY_TIMEOUT_SECONDS=180
 # The worker has no healthcheck, so `--wait` passes the moment it runs; it
 # must still be running, never restarted, this long after.
 TASKS_SETTLE_SECONDS=15
+# The image the deploy was given stays in .env (BOT_IMAGE) or under the local
+# tag, so compose still names it after a rollback.
+STILL_NAMED="The failed image is still the one BOT_IMAGE or the local tag names, and a later 'make run' or 'docker compose up -d' would start it again: deploy the previous release again, or pin BOT_IMAGE to its tag, before either."
 ROLLBACK_FAILED="[deploy] rollback failed; the bot, worker or scheduler may still run the new image beside the previous one - check 'docker compose ps' and the logs, then deploy the previous image again"
 # How long the nginx workers retired by a reload get to finish the requests
 # they still carry to the old bot.
@@ -435,7 +439,7 @@ if [ "$BOT_MODE" = "webhook" ]; then
   fi
   echo "[deploy] rolling the bot"
   if ! roll_bot "$BOT_IMAGE"; then
-    die "[deploy] rolling the bot failed; the previous one keeps serving and the deploy failed"
+    die "[deploy] rolling the bot failed; the previous one keeps serving and the deploy failed. ${STILL_NAMED}"
   fi
 else
   # Left from webhook mode: nginx would keep ports 80 and 443 open with no bot
@@ -448,7 +452,7 @@ else
     fi
     echo "[deploy] the bot did not become healthy; going back to ${PREVIOUS_IMAGE}"
     if BOT_IMAGE="$PREVIOUS_IMAGE" replace_polling_bot; then
-      die "[deploy] rolled back; the deploy failed"
+      die "[deploy] rolled back; the deploy failed. ${STILL_NAMED}"
     fi
     die "$ROLLBACK_FAILED"
   fi
@@ -458,7 +462,10 @@ fi
 # while they restart, and two schedulers side by side would fire every cron
 # twice. When they never come up the whole stack goes back to the previous
 # image, so no two versions of the code keep running together. The migrations
-# stay applied: the previous code runs against the new schema.
+# stay applied: the previous code runs against the new schema. The new bot
+# already serves while the old worker still runs, and a task the old worker
+# does not know is lost: a new task is safe to enqueue once a worker that knows
+# it runs, so a release registers a task before the release that enqueues it.
 echo "[deploy] replacing the worker and the scheduler"
 if ! replace_worker_and_scheduler; then
   if [ -z "$PREVIOUS_IMAGE" ]; then
@@ -475,21 +482,24 @@ if ! replace_worker_and_scheduler; then
     BOT_IMAGE="$PREVIOUS_IMAGE" replace_polling_bot || rollback_failed=1
   fi
   if [ "$rollback_failed" = 0 ]; then
-    die "[deploy] rolled back; the deploy failed"
+    die "[deploy] rolled back; the deploy failed. ${STILL_NAMED}"
   fi
   die "$ROLLBACK_FAILED"
 fi
 
 # Every BUILD=0 deploy leaves a tagged sha- image behind, and plain
 # `image prune` only touches dangling ones, so the disk grows until a pull
-# fails. A week keeps enough recent tags to go back to. Only on the box: on a
-# developer's machine it would remove every other project's images too.
+# fails. `until` goes by when an image was created, not when it last ran:
+# this removes images created more than a week ago that no container uses,
+# which keeps the recent tags to go back to, and build cache unused for a
+# week. Only on the box: on a developer's machine it would remove every
+# other project's images too.
 if [ "$PRUNE" != "1" ]; then
   echo "[deploy] PRUNE=${PRUNE}: keeping unused images and build cache"
 elif [ "$(uname -s)" != "Linux" ]; then
   echo "[deploy] not on Linux: keeping unused images and build cache"
 else
-  echo "[deploy] pruning images and build cache unused for a week"
+  echo "[deploy] pruning unused images created more than a week ago and build cache unused for a week"
   docker image prune -af --filter "until=168h"
   docker builder prune -f --filter "until=168h"
 fi
