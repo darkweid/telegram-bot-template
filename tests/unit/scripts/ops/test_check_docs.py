@@ -324,3 +324,25 @@ def test_what_a_copy_command_creates_is_not_a_missing_file(tmp_path: Path) -> No
     assert check_paths(tmp_path, "README.md", gone, files) == [
         "README.md: infra/ansible/inventory/gone is not in the tree"
     ]
+
+
+def test_the_copy_rule_applies_to_each_command_of_a_line(tmp_path: Path) -> None:
+    """`mkdir -p src/new && cp a b` creates src/new; the cp does not hide it."""
+    _git_tree(tmp_path)
+    code = ["mkdir -p src/new && cp a b", "cp a b && ls src/gone2.py"]
+    assert check_paths(tmp_path, "README.md", code, FILES) == [
+        "README.md: src/gone2.py is not in the tree"
+    ]
+
+
+def test_make_after_environment_assignments_is_a_call() -> None:
+    code = ["FOO=1 make nope1", "A=1 B=two sudo make nope2", "FOO=1 make lint"]
+    assert check_make_calls("docs/x.md", code, {"lint"}) == [
+        "docs/x.md: make nope1 names no Makefile target",
+        "docs/x.md: make nope2 names no Makefile target",
+    ]
+
+
+def test_a_setext_heading_takes_the_whole_paragraph() -> None:
+    text = "Quick start\nfor a new bot\n==========\n"
+    assert heading_anchors(text) == {"quick-start-for-a-new-bot"}

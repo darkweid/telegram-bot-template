@@ -14,7 +14,7 @@ paths). A `::test` or `:12` suffix is not part of the path; a token with a
 placeholder or glob (`<name>`, `*`, `{a,b}`) is skipped, and so are lines that
 draw a tree. A root file named in backticks (`Makefile`, `.env.example`) is not
 checked. What `cp`, `mv`, `mkdir`, `touch` or `ln` creates (the last word of
-the line) is not looked for. Mermaid blocks are diagrams, not shell: no make
+its command) is not looked for. Mermaid blocks are diagrams, not shell: no make
 call or path in them is checked.
 git runs with a fixed argument list and no shell, hence the `nosec` marks."""
 
@@ -33,13 +33,14 @@ REFERENCE = re.compile(r"^ {0,3}\[[^\]]+\]:[ \t]*<?([^\s>]+)", re.MULTILINE)
 FENCE = re.compile(r"^\s*(`{3,}|~{3,})(.*)$")
 SETEXT = re.compile(r"^ {0,3}(?:=+|-+)\s*$")
 CREATES = re.compile(r"^\s*(?:sudo\s+)?(?:cp|mv|mkdir|touch|ln)\s.*\s(\S+)\s*$")
+COMMAND_SEPARATOR = re.compile(r"&&|\|\||;|\|")
 TREE_DRAWING = re.compile(r"[\u251c\u2514\u2502]")
 INLINE_CODE = re.compile(r"`([^`\n]+)`")
 HEADING = re.compile(r"^#{1,6}\s+(.+?)\s*#*\s*$")
 # A call starts a line or follows a shell operator; "make targets" inside a
 # sentence of a layout tree is not one.
 MAKE_CALL = re.compile(
-    r"(?:^|[$;&|(]|\brun:)\s*(?:(?:sudo|time|then|do|else|exec)\s+)*"
+    r"(?:^|[$;&|(]|\brun:)\s*(?:[A-Za-z_]\w*=\S*\s+)*(?:(?:sudo|time|then|do|else|exec)\s+)*"
     r"make\s+([^;&|#`\n]+)",
     re.MULTILINE,
 )
@@ -153,7 +154,10 @@ def heading_anchors(text: str) -> set[str]:
         if match:
             title = match.group(1)
         elif index and SETEXT.match(line) and _is_paragraph_line(lines[index - 1]):
-            title = lines[index - 1]
+            first = index - 1
+            while first and _is_paragraph_line(lines[first - 1]):
+                first -= 1
+            title = " ".join(part.strip() for part in lines[first:index])
         else:
             continue
         base = _slug(title)
@@ -245,6 +249,23 @@ def _ignored(root: Path, path: str) -> bool:
     )
 
 
+def _missing_paths(root: Path, path: str, command: str, files: set[str]) -> list[str]:
+    created = CREATES.match(command)
+    problems = []
+    for match in PATH_TOKEN.finditer(command):
+        candidate = match.group(0).rstrip(".")
+        if created and created.group(1).rstrip(".") == candidate:
+            continue
+        if any(mark in candidate for mark in "<>*{}"):
+            continue
+        beside = _normalise(posixpath.join(posixpath.dirname(path), candidate))
+        if _in_tree(candidate, files) or (beside and _in_tree(beside, files)):
+            continue
+        if not _ignored(root, candidate):
+            problems.append(f"{path}: {candidate} is not in the tree")
+    return problems
+
+
 def check_paths(
     root: Path, path: str, code: Iterable[str], files: set[str]
 ) -> list[str]:
@@ -253,18 +274,8 @@ def check_paths(
         for line in snippet.splitlines():
             if TREE_DRAWING.search(line):
                 continue
-            created = CREATES.match(line)
-            for match in PATH_TOKEN.finditer(line):
-                candidate = match.group(0).rstrip(".")
-                if created and created.group(1).rstrip(".") == candidate:
-                    continue
-                if any(mark in candidate for mark in "<>*{}"):
-                    continue
-                beside = _normalise(posixpath.join(posixpath.dirname(path), candidate))
-                if _in_tree(candidate, files) or (beside and _in_tree(beside, files)):
-                    continue
-                if not _ignored(root, candidate):
-                    problems.append(f"{path}: {candidate} is not in the tree")
+            for command in COMMAND_SEPARATOR.split(line):
+                problems += _missing_paths(root, path, command, files)
     return problems
 
 
