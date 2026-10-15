@@ -1,4 +1,5 @@
 from functools import lru_cache
+import json
 import os
 import re
 from typing import Annotated, Any, Literal, Self, assert_never
@@ -17,6 +18,7 @@ from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 from src.core.i18n import SUPPORTED_LOCALES
 from src.core.llm.enums import LLMProviderName
+from src.core.llm.pricing import ModelPrice
 
 
 class RedisConfig(BaseSettings):
@@ -380,6 +382,12 @@ class LLMConfig(BaseSettings):
     # times, so a caller waits up to timeout x (retries + 1) per provider.
     LLM_TIMEOUT_SECONDS: float = Field(60, gt=0, le=600)
     LLM_MAX_RETRIES: int = Field(1, ge=0, le=5)
+    # Replaces or adds entries of src/core/llm/pricing.py, as JSON:
+    # {"<model>": {"input_per_mtok": "3", "output_per_mtok": "15", ...}}.
+    # NoDecode: parsed below, so that an empty value means no overrides.
+    LLM_PRICING_OVERRIDES: Annotated[dict[str, ModelPrice], NoDecode] = Field(
+        default_factory=dict
+    )
     # /stats reports up to 30 days back, so a shorter retention would leave
     # its 30-day figures short.
     LLM_USAGE_RETENTION_DAYS: int = Field(90, ge=30)
@@ -393,6 +401,13 @@ class LLMConfig(BaseSettings):
     def empty_provider_is_none(cls, value: object) -> object:
         # `LLM_PROVIDER=` in .env means "off", not an invalid provider name.
         return None if value == "" else value
+
+    @field_validator("LLM_PRICING_OVERRIDES", mode="before")
+    @classmethod
+    def parse_pricing_overrides(cls, value: object) -> object:
+        if not isinstance(value, str):
+            return value
+        return json.loads(value) if value.strip() else {}
 
     @field_validator("OPENROUTER_APP_URL", "OPENROUTER_APP_TITLE")
     @classmethod

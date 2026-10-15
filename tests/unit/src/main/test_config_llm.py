@@ -1,3 +1,4 @@
+from decimal import Decimal
 from pathlib import Path
 
 from dotenv import dotenv_values
@@ -5,6 +6,7 @@ from pydantic import SecretStr, ValidationError
 import pytest
 
 from src.core.llm.enums import LLMProviderName
+from src.core.llm.pricing import PRICES, ModelPrice
 from src.main.config import Config, LLMConfig
 
 PROJECT_ROOT = Path(__file__).resolve().parents[4]
@@ -192,3 +194,85 @@ def test_numeric_settings_outside_their_range_stop_startup(
     30-day figures of /stats short."""
     with pytest.raises(ValidationError, match=setting):
         _llm(**{setting: value})
+
+
+SONNET_OVERRIDE = (
+    '{"claude-sonnet-5-5": {"input_per_mtok": "3", "output_per_mtok": "15",'
+    ' "cache_write_per_mtok": "3.75", "cache_read_per_mtok": "0.30"}}'
+)
+
+
+def test_pricing_overrides_are_read_from_json(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A price change must be applicable from .env alone."""
+    monkeypatch.setenv("LLM_PRICING_OVERRIDES", SONNET_OVERRIDE)
+
+    overrides = _llm().LLM_PRICING_OVERRIDES
+
+    assert overrides["claude-sonnet-5-5"].input_per_mtok == Decimal("3")
+    assert overrides["claude-sonnet-5-5"].cache_read_per_mtok == Decimal("0.30")
+
+
+def test_empty_pricing_overrides_mean_none(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`LLM_PRICING_OVERRIDES=` stands in .env.example; it must not stop
+    the bot as invalid JSON."""
+    monkeypatch.setenv("LLM_PRICING_OVERRIDES", "")
+
+    assert _llm().LLM_PRICING_OVERRIDES == {}
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "{not json",
+        '["claude-sonnet-5-5"]',
+        '{"claude-sonnet-5-5": {"input_per_mtok": "3"}}',
+        '{"claude-sonnet-5-5": {"input_per_mtok": "-3", "output_per_mtok": "15",'
+        ' "cache_write_per_mtok": "3.75", "cache_read_per_mtok": "0.30"}}',
+        '{"claude-sonnet-5-5": {"input_per_mtok": "3", "output_per_mtok": "15",'
+        ' "cache_write_per_mtok": "3.75", "cache_read_per_mtok": "0.30",'
+        ' "cache_write_1h_per_mtok": "6"}}',
+    ],
+    ids=["malformed", "not-an-object", "missing-rate", "negative", "unknown-rate"],
+)
+def test_a_bad_pricing_override_stops_startup(
+    monkeypatch: pytest.MonkeyPatch, value: str
+) -> None:
+    """A price typo found at startup costs a restart; found in /stats a
+    month later it costs a month of wrong figures."""
+    monkeypatch.setenv("LLM_PRICING_OVERRIDES", value)
+
+    with pytest.raises(ValidationError, match="LLM_PRICING_OVERRIDES"):
+        _llm()
+
+
+def test_the_documented_override_example_parses(tmp_path: Path) -> None:
+    """The commented example in .env.example is what a developer copies;
+    it must work once uncommented."""
+    example = next(
+        line.removeprefix("# ")
+        for line in (PROJECT_ROOT / ".env.example").read_text().splitlines()
+        if line.startswith("# LLM_PRICING_OVERRIDES=")
+    )
+    env_file = tmp_path / ".env"
+    env_file.write_text(example + "\n")
+
+    overrides = LLMConfig(_env_file=env_file).LLM_PRICING_OVERRIDES
+
+    assert set(overrides) == {"claude-opus-5-5"}
+    assert isinstance(overrides["claude-opus-5-5"], ModelPrice)
+
+
+def test_every_shipped_anthropic_model_has_a_price() -> None:
+    """A model without a price records its calls with no cost and /stats
+    shows nothing spent; the defaults a new bot starts with must be priced."""
+    example = dotenv_values(PROJECT_ROOT / ".env.example")
+    shipped = {
+        (LLMProviderName.ANTHROPIC, LLMConfig.model_fields["LLM_MODEL"].default),
+        (example["LLM_PROVIDER"], example["LLM_MODEL"]),
+        (example["LLM_FALLBACK_PROVIDER"], example["LLM_FALLBACK_MODEL"]),
+    }
+
+    anthropic_models = {model for provider, model in shipped if provider == "anthropic"}
+
+    assert anthropic_models
+    assert anthropic_models <= set(PRICES)
