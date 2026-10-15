@@ -6,8 +6,16 @@ A moved file or a renamed target breaks the documentation silently otherwise.
 It runs as a pre-commit hook, so CI's lint job runs it on every change, a
 documentation-only one included (the unit tests are skipped then).
 
-Paths are checked only under the top-level directories in REPOSITORY_PATH:
-a root file named in backticks (`Makefile`, `.env.example`) is not checked.
+Paths are looked for in inline code and in the lines of fenced blocks, as
+tokens that start with one of the top-level directories in REPOSITORY_PATH and
+are not glued to a longer word, a URL, a host or another absolute path
+(`ghcr.io/org/src/app`, `/etc/src/x`, `host:8000/docs/x` are not repository
+paths). A `::test` or `:12` suffix is not part of the path; a token with a
+placeholder or glob (`<name>`, `*`, `{a,b}`) is skipped, and so are lines that
+draw a tree. A root file named in backticks (`Makefile`, `.env.example`) is not
+checked. What `cp`, `mv`, `mkdir`, `touch` or `ln` creates (the last word of
+the line) is not looked for. Mermaid blocks are diagrams, not shell: no make
+call or path in them is checked.
 git runs with a fixed argument list and no shell, hence the `nosec` marks."""
 
 from collections.abc import Iterable
@@ -20,20 +28,34 @@ import subprocess  # nosec B404
 ROOT = Path(__file__).resolve().parents[2]
 # `](target)` rather than `[text](target)`: a badge nests one link in another,
 # and a title after the target is allowed.
-LINK = re.compile(r"\]\(([^)\s]+)(?:\s+\"[^\"]*\")?\)")
+LINK = re.compile(r"\]\(([^)\s]+)(?:\s+(?:\"[^\"]*\"|'[^']*'))?\)")
+REFERENCE = re.compile(r"^ {0,3}\[[^\]]+\]:[ \t]*<?([^\s>]+)", re.MULTILINE)
+FENCE = re.compile(r"^\s*(`{3,}|~{3,})(.*)$")
+SETEXT = re.compile(r"^ {0,3}(?:=+|-+)\s*$")
+CREATES = re.compile(r"^\s*(?:sudo\s+)?(?:cp|mv|mkdir|touch|ln)\s.*\s(\S+)\s*$")
+TREE_DRAWING = re.compile(r"[\u251c\u2514\u2502]")
 INLINE_CODE = re.compile(r"`([^`\n]+)`")
 HEADING = re.compile(r"^#{1,6}\s+(.+?)\s*#*\s*$")
 # A call starts a line or follows a shell operator; "make targets" inside a
 # sentence of a layout tree is not one.
 MAKE_CALL = re.compile(
-    r"(?:^\s*|\$\s+|&&\s*|;\s*|\|\s*|\(\s*)make\s+([^;&|#`\n]+)", re.MULTILINE
+    r"(?:^|[$;&|(]|\brun:)\s*(?:(?:sudo|time|then|do|else|exec)\s+)*"
+    r"make\s+([^;&|#`\n]+)",
+    re.MULTILINE,
 )
+# make options that take the next word as their value, which is no target.
+MAKE_VALUE_OPTIONS = {
+    "-C", "-f", "-I", "-o", "-W",
+    "--directory", "--file", "--makefile", "--include-dir", "--old-file",
+    "--what-if",
+}  # fmt: skip
 PLACEHOLDER = re.compile(r"<[^>]*>")
 TARGET = re.compile(r"[a-z][a-z0-9-]*")
 MAKEFILE_RULE = re.compile(r"^([A-Za-z0-9_-]+):(?!=)", re.MULTILINE)
-REPOSITORY_PATH = re.compile(
+PATH_TOKEN = re.compile(
+    r"(?<![\w:@~$%-])(?<![\w-]/)"
     r"(?:src|tests|infra|scripts|loggers|models|migrations|locales|docs|\.github)"
-    r"/[A-Za-z0-9_./-]*"
+    r"/[\w./<>*{}-]*"
 )
 EXTERNAL = ("http://", "https://", "mailto:")
 
@@ -56,26 +78,49 @@ def _in_tree(path: str, files: set[str]) -> bool:
     return path in files or any(file.startswith(path + "/") for file in files)
 
 
-def split_code(text: str) -> tuple[str, list[str]]:
-    """Prose with code removed, and the code: inline spans and fenced blocks."""
-    prose_lines: list[str] = []
-    code: list[str] = []
-    block: list[str] | None = None
+def _parse(text: str) -> tuple[list[str], list[tuple[str, str]], bool]:
+    """Prose lines, fenced blocks as (info string, body), and whether the last
+    block was never closed. A fence closes only on the same character, at least
+    as long as the one that opened it."""
+    prose: list[str] = []
+    blocks: list[tuple[str, str]] = []
+    opened: tuple[str, int, str, list[str]] | None = None
     for line in text.splitlines(keepends=True):
-        if line.lstrip().startswith(("```", "~~~")):
-            if block is None:
-                block = []
+        match = FENCE.match(line.rstrip("\r\n"))
+        if opened is None:
+            if match and not (match.group(1)[0] == "`" and "`" in match.group(2)):
+                opened = (match.group(1)[0], len(match.group(1)), match.group(2), [])
             else:
-                code.append("".join(block))
-                block = None
+                prose.append(line)
             continue
-        if block is not None:
-            block.append(line)
+        char, length, info, body = opened
+        if (
+            match
+            and match.group(1)[0] == char
+            and len(match.group(1)) >= length
+            and not match.group(2).strip()
+        ):
+            blocks.append((info.strip(), "".join(body)))
+            opened = None
         else:
-            prose_lines.append(line)
+            body.append(line)
+    if opened is not None:
+        blocks.append((opened[2].strip(), "".join(opened[3])))
+    return prose, blocks, opened is not None
+
+
+def has_unterminated_fence(text: str) -> bool:
+    return _parse(text)[2]
+
+
+def split_code(text: str) -> tuple[str, list[str]]:
+    """Prose with code removed, and the code: inline spans and fenced blocks,
+    mermaid diagrams excepted."""
+    prose_lines, blocks, _ = _parse(text)
     prose = "".join(prose_lines)
     spans = INLINE_CODE.findall(prose)
-    return INLINE_CODE.sub("", prose), spans + code
+    shell = [body for info, body in blocks if info.split(maxsplit=1)[:1] != ["mermaid"]]
+    return INLINE_CODE.sub("", prose), spans + shell
 
 
 def _slug(heading: str) -> str:
@@ -84,30 +129,34 @@ def _slug(heading: str) -> str:
     return text.replace(" ", "-")
 
 
-def _outside_fences(text: str) -> list[str]:
-    lines: list[str] = []
-    fenced = False
-    for line in text.splitlines():
-        if line.lstrip().startswith(("```", "~~~")):
-            fenced = not fenced
-            continue
-        if not fenced:
-            lines.append(line)
-    return lines
+def _is_paragraph_line(line: str) -> bool:
+    stripped = line.strip()
+    return (
+        bool(stripped)
+        and not HEADING.match(line)
+        and not SETEXT.match(line)
+        and not stripped.startswith(("-", "*", "+", ">", "|", "<"))
+    )
 
 
 def heading_anchors(text: str) -> set[str]:
     """GitHub's anchors: lowercase, punctuation dropped, spaces to dashes, and
     `-1`, `-2` for repeated headings. Inline code stays in a heading's text
     (a heading `make run` in backticks is #make-run), so only fenced blocks
-    are skipped."""
+    are skipped. A line of `===` or `---` under a paragraph line makes that
+    line a heading too."""
     anchors: set[str] = set()
     seen: dict[str, int] = {}
-    for line in _outside_fences(text):
+    lines = [line.rstrip("\r\n") for line in _parse(text)[0]]
+    for index, line in enumerate(lines):
         match = HEADING.match(line)
-        if not match:
+        if match:
+            title = match.group(1)
+        elif index and SETEXT.match(line) and _is_paragraph_line(lines[index - 1]):
+            title = lines[index - 1]
+        else:
             continue
-        base = _slug(match.group(1))
+        base = _slug(title)
         count = seen.get(base, 0)
         seen[base] = count + 1
         anchors.add(base if count == 0 else f"{base}-{count}")
@@ -116,7 +165,7 @@ def heading_anchors(text: str) -> set[str]:
 
 def check_links(root: Path, path: str, prose: str, files: set[str]) -> list[str]:
     problems = []
-    for target in LINK.findall(prose):
+    for target in LINK.findall(prose) + REFERENCE.findall(prose):
         if target.startswith(EXTERNAL):
             continue
         file_part, _, anchor = target.partition("#")
@@ -124,11 +173,17 @@ def check_links(root: Path, path: str, prose: str, files: set[str]) -> list[str]
             relative = _normalise(posixpath.join(posixpath.dirname(path), file_part))
         else:
             relative = path
+        if relative == "":
+            continue  # the repository root
         if relative is None or not _in_tree(relative, files):
             problems.append(f"{path}: link to {target}, which is not in the tree")
             continue
         if anchor and relative.endswith(".md"):
-            text = (root / relative).read_text(encoding="utf-8")
+            try:
+                text = (root / relative).read_text(encoding="utf-8")
+            except FileNotFoundError:  # listed by git, deleted from the disk
+                problems.append(f"{path}: link to {target}, which is not in the tree")
+                continue
             if anchor not in heading_anchors(text):
                 problems.append(f"{path}: link to {target}, which has no such heading")
     return problems
@@ -159,7 +214,14 @@ def check_make_calls(path: str, code: Iterable[str], targets: set[str]) -> list[
                 words = shlex.split(arguments)
             except ValueError:
                 words = arguments.split()
+            skip_next = False
             for word in words:
+                if skip_next:
+                    skip_next = False
+                    continue
+                if word in MAKE_VALUE_OPTIONS:
+                    skip_next = True
+                    continue
                 if "=" in word or not TARGET.fullmatch(word):
                     continue
                 if word not in targets:
@@ -170,13 +232,16 @@ def check_make_calls(path: str, code: Iterable[str], targets: set[str]) -> list[
 def _ignored(root: Path, path: str) -> bool:
     """A path git ignores is something the docs tell you to create (a
     virtualenv, downloaded collections), not a file that went missing."""
-    return (
+    # A pattern such as `.venv/` matches a directory only: a path that does
+    # not exist is tried both ways.
+    return any(
         subprocess.run(  # nosec B603 B607
-            ["git", "check-ignore", "-q", "--no-index", "--", path],
+            ["git", "check-ignore", "-q", "--no-index", "--", variant],
             cwd=root,
             check=False,
         ).returncode
         == 0
+        for variant in (path, path.rstrip("/") + "/")
     )
 
 
@@ -185,14 +250,21 @@ def check_paths(
 ) -> list[str]:
     problems = []
     for snippet in code:
-        candidate = snippet.strip()
-        if not REPOSITORY_PATH.fullmatch(candidate):
-            continue
-        beside = _normalise(posixpath.join(posixpath.dirname(path), candidate))
-        if _in_tree(candidate, files) or (beside and _in_tree(beside, files)):
-            continue
-        if not _ignored(root, candidate):
-            problems.append(f"{path}: {candidate} is not in the tree")
+        for line in snippet.splitlines():
+            if TREE_DRAWING.search(line):
+                continue
+            created = CREATES.match(line)
+            for match in PATH_TOKEN.finditer(line):
+                candidate = match.group(0).rstrip(".")
+                if created and created.group(1).rstrip(".") == candidate:
+                    continue
+                if any(mark in candidate for mark in "<>*{}"):
+                    continue
+                beside = _normalise(posixpath.join(posixpath.dirname(path), candidate))
+                if _in_tree(candidate, files) or (beside and _in_tree(beside, files)):
+                    continue
+                if not _ignored(root, candidate):
+                    problems.append(f"{path}: {candidate} is not in the tree")
     return problems
 
 
@@ -208,10 +280,13 @@ def check(root: Path) -> list[str]:
     for path in sorted(file for file in files if file.endswith(".md")):
         if not (root / path).is_file():
             continue
-        prose, code = split_code((root / path).read_text(encoding="utf-8"))
+        text = (root / path).read_text(encoding="utf-8")
+        prose, code = split_code(text)
         problems += check_links(root, path, prose, files)
         problems += check_make_calls(path, code, targets)
         problems += check_paths(root, path, code, files)
+        if has_unterminated_fence(text):
+            problems.append(f"{path}: a fenced code block is never closed")
     return problems
 
 
