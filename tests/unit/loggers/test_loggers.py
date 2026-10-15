@@ -209,3 +209,38 @@ def test_task_arguments_stay_out_of_debug_logs(
         root.setLevel(saved_level)
         for name, level in saved_levels.items():
             logging.getLogger(name).setLevel(level)
+
+
+def test_llm_prompts_stay_out_of_debug_logs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The LLM SDKs log their request options, prompt included, at DEBUG;
+    LOG_LEVEL=DEBUG must not print what a user wrote."""
+    root = logging.getLogger()
+    saved_handlers, saved_level = root.handlers[:], root.level
+    saved_levels = {
+        name: logging.getLogger(name).level for name in loggers.ARGUMENT_LOGGING_LOGGERS
+    }
+    seen: list[str] = []
+
+    class _Capture(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            seen.append(record.getMessage())
+
+    monkeypatch.setattr(loggers, "log_level", logging.DEBUG)
+    try:
+        root.handlers.clear()
+        loggers.setup_logging()
+        root.addHandler(_Capture())
+        for name in (
+            "anthropic._base_client",
+            "openai._base_client",
+            "httpx2",
+        ):
+            logging.getLogger(name).debug("Request options: my diary entry")
+        assert seen == []
+    finally:
+        root.handlers[:] = saved_handlers
+        root.setLevel(saved_level)
+        for name, level in saved_levels.items():
+            logging.getLogger(name).setLevel(level)
