@@ -20,6 +20,7 @@ forbidden_modules =
     src.developer
     src.system
     src.broadcast
+    src.note
     models
 
 [importlinter:contract:handlers-skip-repositories]
@@ -30,9 +31,12 @@ source_modules =
     src.admin.handlers
     src.developer.handlers
     src.broadcast.handlers
+    src.note.handlers
 forbidden_modules =
     src.user.repositories
+    src.core.llm.repository
     src.broadcast.repositories
+    src.note.repositories
     src.system.repositories
     src.core.outbox.repositories
     sqlalchemy

@@ -1,6 +1,7 @@
 """Telling developers that something broke, in Telegram."""
 
 import asyncio
+from collections.abc import Coroutine
 from dataclasses import dataclass
 import hashlib
 from pathlib import Path
@@ -164,15 +165,23 @@ class DeveloperAlerter:
                     "Alert not delivered to %s: %s", chat_id, type(error).__name__
                 )
 
+    def alert_error_soon(self, alert: Alert) -> None:
+        """`alert_error` in a background task, for a caller that goes on
+        working and must not wait out the alert's flood control."""
+        self._in_background(self.alert_error(alert))
+
     def notify(self, message: str) -> None:
         """DegradationNotifier: called from synchronous code, so the message
         leaves in a background task."""
+        self._in_background(self.send(html.quote(message)))
+
+    def _in_background(self, sending: Coroutine[None, None, None]) -> None:
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
+            sending.close()
             logger.warning("Alert not sent: no running event loop")
             return
-        sending = self.send(html.quote(message))
         try:
             task = loop.create_task(sending)
         except Exception as error:

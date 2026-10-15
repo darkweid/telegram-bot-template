@@ -1,6 +1,7 @@
 """Background tasks that keep the outbox moving and small."""
 
 from datetime import timedelta
+from functools import partial
 from uuid import UUID
 
 from dishka import FromDishka
@@ -9,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from taskiq import AsyncBroker
 
 from loggers import get_logger
+from src.core.database.batches import delete_in_batches
 from src.core.database.uow import SQLAlchemyUnitOfWork
 from src.core.outbox.publisher import (
     UnregisteredTaskError,
@@ -125,21 +127,7 @@ async def sweep_outbox(
 
 async def purge_outbox(session: FromDishka[AsyncSession]) -> str:
     """Delete published rows older than the retention window, in batches of
-    PURGE_BATCH_SIZE.
-
-    Each batch commits in a unit of work of its own: in one transaction a
-    failure on a late batch would roll back every earlier one, and a large
-    backlog would hold its locks for the whole run.
-    """
-    cutoff = get_utc_now() - RETENTION
-    deleted = 0
-    while True:
-        async with SQLAlchemyUnitOfWork(session) as uow:
-            batch = await _outbox.purge_published(
-                uow.session, cutoff, limit=PURGE_BATCH_SIZE
-            )
-            await uow.commit()
-        deleted += batch
-        if batch < PURGE_BATCH_SIZE:
-            break
+    PURGE_BATCH_SIZE (see `delete_in_batches`)."""
+    purge_batch = partial(_outbox.purge_published, cutoff=get_utc_now() - RETENTION)
+    deleted = await delete_in_batches(session, purge_batch, PURGE_BATCH_SIZE)
     return f"Deleted {deleted} published outbox messages."

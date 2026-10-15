@@ -2,6 +2,7 @@ from pathlib import Path
 
 from dotenv import dotenv_values
 from pydantic import ValidationError
+from pydantic_settings import BaseSettings
 import pytest
 from redis.connection import parse_url
 from sqlalchemy.engine import make_url
@@ -12,9 +13,11 @@ from src.main.config import (
     BroadcastConfig,
     CacheConfig,
     Config,
+    EmailConfig,
     HttpConfig,
     PostgresConfig,
     RedisConfig,
+    S3Config,
     WebhookConfig,
     WebServerConfig,
     get_settings,
@@ -539,3 +542,141 @@ def test_broadcast_defaults_stay_under_the_bot_api_limit() -> None:
 def test_broadcast_settings_out_of_range_are_refused(values: dict[str, float]) -> None:
     with pytest.raises(ValidationError):
         BroadcastConfig(**values)
+
+
+def test_s3_is_off_and_needs_no_keys_by_default() -> None:
+    """A bot without file storage must start with no S3_* keys in its .env."""
+    config = S3Config()
+    assert config.S3_ENABLED is False
+    assert config.S3_BUCKET_NAME == ""
+
+
+def test_enabled_s3_names_every_missing_key() -> None:
+    """One startup error listing all missing keys beats fixing them one restart
+    at a time."""
+    with pytest.raises(ValidationError) as raised:
+        S3Config(S3_ENABLED=True, S3_BUCKET_NAME="bucket")
+    message = str(raised.value)
+    assert "S3_ACCESS_KEY_ID" in message
+    assert "S3_SECRET_ACCESS_KEY" in message
+    assert "S3_REGION_NAME" in message
+    assert "S3_BUCKET_NAME" not in message
+
+
+def test_blank_optional_s3_values_mean_unset() -> None:
+    """`.env.example` leaves them blank; botocore would read an empty endpoint
+    as a URL and an empty CA bundle as a path."""
+    config = S3Config(S3_ENDPOINT_URL="", S3_ADDRESSING_STYLE=" ", S3_CA_BUNDLE="")
+    assert config.S3_ENDPOINT_URL is None
+    assert config.S3_ADDRESSING_STYLE is None
+    assert config.S3_CA_BUNDLE is None
+
+
+def test_an_unknown_retry_mode_fails_at_startup() -> None:
+    """botocore would refuse it on the first request, long after the deploy."""
+    with pytest.raises(ValidationError):
+        S3Config(S3_RETRY_MODE="fast")
+
+
+def test_the_s3_secret_stays_out_of_the_config_repr() -> None:
+    """A config dumped into a log or an error report must not hand out the
+    bucket's secret key."""
+    config = S3Config(S3_SECRET_ACCESS_KEY="example-secret-not-real")
+    assert "example-secret-not-real" not in repr(config)
+
+
+def test_email_is_off_and_needs_no_settings_by_default() -> None:
+    """A bot that sends no email must start with no EMAIL_* keys in its .env."""
+    config = EmailConfig()
+    assert config.EMAIL_ENABLED is False
+    assert config.EMAIL_SERVER == ""
+
+
+def test_enabled_email_names_every_missing_setting() -> None:
+    with pytest.raises(ValidationError) as raised:
+        EmailConfig(EMAIL_ENABLED=True)
+    message = str(raised.value)
+    assert "EMAIL_SERVER" in message
+    assert "EMAIL_USER" in message
+    assert "EMAIL_FROM_NAME" in message
+
+
+def test_implicit_tls_and_starttls_are_exclusive() -> None:
+    """aiosmtplib refuses the pair on the first send, long after the deploy."""
+    with pytest.raises(ValidationError, match="EMAIL_USE_TLS"):
+        EmailConfig(
+            EMAIL_ENABLED=True,
+            EMAIL_SERVER="smtp.example.com",
+            EMAIL_USER="bot@example.com",
+            EMAIL_FROM_NAME="Example Bot",
+            EMAIL_USE_TLS=True,
+            EMAIL_STARTTLS=True,
+        )
+
+
+def test_an_email_port_out_of_range_fails_at_startup() -> None:
+    with pytest.raises(ValidationError):
+        EmailConfig(EMAIL_PORT=70000)
+
+
+def test_the_email_password_stays_out_of_the_config_repr() -> None:
+    config = EmailConfig(EMAIL_PASSWORD="example-password-not-real")
+    assert "example-password-not-real" not in repr(config)
+
+
+def test_llm_log_content_requires_debug() -> None:
+    """The logged exchange is what users typed; outside DEBUG, which turns
+    Sentry off, it would also reach Sentry as breadcrumbs of the next event."""
+    settings = get_settings()
+    logging_llm = settings.llm.model_copy(update={"LLM_LOG_CONTENT": True})
+    production = settings.app.model_copy(update={"DEBUG": False})
+    debugging = settings.app.model_copy(update={"DEBUG": True})
+
+    with pytest.raises(ValidationError) as raised:
+        Config.model_validate(_config(app=production, llm=logging_llm).model_dump())
+    assert "LLM_LOG_CONTENT=true requires DEBUG=true" in str(raised.value)
+
+    config = Config.model_validate(_config(app=debugging, llm=logging_llm).model_dump())
+    assert config.llm.LLM_LOG_CONTENT
+
+
+LEAKED_SECRET = "hunter2-not-real"
+# A field whose name holds one of these carries a credential.
+_SECRET_FIELD_MARKERS = ("PASSWORD", "SECRET", "TOKEN", "API_KEY", "DSN")
+
+
+@pytest.mark.parametrize(
+    ("section", "values"),
+    [
+        (EmailConfig, {"EMAIL_ENABLED": True, "EMAIL_PASSWORD": LEAKED_SECRET}),
+        (RedisConfig, {"REDIS_PASSWORD": LEAKED_SECRET}),
+        (PostgresConfig, {"POSTGRES_PASSWORD": LEAKED_SECRET}),
+    ],
+    ids=["email", "redis", "postgres"],
+)
+def test_a_secret_never_appears_in_a_validation_error(
+    section: type[BaseSettings], values: dict[str, object]
+) -> None:
+    """A model-level or missing-field error prints the section's whole input;
+    get_settings() fails before the startup error handling, so the traceback
+    with the password would land in the container logs."""
+    with pytest.raises(ValidationError) as raised:
+        section(_env_file=None, **values)  # type: ignore[call-arg]
+
+    assert LEAKED_SECRET not in str(raised.value)
+
+
+def test_every_section_holding_a_secret_hides_its_input_in_errors() -> None:
+    """A section that gains a credential later must not be the one that
+    prints it; the guard follows the field names, not a list kept by hand."""
+    for name, field in Config.model_fields.items():
+        section = field.annotation
+        assert isinstance(section, type) and issubclass(section, BaseSettings)
+        holds_secret = any(
+            marker in key
+            for key in section.model_fields
+            for marker in _SECRET_FIELD_MARKERS
+        )
+        if holds_secret:
+            assert section.model_config.get("hide_input_in_errors"), name
+    assert Config.model_config.get("hide_input_in_errors")

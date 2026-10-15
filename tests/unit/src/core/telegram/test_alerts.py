@@ -265,6 +265,19 @@ async def test_a_degradation_notice_is_sent_in_the_background() -> None:
     ]
 
 
+async def test_an_error_alert_can_leave_in_the_background() -> None:
+    """A caller that goes on serving the user hands the alert over and is not
+    held up by its delivery; the cooldown still applies."""
+    session = FakeTelegramSession()
+    alerter = _alerter(session)
+    alerter.alert_error_soon(Alert(_failure(), origin="llm anthropic"))
+    alerter.alert_error_soon(Alert(_failure(), origin="llm anthropic"))
+    assert session.sent(SendMessage) == []
+    await alerter.drain()
+    [alert] = session.sent(SendMessage)
+    assert "llm anthropic" in alert.text
+
+
 def test_notify_outside_a_running_loop_is_only_logged() -> None:
     session = FakeTelegramSession()
     with captured_logs("src.core.telegram.alerts") as records:

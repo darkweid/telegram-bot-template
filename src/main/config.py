@@ -1,7 +1,8 @@
 from functools import lru_cache
+import json
 import os
 import re
-from typing import Annotated, Literal, Self
+from typing import Annotated, Any, Literal, Self, assert_never
 from urllib.parse import quote, urlsplit
 
 from pydantic import (
@@ -9,12 +10,15 @@ from pydantic import (
     ConfigDict,
     Field,
     SecretStr,
+    ValidationInfo,
     field_validator,
     model_validator,
 )
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 from src.core.i18n import SUPPORTED_LOCALES
+from src.core.llm.enums import LLMProviderName
+from src.core.llm.pricing import ModelPrice
 
 
 class RedisConfig(BaseSettings):
@@ -25,7 +29,7 @@ class RedisConfig(BaseSettings):
     REDIS_FSM_DATABASE: int = Field(2, ge=0)
     REDIS_TASKS_DATABASE: int = Field(1, ge=0)
 
-    model_config = SettingsConfigDict(extra="ignore")
+    model_config = SettingsConfigDict(extra="ignore", hide_input_in_errors=True)
 
     @model_validator(mode="after")
     def each_role_has_its_own_database(self) -> Self:
@@ -97,7 +101,7 @@ class SentryConfig(BaseSettings):
     SENTRY_ENV: str = "development"
     SENTRY_ENABLED: bool = False
 
-    model_config = SettingsConfigDict(extra="ignore")
+    model_config = SettingsConfigDict(extra="ignore", hide_input_in_errors=True)
 
 
 class PostgresConfig(BaseSettings):
@@ -119,7 +123,7 @@ class PostgresConfig(BaseSettings):
     DB_STATEMENT_TIMEOUT_SECONDS: float = Field(30, ge=0)
     DB_IDLE_IN_TRANSACTION_TIMEOUT_SECONDS: float = Field(60, ge=0)
 
-    model_config = SettingsConfigDict(extra="ignore")
+    model_config = SettingsConfigDict(extra="ignore", hide_input_in_errors=True)
 
     @field_validator("POSTGRES_DB")
     @classmethod
@@ -339,6 +343,13 @@ class WebhookConfig(BaseSettings):
         return self.WEBHOOK_BASE_URL.rstrip("/") + self.WEBHOOK_PATH
 
 
+def _printable_header(value: str, setting: str) -> str:
+    # A control character in a header value is a request-splitting vector.
+    if any(not " " <= character <= "~" for character in value):
+        raise ValueError(f"{setting} must be printable ASCII")
+    return value.strip()
+
+
 class HttpConfig(BaseSettings):
     # Sent on every outgoing request (src/core/http). Blank derives
     # "<project-name>/<VERSION>" from PROJECT_NAME and VERSION. Many APIs
@@ -350,10 +361,198 @@ class HttpConfig(BaseSettings):
     @field_validator("HTTP_USER_AGENT")
     @classmethod
     def reject_unprintable(cls, value: str) -> str:
-        # A control character in a header is a request-splitting vector.
-        if any(not " " <= character <= "~" for character in value):
-            raise ValueError("HTTP_USER_AGENT must be printable ASCII")
-        return value.strip()
+        return _printable_header(value, "HTTP_USER_AGENT")
+
+
+class LLMConfig(BaseSettings):
+    # Empty turns the LLM layer off: the bot starts without any key and every
+    # call raises LLMNotConfigured. Set, it requires that provider's key.
+    LLM_PROVIDER: LLMProviderName | None = None
+    # Anthropic ids as they are; OpenRouter ids are "<vendor>/<model>".
+    LLM_MODEL: str = "claude-sonnet-5-5"
+    # Takes over when the primary is unavailable, times out or is rate limited.
+    LLM_FALLBACK_PROVIDER: LLMProviderName | None = None
+    LLM_FALLBACK_MODEL: str = ""
+    ANTHROPIC_API_KEY: SecretStr = SecretStr("")
+    OPENROUTER_API_KEY: SecretStr = SecretStr("")
+    # OpenRouter's attribution headers (HTTP-Referer, X-Title); blank sends none.
+    OPENROUTER_APP_URL: str = Field("", max_length=256)
+    OPENROUTER_APP_TITLE: str = Field("", max_length=256)
+    # Per attempt; the SDK retries 429, 5xx and network errors LLM_MAX_RETRIES
+    # times, so a caller waits up to timeout x (retries + 1) per provider.
+    LLM_TIMEOUT_SECONDS: float = Field(60, gt=0, le=600)
+    LLM_MAX_RETRIES: int = Field(1, ge=0, le=5)
+    # Replaces or adds entries of src/core/llm/pricing.py, as JSON:
+    # {"<model>": {"input_per_mtok": "3", "output_per_mtok": "15", ...}}.
+    # NoDecode: parsed below, so that an empty value means no overrides.
+    LLM_PRICING_OVERRIDES: Annotated[dict[str, ModelPrice], NoDecode] = Field(
+        default_factory=dict
+    )
+    # /stats reports up to 30 days back, so a shorter retention would leave
+    # its 30-day figures short.
+    LLM_USAGE_RETENTION_DAYS: int = Field(90, ge=30)
+    # Logs prompts and answers in full: what users typed. Local debugging only;
+    # Config refuses it without DEBUG.
+    LLM_LOG_CONTENT: bool = False
+
+    model_config = SettingsConfigDict(extra="ignore", hide_input_in_errors=True)
+
+    @field_validator("LLM_PROVIDER", "LLM_FALLBACK_PROVIDER", mode="before")
+    @classmethod
+    def empty_provider_is_none(cls, value: object) -> object:
+        # `LLM_PROVIDER=` in .env means "off", not an invalid provider name.
+        return None if value == "" else value
+
+    @field_validator("LLM_PRICING_OVERRIDES", mode="before")
+    @classmethod
+    def parse_pricing_overrides(cls, value: object) -> object:
+        if not isinstance(value, str):
+            return value
+        return json.loads(value) if value.strip() else {}
+
+    @field_validator("OPENROUTER_APP_URL", "OPENROUTER_APP_TITLE")
+    @classmethod
+    def reject_unprintable(cls, value: str, info: ValidationInfo) -> str:
+        # Both go out as HTTP header values, which are ASCII.
+        return _printable_header(value, str(info.field_name))
+
+    @model_validator(mode="after")
+    def require_provider_settings(self) -> Self:
+        """A configured provider must be callable at startup, not fail every
+        call later: its key, a model id of its shape, and a fallback that does
+        not share the primary's outage."""
+        if self.LLM_PROVIDER is None:
+            if self.LLM_FALLBACK_PROVIDER is not None:
+                raise ValueError(
+                    "LLM_FALLBACK_PROVIDER is set but LLM_PROVIDER is empty: "
+                    "there is nothing to fall back from"
+                )
+            return self
+        self._require_provider(self.LLM_PROVIDER, self.LLM_MODEL, "LLM_MODEL")
+        if self.LLM_FALLBACK_PROVIDER is None:
+            return self
+        if self.LLM_FALLBACK_PROVIDER == self.LLM_PROVIDER:
+            raise ValueError(
+                "LLM_FALLBACK_PROVIDER must differ from LLM_PROVIDER: one "
+                "provider's outage would stop both"
+            )
+        self._require_provider(
+            self.LLM_FALLBACK_PROVIDER, self.LLM_FALLBACK_MODEL, "LLM_FALLBACK_MODEL"
+        )
+        return self
+
+    def _require_provider(
+        self, provider: LLMProviderName, model: str, model_setting: str
+    ) -> None:
+        match provider:
+            case LLMProviderName.ANTHROPIC:
+                key_setting, key = "ANTHROPIC_API_KEY", self.ANTHROPIC_API_KEY
+            case LLMProviderName.OPENROUTER:
+                key_setting, key = "OPENROUTER_API_KEY", self.OPENROUTER_API_KEY
+            case _:
+                assert_never(provider)
+        if not key.get_secret_value():
+            raise ValueError(f"{key_setting} is required when {provider} is used")
+        if not model:
+            raise ValueError(f"{model_setting} is required when {provider} is used")
+        vendor_prefixed = "/" in model
+        if provider is LLMProviderName.OPENROUTER and not vendor_prefixed:
+            raise ValueError(
+                f"{model_setting}={model}: OpenRouter model ids are "
+                "<vendor>/<model>, e.g. google/gemini-3.8-flash"
+            )
+        if provider is LLMProviderName.ANTHROPIC and vendor_prefixed:
+            raise ValueError(
+                f"{model_setting}={model}: Anthropic model ids carry no vendor "
+                "prefix, e.g. claude-sonnet-5-5"
+            )
+
+
+class S3Config(BaseSettings):
+    # Off: the container holds a client that refuses every call with a clear
+    # error, so a bot that stores no files needs none of the keys below.
+    S3_ENABLED: bool = False
+    S3_BUCKET_NAME: str = ""
+    S3_ACCESS_KEY_ID: str = ""
+    S3_SECRET_ACCESS_KEY: SecretStr = SecretStr("")
+    S3_REGION_NAME: str = ""
+    S3_PRE_SIGNED_URL_SECONDS: int = Field(300, gt=0)
+    S3_ENDPOINT_URL: str | None = None
+    S3_ADDRESSING_STYLE: Literal["auto", "path", "virtual"] | None = None
+    S3_SIGNATURE_VERSION: str = Field("s3v4", min_length=1)
+    S3_VERIFY_SSL: bool = True
+    S3_CA_BUNDLE: str | None = None
+    S3_TREAT_ACCESS_DENIED_AS_MISSING: bool = False
+    S3_CONNECT_TIMEOUT_SECONDS: int = Field(5, gt=0)
+    S3_READ_TIMEOUT_SECONDS: int = Field(120, gt=0)
+    S3_RETRY_MAX_ATTEMPTS: int = Field(3, gt=0)
+    S3_RETRY_MODE: Literal["legacy", "standard", "adaptive"] = "standard"
+    # 20 MiB: the most the Bot API lets a bot download with getFile.
+    S3_MAX_UPLOAD_SIZE_BYTES: int = Field(20 * 1024 * 1024, gt=0)
+
+    model_config = SettingsConfigDict(extra="ignore", hide_input_in_errors=True)
+
+    @field_validator(
+        "S3_ENDPOINT_URL", "S3_ADDRESSING_STYLE", "S3_CA_BUNDLE", mode="before"
+    )
+    @classmethod
+    def blank_means_unset(cls, value: Any) -> Any:
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
+
+    @model_validator(mode="after")
+    def require_credentials_when_enabled(self) -> Self:
+        if not self.S3_ENABLED:
+            return self
+        values = {
+            "S3_BUCKET_NAME": self.S3_BUCKET_NAME,
+            "S3_ACCESS_KEY_ID": self.S3_ACCESS_KEY_ID,
+            "S3_SECRET_ACCESS_KEY": self.S3_SECRET_ACCESS_KEY.get_secret_value(),
+            "S3_REGION_NAME": self.S3_REGION_NAME,
+        }
+        missing = [name for name, value in values.items() if not value]
+        if missing:
+            raise ValueError(f"S3_ENABLED=true requires: {', '.join(missing)}")
+        return self
+
+
+class EmailConfig(BaseSettings):
+    # Off: the mailer refuses every send with a clear error and EmailService
+    # refuses to queue one, so a bot that sends no email needs none of these.
+    EMAIL_ENABLED: bool = False
+    EMAIL_SERVER: str = ""
+    EMAIL_PORT: int = Field(587, ge=1, le=65535)
+    # The login and the From address.
+    EMAIL_USER: str = ""
+    # Empty skips authentication: a local catcher such as Mailpit.
+    EMAIL_PASSWORD: SecretStr = SecretStr("")
+    # Display name in From and in the footer of every template.
+    EMAIL_FROM_NAME: str = ""
+    EMAIL_USE_TLS: bool = False
+    EMAIL_STARTTLS: bool = True
+    EMAIL_VALIDATE_CERTS: bool = True
+
+    model_config = SettingsConfigDict(extra="ignore", hide_input_in_errors=True)
+
+    @model_validator(mode="after")
+    def check_enabled_settings(self) -> Self:
+        if not self.EMAIL_ENABLED:
+            return self
+        values = {
+            "EMAIL_SERVER": self.EMAIL_SERVER,
+            "EMAIL_USER": self.EMAIL_USER,
+            "EMAIL_FROM_NAME": self.EMAIL_FROM_NAME,
+        }
+        missing = [name for name, value in values.items() if not value]
+        if missing:
+            raise ValueError(f"EMAIL_ENABLED=true requires: {', '.join(missing)}")
+        if self.EMAIL_USE_TLS and self.EMAIL_STARTTLS:
+            raise ValueError(
+                "EMAIL_USE_TLS and EMAIL_STARTTLS are exclusive: TLS from the "
+                "first byte (port 465) or an upgraded connection (port 587)"
+            )
+        return self
 
 
 class Config(BaseModel):
@@ -368,8 +567,13 @@ class Config(BaseModel):
     cache: CacheConfig
     sentry: SentryConfig
     http: HttpConfig
+    llm: LLMConfig
+    s3: S3Config
+    email: EmailConfig
 
-    model_config = ConfigDict(extra="ignore")
+    # A cross-section validator's error would otherwise print every section,
+    # secrets included.
+    model_config = ConfigDict(extra="ignore", hide_input_in_errors=True)
 
     @model_validator(mode="after")
     def user_cache_ttl_fits_the_version_ttl(self) -> Self:
@@ -377,6 +581,18 @@ class Config(BaseModel):
         # its version counter, which would fail every update that caches a user.
         if self.bot.USER_CACHE_TTL_SECONDS > self.cache.CACHE_VERSION_TTL:
             raise ValueError("USER_CACHE_TTL_SECONDS must not exceed CACHE_VERSION_TTL")
+        return self
+
+    @model_validator(mode="after")
+    def llm_content_is_logged_only_while_debugging(self) -> Self:
+        # Every INFO record becomes a Sentry breadcrumb, which would carry the
+        # logged prompts and answers out with the next event. DEBUG turns
+        # Sentry off, so only there may the exchange be logged.
+        if self.llm.LLM_LOG_CONTENT and not self.app.DEBUG:
+            raise ValueError(
+                "LLM_LOG_CONTENT=true requires DEBUG=true: the logged prompts and "
+                "answers would otherwise reach Sentry"
+            )
         return self
 
     @model_validator(mode="after")
@@ -425,4 +641,7 @@ def get_settings() -> Config:
         cache=CacheConfig(_env_file=env_file),
         sentry=SentryConfig(_env_file=env_file),
         http=HttpConfig(_env_file=env_file),
+        llm=LLMConfig(_env_file=env_file),
+        s3=S3Config(_env_file=env_file),
+        email=EmailConfig(_env_file=env_file),
     )

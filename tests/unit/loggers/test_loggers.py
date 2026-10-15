@@ -189,21 +189,44 @@ def test_setup_logging_routes_third_party_loggers_through_one_handler() -> None:
 def test_task_arguments_stay_out_of_debug_logs(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """taskiq's kicker and receiver log every task's arguments at DEBUG;
-    LOG_LEVEL=DEBUG must not print them."""
+    """taskiq's kicker and receiver log every task's arguments, the LLM SDKs
+    their request options with the prompt, and botocore an S3 request's
+    params, body and signed headers, at DEBUG; LOG_LEVEL=DEBUG must not
+    print them."""
     root = logging.getLogger()
     saved_handlers, saved_level = root.handlers[:], root.level
     saved_levels = {
         name: logging.getLogger(name).level for name in loggers.ARGUMENT_LOGGING_LOGGERS
     }
+    seen: list[str] = []
+
+    class _Capture(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            seen.append(record.getMessage())
+
     monkeypatch.setattr(loggers, "log_level", logging.DEBUG)
     try:
         root.handlers.clear()
         loggers.setup_logging()
+        root.addHandler(_Capture())
         assert root.isEnabledFor(logging.DEBUG)
-        for name in ("taskiq.kicker", "taskiq.receiver.receiver", "taskiq_redis.x"):
+        for name in (
+            "taskiq.kicker",
+            "taskiq.receiver.receiver",
+            "taskiq_redis.x",
+            "anthropic._base_client",
+            "openai._base_client",
+            "httpx2",
+            "botocore.endpoint",
+            "aiobotocore.endpoint",
+            "boto3.resources.action",
+            "aioboto3.resources.action",
+            "s3transfer.tasks",
+        ):
             assert not logging.getLogger(name).isEnabledFor(logging.DEBUG)
             assert logging.getLogger(name).isEnabledFor(logging.INFO)
+            logging.getLogger(name).debug("Request options: my diary entry")
+        assert seen == []
     finally:
         root.handlers[:] = saved_handlers
         root.setLevel(saved_level)
