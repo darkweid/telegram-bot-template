@@ -17,7 +17,9 @@ draw a tree. A root file named in backticks (`Makefile`, `.env.example`) is not
 checked. What `cp`, `mv`, `mkdir`, `touch` or `ln` creates (the last word of
 its command) is not looked for. Mermaid blocks are diagrams, not shell: no make
 call or path in them is checked.
-git runs with a fixed argument list and no shell, hence the `nosec` marks."""
+
+git runs with a fixed argument list and no shell, hence the `nosec` marks.
+"""
 
 from collections.abc import Iterable
 from pathlib import Path
@@ -181,7 +183,7 @@ def check_links(root: Path, path: str, prose: str, files: set[str]) -> list[str]
             continue
         file_part, _, anchor = target.partition("#")
         if file_part:
-            relative = _normalise(posixpath.join(posixpath.dirname(path), file_part))
+            relative = _normalize(posixpath.join(posixpath.dirname(path), file_part))
         else:
             relative = path
         if relative == "":
@@ -200,7 +202,7 @@ def check_links(root: Path, path: str, prose: str, files: set[str]) -> list[str]
     return problems
 
 
-def _normalise(path: str) -> str | None:
+def _normalize(path: str) -> str | None:
     """`docs/../README.md` to `README.md`; None for a path that leaves the
     repository."""
     parts: list[str] = []
@@ -265,7 +267,7 @@ def _missing_paths(root: Path, path: str, command: str, files: set[str]) -> list
             continue
         if any(mark in candidate for mark in "<>*{}"):
             continue
-        beside = _normalise(posixpath.join(posixpath.dirname(path), candidate))
+        beside = _normalize(posixpath.join(posixpath.dirname(path), candidate))
         if _in_tree(candidate, files) or (beside and _in_tree(beside, files)):
             continue
         if not _ignored(root, candidate):
