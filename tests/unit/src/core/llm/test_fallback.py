@@ -9,6 +9,7 @@ from pydantic import BaseModel
 import pytest
 
 from src.core.limiter.limiter import RateLimiter
+from src.core.llm.anthropic import AnthropicLLMClient
 from src.core.llm.enums import LLMProviderName, ModelTier
 from src.core.llm.errors import (
     LLMError,
@@ -19,6 +20,8 @@ from src.core.llm.errors import (
     LLMUnavailable,
 )
 from src.core.llm.fallback import FallbackLLMClient
+from src.core.llm.openrouter import OpenRouterLLMClient
+from src.core.llm.pricing import PricingTable
 from src.core.llm.recording import LLMUsageRecorder, RecordingLLMClient
 from src.core.llm.types import (
     LLMMessage,
@@ -26,6 +29,7 @@ from src.core.llm.types import (
     LLMResponse,
     ProviderBlock,
     ToolResultBlock,
+    ToolUseBlock,
 )
 from src.core.redis.degradation import RedisDegradationReporter
 from src.core.telegram.alerts import DeveloperAlerter
@@ -33,6 +37,8 @@ from src.core.update_context import UpdateContext, bind_update_context
 from tests.fakes.llm import FakeLLMClient, llm_response, tool_call
 from tests.fakes.redis import InMemoryRedis
 from tests.fakes.telegram import FakeTelegramSession, make_bot
+from tests.helpers.llm_bodies import anthropic_thinking, openrouter_completion
+from tests.helpers.llm_server import ScriptedLLMServer
 from tests.helpers.logs import captured_logs
 
 REQUEST = LLMRequest(
@@ -282,3 +288,74 @@ async def test_the_fallback_gets_the_tool_history_at_the_same_tier() -> None:
     assert sent.messages == history
     assert sent.tier is ModelTier.FAST
     assert sent.model is None
+
+
+async def test_a_switch_mid_tool_loop_sends_the_history_without_the_primarys_blocks() -> (
+    None
+):
+    """The fake test above only shows the same history reaches the fallback;
+    this one shows the real adapter turns it into a body OpenRouter accepts,
+    with the signed Anthropic thinking it cannot read left out."""
+    anthropic_server, openrouter_server = ScriptedLLMServer(), ScriptedLLMServer()
+    anthropic_server.reply(
+        {"type": "error", "error": {"type": "api_error", "message": "down"}},
+        status=500,
+    )
+    openrouter_server.reply(openrouter_completion("Rice: found."))
+    primary = AnthropicLLMClient(
+        api_key="sk-ant-not-real",
+        models={ModelTier.STRONG: "claude-sonnet-5-5"},
+        pricing=PricingTable(),
+        timeout_seconds=7.0,
+        max_retries=0,
+        http_client=anthropic_server.http_client(),
+    )
+    fallback = OpenRouterLLMClient(
+        api_key="sk-or-not-real",
+        models={ModelTier.STRONG: FALLBACK_MODEL},
+        app_url="",
+        app_title="",
+        timeout_seconds=7.0,
+        max_retries=0,
+        http_client=openrouter_server.http_client(),
+    )
+    client = FallbackLLMClient(primary, fallback, _alerter())
+    call = ToolUseBlock(id="toolu_1", name="lookup", input={"query": "rice"})
+    history = (
+        LLMMessage(role="user", content="rice"),
+        LLMMessage(
+            role="assistant",
+            content=(
+                ProviderBlock(
+                    provider=LLMProviderName.ANTHROPIC, data=anthropic_thinking()
+                ),
+                call,
+            ),
+        ),
+        LLMMessage(
+            role="user",
+            content=(ToolResultBlock(tool_use_id="toolu_1", content="found"),),
+        ),
+    )
+
+    response = await client.complete(replace(REQUEST, messages=history, model=None))
+
+    assert response.text == "Rice: found."
+    assert len(anthropic_server.requests) == 1
+    [body] = openrouter_server.bodies()
+    assert body["model"] == FALLBACK_MODEL
+    assert body["messages"] == [
+        {"role": "user", "content": "rice"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "toolu_1",
+                    "type": "function",
+                    "function": {"name": "lookup", "arguments": '{"query": "rice"}'},
+                }
+            ],
+        },
+        {"role": "tool", "tool_call_id": "toolu_1", "content": "found"},
+    ]
