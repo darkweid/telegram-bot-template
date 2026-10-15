@@ -189,9 +189,10 @@ def test_setup_logging_routes_third_party_loggers_through_one_handler() -> None:
 def test_task_arguments_stay_out_of_debug_logs(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """taskiq's kicker and receiver log every task's arguments, and the LLM
-    SDKs their request options with the prompt, at DEBUG; LOG_LEVEL=DEBUG
-    must not print them."""
+    """taskiq's kicker and receiver log every task's arguments, the LLM SDKs
+    their request options with the prompt, and botocore an S3 request's
+    params, body and signed headers, at DEBUG; LOG_LEVEL=DEBUG must not
+    print them."""
     root = logging.getLogger()
     saved_handlers, saved_level = root.handlers[:], root.level
     saved_levels = {
@@ -216,6 +217,11 @@ def test_task_arguments_stay_out_of_debug_logs(
             "anthropic._base_client",
             "openai._base_client",
             "httpx2",
+            "botocore.endpoint",
+            "aiobotocore.endpoint",
+            "boto3.resources.action",
+            "aioboto3.resources.action",
+            "s3transfer.tasks",
         ):
             assert not logging.getLogger(name).isEnabledFor(logging.DEBUG)
             assert logging.getLogger(name).isEnabledFor(logging.INFO)
