@@ -2,6 +2,8 @@
 
 name: tg-bot-template
 services:
+  # Every limit below comes from .env (BOT_CPUS, BOT_MEMORY, ...) with the
+  # default written here, so a small box lowers them without editing this file.
   # BOT_IMAGE lets a deploy run the image CI pushed instead of building on the
   # box. Unset, every service uses the locally built tag.
   bot-builder:
@@ -47,8 +49,8 @@ services:
     deploy:
       resources:
         limits:
-          cpus: '1'
-          memory: 1G
+          cpus: '${POSTGRES_CPUS:-1}'
+          memory: ${POSTGRES_MEMORY:-1G}
 
   # Applies the migrations baked into the image the bot runs, once, before the
   # bot starts. `make migrate` runs it by hand.
@@ -66,8 +68,8 @@ services:
     deploy:
       resources:
         limits:
-          cpus: '1'
-          memory: 256M
+          cpus: '${MIGRATE_CPUS:-1}'
+          memory: ${MIGRATE_MEMORY:-256M}
 
   bot:
     image: ${BOT_IMAGE:-tg-bot-template-bot:latest}
@@ -100,8 +102,8 @@ services:
     deploy:
       resources:
         limits:
-          cpus: '1'
-          memory: 512M
+          cpus: '${BOT_CPUS:-1}'
+          memory: ${BOT_MEMORY:-512M}
 
   # Runs background tasks: one process, up to 20 at once; scale with replicas.
   # Waits for the migrations like the bot: tasks read and write the same tables.
@@ -138,8 +140,8 @@ services:
     deploy:
       resources:
         limits:
-          cpus: '1'
-          memory: 512M
+          cpus: '${WORKER_CPUS:-1}'
+          memory: ${WORKER_MEMORY:-512M}
 
   # Exactly one: taskiq has no duplicate-fire protection, N schedulers fire
   # every cron N times. It also fires the worker's delayed retries.
@@ -174,8 +176,8 @@ services:
     deploy:
       resources:
         limits:
-          cpus: '0.5'
-          memory: 256M
+          cpus: '${SCHEDULER_CPUS:-0.5}'
+          memory: ${SCHEDULER_MEMORY:-256M}
 
   redis:
     image: 'redis:8.10'
@@ -207,14 +209,88 @@ services:
     deploy:
       resources:
         limits:
-          cpus: '1'
-          memory: 1G
+          cpus: '${REDIS_CPUS:-1}'
+          memory: ${REDIS_MEMORY:-1G}
+
+  # Webhook mode only (COMPOSE_PROFILES=webhook in .env): the one service the
+  # internet reaches. infra/nginx/entrypoint.sh renders the configuration for
+  # WEBHOOK_BASE_URL; the TLS server appears once certbot holds a certificate
+  # (`make cert-issue`).
+  nginx:
+    image: nginx:1.31.6
+    profiles: ["webhook"]
+    restart: unless-stopped
+    # Runs before the image's own entrypoint; overriding the entrypoint drops
+    # the image's command, so it is repeated here.
+    entrypoint: ["sh", "/etc/nginx/bot/entrypoint.sh"]
+    command: ["nginx", "-g", "daemon off;"]
+    # Not the bot's env_file: nginx needs these four, none of them a secret.
+    environment:
+      WEBHOOK_BASE_URL: ${WEBHOOK_BASE_URL:-}
+      WEBHOOK_PATH: ${WEBHOOK_PATH:-/webhook/telegram}
+      WEB_SERVER_PORT: ${WEB_SERVER_PORT:-8080}
+      TELEGRAM_ALLOWED_SUBNETS: ${TELEGRAM_ALLOWED_SUBNETS:-149.154.160.0/20,91.108.4.0/22}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      # The directory, never its files one by one: `git pull` on the box
+      # replaces a changed file with a new inode, and a single-file bind mount
+      # stays on the old one, so a reload would serve the previous
+      # configuration while `nginx -t` passed the new one.
+      - ./nginx:/etc/nginx/bot:ro
+      # The bot upstream's servers, rewritten by infra/deploy/deploy.sh while it
+      # rolls the bot. A volume, so the pin outlives a recreation of nginx.
+      - nginx-upstream:/etc/nginx/upstream
+      - certbot-certs:/etc/letsencrypt:ro
+      - certbot-webroot:/var/www/certbot:ro
+    depends_on:
+      bot:
+        condition: service_healthy
+    networks:
+      - bot-network
+    deploy:
+      resources:
+        limits:
+          cpus: '${NGINX_CPUS:-0.5}'
+          memory: ${NGINX_MEMORY:-128M}
+
+  # Tries to renew the certificate twice a day (a no-op until it is due) into
+  # the volume nginx reads; nginx reloads every 6 hours and picks the new one
+  # up, so neither container needs the Docker socket. `make cert-issue` issues
+  # the first certificate.
+  certbot:
+    image: certbot/certbot:v5.8.0
+    profiles: ["webhook"]
+    restart: unless-stopped
+    # `sleep & wait` lets the trap run on SIGTERM at once; a foreground sleep
+    # would hold `docker compose down` for the whole grace period.
+    entrypoint:
+      - sh
+      - -c
+      - trap exit TERM; while :; do certbot renew --quiet; sleep 12h & wait $${!}; done
+    volumes:
+      - certbot-certs:/etc/letsencrypt
+      - certbot-webroot:/var/www/certbot
+    networks:
+      - bot-network
+    deploy:
+      resources:
+        limits:
+          cpus: '${CERTBOT_CPUS:-0.5}'
+          memory: ${CERTBOT_MEMORY:-256M}
 
 volumes:
   postgres-data:
     name: tg-bot-template-postgres-data
   redis-data:
     name: tg-bot-template-redis-data
+  nginx-upstream:
+    name: tg-bot-template-nginx-upstream
+  certbot-certs:
+    name: tg-bot-template-certbot-certs
+  certbot-webroot:
+    name: tg-bot-template-certbot-webroot
 
 networks:
   bot-network:

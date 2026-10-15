@@ -127,6 +127,11 @@ Put a reverse proxy with a valid certificate in front of the bot and forward
 `tg-bot-template-network` Docker network. The compose file publishes no port
 of the bot.
 
+Every container has a CPU and memory cap taken from `.env` (`BOT_CPUS`,
+`BOT_MEMORY`, `WORKER_MEMORY`, ...; the commented block at the end of
+`.env.example` lists them with their defaults). Lower them on a small box
+instead of editing `infra/docker-compose.yml`.
+
 ## Roles
 
 Two optional roles, set in `.env` as comma-separated Telegram user ids:

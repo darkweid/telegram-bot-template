@@ -27,6 +27,35 @@ def _seconds(duration: str) -> int:
     return int(match.group(1))
 
 
+# The prefix of each service's limit variables in .env (BOT_CPUS, BOT_MEMORY).
+LIMIT_PREFIXES = {
+    "postgres": "POSTGRES",
+    "migrate": "MIGRATE",
+    "bot": "BOT",
+    "worker": "WORKER",
+    "scheduler": "SCHEDULER",
+    "redis": "REDIS",
+    "nginx": "NGINX",
+    "certbot": "CERTBOT",
+}
+WEBHOOK_SERVICES = frozenset({"nginx", "certbot"})
+_LIMIT_DEFAULT = re.compile(r"\$\{(?P<name>[A-Z_]+):-(?P<default>[^}]+)\}")
+_SIZE_UNITS = {"k": 2**10, "m": 2**20, "g": 2**30}
+
+
+def _limit_default(value: object) -> tuple[str, str]:
+    match = _LIMIT_DEFAULT.fullmatch(str(value))
+    assert match, f"a limit must be ${{NAME:-default}}, got {value!r}"
+    return match.group("name"), match.group("default")
+
+
+def _size_in_bytes(size: str) -> int:
+    """`512M` from compose, `512mb` from redis.conf."""
+    match = re.fullmatch(r"(\d+)([kmg])b?", size.lower())
+    assert match, size
+    return int(match.group(1)) * _SIZE_UNITS[match.group(2)]
+
+
 def test_docker_waits_longer_than_the_bot_does_on_shutdown() -> None:
     """Past stop_grace_period Docker kills the process, and every update still
     being handled is lost; the bot's own timeout must expire first."""
@@ -50,20 +79,6 @@ def test_the_healthcheck_probes_liveness_only() -> None:
 def test_the_builder_only_builds_the_image() -> None:
     """Started as a dependency, it must exit at once instead of running a second bot."""
     assert _services()["bot-builder"]["command"] == ["true"]
-
-
-def test_every_service_has_resource_limits() -> None:
-    for name, service in _services().items():
-        if name == "bot-builder":
-            continue  # builds the image and exits
-        limits = service["deploy"]["resources"]["limits"]
-        assert limits.get("cpus") and limits.get("memory"), name
-
-
-def test_backing_services_listen_on_loopback_only() -> None:
-    for name in ("postgres", "redis"):
-        for mapping in _services()[name].get("ports", []):
-            assert mapping.startswith("127.0.0.1:"), (name, mapping)
 
 
 def test_redis_gets_its_own_password_and_no_other_secret() -> None:
@@ -187,3 +202,111 @@ def test_the_image_build_receives_the_commit() -> None:
     dockerfile = (PROJECT_ROOT / "infra/docker/Dockerfile").read_text(encoding="utf-8")
     assert "ARG COMMIT_SHA=unknown" in dockerfile
     assert "ENV COMMIT_SHA=${COMMIT_SHA}" in dockerfile
+
+
+def test_every_service_takes_its_limits_from_the_environment() -> None:
+    """A bot on a small VPS lowers its limits in .env; a limit written into the
+    compose file would have to be edited on the server, and the next deploy's
+    checkout would overwrite it."""
+    services = _services()
+    assert set(services) - {"bot-builder"} == set(LIMIT_PREFIXES)
+    for service, prefix in LIMIT_PREFIXES.items():
+        limits = services[service]["deploy"]["resources"]["limits"]
+        cpus_name, cpus = _limit_default(limits["cpus"])
+        memory_name, memory = _limit_default(limits["memory"])
+        assert (cpus_name, memory_name) == (f"{prefix}_CPUS", f"{prefix}_MEMORY")
+        assert re.fullmatch(r"\d+(\.\d+)?", cpus), (service, cpus)
+        assert re.fullmatch(r"\d+[MG]", memory), (service, memory)
+
+
+def test_env_example_documents_every_limit_with_its_default() -> None:
+    """The commented line is how a developer learns the knob exists; a default
+    there that differs from compose's would describe a limit nobody runs."""
+    env_example = (PROJECT_ROOT / ".env.example").read_text(encoding="utf-8")
+    for service in LIMIT_PREFIXES:
+        limits = _services()[service]["deploy"]["resources"]["limits"]
+        for value in (limits["cpus"], limits["memory"]):
+            name, default = _limit_default(value)
+            assert f"\n# {name}={default}\n" in env_example, name
+
+
+def test_redis_hits_maxmemory_before_its_container_limit() -> None:
+    """Under noeviction a full Redis refuses writes, which every caller already
+    survives; past the container limit the kernel kills it, and the task queue
+    and FSM state with it."""
+    redis_conf = (PROJECT_ROOT / "infra/redis.conf").read_text(encoding="utf-8")
+    match = re.search(r"^maxmemory (\S+)$", redis_conf, re.MULTILINE)
+    assert match
+    limits = _services()["redis"]["deploy"]["resources"]["limits"]
+    _, container_memory = _limit_default(limits["memory"])
+    assert _size_in_bytes(container_memory) >= 1.5 * _size_in_bytes(match.group(1))
+
+
+def test_only_nginx_faces_the_network() -> None:
+    """The bot's health port and the webhook route stay on the compose network;
+    Postgres and Redis are for an SSH tunnel to loopback. A new service that
+    publishes a port has to be added here on purpose."""
+    services = _services()
+    assert services["nginx"]["ports"] == ["80:80", "443:443"]
+    for name, service in services.items():
+        if name == "nginx":
+            continue
+        for mapping in service.get("ports", []):
+            assert mapping.startswith("127.0.0.1:"), (name, mapping)
+
+
+def test_nginx_and_certbot_run_in_webhook_mode_only() -> None:
+    """Polling needs no inbound port; a stray nginx would hold 80 and 443 on a
+    box that has no certificate for them."""
+    for name, service in _services().items():
+        expected = ["webhook"] if name in WEBHOOK_SERVICES else None
+        assert service.get("profiles") == expected, name
+
+
+def test_nginx_gets_its_four_settings_and_no_secret() -> None:
+    """The bot's env_file carries the token and every password; nginx renders
+    its configuration from these four values only."""
+    nginx = _services()["nginx"]
+    assert "env_file" not in nginx
+    assert set(nginx["environment"]) == {
+        "WEBHOOK_BASE_URL",
+        "WEBHOOK_PATH",
+        "WEB_SERVER_PORT",
+        "TELEGRAM_ALLOWED_SUBNETS",
+    }
+    assert nginx["environment"]["WEB_SERVER_PORT"] == "${WEB_SERVER_PORT:-8080}"
+
+
+def test_nginx_mounts_its_configuration_directory_whole() -> None:
+    """A single-file bind mount stays on the old inode after `git pull`, so a
+    reload would keep serving the previous configuration."""
+    volumes = _services()["nginx"]["volumes"]
+    assert "./nginx:/etc/nginx/bot:ro" in volumes
+    assert not any(volume.startswith("./nginx/") for volume in volumes)
+
+
+def test_certbot_and_nginx_share_the_certificate_and_the_challenge() -> None:
+    """certbot writes, nginx only reads: a compromised nginx must not be able to
+    replace the certificate it serves."""
+    nginx = _services()["nginx"]["volumes"]
+    certbot = _services()["certbot"]["volumes"]
+    assert "certbot-certs:/etc/letsencrypt:ro" in nginx
+    assert "certbot-webroot:/var/www/certbot:ro" in nginx
+    assert "certbot-certs:/etc/letsencrypt" in certbot
+    assert "certbot-webroot:/var/www/certbot" in certbot
+
+
+def test_certbot_renews_twice_a_day_and_stops_on_sigterm() -> None:
+    """Let's Encrypt recommends two renewal attempts a day; a loop that ignores
+    SIGTERM would hold every `docker compose down` for the grace period."""
+    script = " ".join(_services()["certbot"]["entrypoint"])
+    assert "certbot renew" in script
+    assert "sleep 12h" in script
+    assert "trap exit TERM" in script
+
+
+def test_nginx_waits_for_a_healthy_bot() -> None:
+    """Started before the bot answers, nginx would resolve an upstream that is
+    not there yet and fail its first requests."""
+    depends = _services()["nginx"]["depends_on"]
+    assert depends["bot"] == {"condition": "service_healthy"}
