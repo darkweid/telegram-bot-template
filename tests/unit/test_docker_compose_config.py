@@ -335,3 +335,18 @@ def test_nginx_waits_for_a_healthy_bot() -> None:
     started early it would answer 502 to every webhook until the bot is up."""
     depends = _services()["nginx"]["depends_on"]
     assert depends["bot"] == {"condition": "service_healthy"}
+
+
+def test_make_clean_keeps_the_certificate() -> None:
+    """Let's Encrypt issues a certificate for one host at most five times a
+    week; a few rounds of `make clean` while setting up a box would lock the
+    webhook out for days."""
+    compose = _load("infra/docker-compose.yml")
+    certificate_volume = compose["volumes"]["certbot-certs"]["name"]
+    makefile = (PROJECT_ROOT / "Makefile").read_text(encoding="utf-8")
+    assert f"\nCERTIFICATE_VOLUME = {certificate_volume}\n" in makefile
+    recipe = re.search(r"^clean:.*\n((?:\t.*\n)+)", makefile, re.MULTILINE)
+    assert recipe
+    assert not re.search(r"\bdown\b.*\s(-v|--volumes)\b", recipe.group(1))
+    assert f"label=com.docker.compose.project={compose['name']}" in recipe.group(1)
+    assert "grep -vxF '$(CERTIFICATE_VOLUME)'" in recipe.group(1)

@@ -534,6 +534,83 @@ jobs:
           # organization; without it the action exits before scanning.
           GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}
 
+  # The webhook profile's nginx, started the way the box starts it: the
+  # configuration must load with a certificate in place, and requests from
+  # outside Telegram's subnets and the private networks must be dropped.
+  nginx:
+    name: nginx
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.docs_only != 'true' && needs.changes.outputs.verified != 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      WEBHOOK_HOST: bot.example.com
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Create a webhook-mode .env from .env.example
+        shell: bash
+        run: |
+          cp .env.example .env
+          printf 'BOT_MODE=webhook\nCOMPOSE_PROFILES=webhook\nWEBHOOK_BASE_URL=https://%s\n' "$WEBHOOK_HOST" >> .env
+
+      # Where certbot keeps a real one, so the TLS server is rendered and tested
+      # too; without a certificate nginx serves port 80 only.
+      - name: Put a self-signed certificate in the certbot volume
+        shell: bash
+        run: |
+          # shellcheck disable=SC2016  # expanded by the shell inside the container
+          docker compose --env-file .env -f infra/docker-compose.yml run --rm --no-deps \
+            -e WEBHOOK_HOST --entrypoint sh certbot -c '
+              live="/etc/letsencrypt/live/$WEBHOOK_HOST"
+              mkdir -p "$live"
+              openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj "/CN=$WEBHOOK_HOST" \
+                -keyout "$live/privkey.pem" -out "$live/fullchain.pem"'
+
+      - name: Test the configuration
+        shell: bash
+        run: |
+          docker compose --env-file .env -f infra/docker-compose.yml run --rm --no-deps \
+            -e NGINX_REQUIRE_TLS=1 nginx nginx -t
+
+      - name: Drop what does not come from Telegram or a private network
+        shell: bash
+        run: |
+          compose=(docker compose --env-file .env -f infra/docker-compose.yml)
+          "${compose[@]}" up -d --no-deps nginx
+          for _ in $(seq 30); do
+            "${compose[@]}" exec -T nginx test -s /run/nginx.pid && break
+            sleep 1
+          done
+          # The runner reaches the published ports through Docker, from the
+          # bridge gateway: an address outside both allow-lists. curl exits 52
+          # when the connection closes without a response, which is nginx's 444.
+          expect_dropped() {
+            local status=0
+            curl -sk --max-time 5 -o /dev/null \
+              --resolve "${WEBHOOK_HOST}:443:127.0.0.1" --resolve "${WEBHOOK_HOST}:80:127.0.0.1" \
+              "$@" || status=$?
+            if [ "$status" -ne 52 ]; then
+              echo "::error::$* got an answer (curl exit ${status}); nginx must drop it"
+              exit 1
+            fi
+          }
+          expect_dropped -X POST "https://${WEBHOOK_HOST}/webhook/telegram"
+          expect_dropped "https://${WEBHOOK_HOST}/live"
+          expect_dropped "https://${WEBHOOK_HOST}/"
+          expect_dropped -X POST "http://${WEBHOOK_HOST}/webhook/telegram"
+          # A container on the compose network is a private address: the probe
+          # passes the guard and reaches the upstream, absent here, so 502.
+          code="$("${compose[@]}" run --rm --no-deps --entrypoint curl nginx \
+            -sk -o /dev/null -w '%{http_code}' \
+            --connect-to "${WEBHOOK_HOST}:443:nginx:443" "https://${WEBHOOK_HOST}/live")"
+          if [ "$code" != "502" ]; then
+            echo "::error::/live from the compose network answered ${code}, expected 502"
+            exit 1
+          fi
+
   # The artifact's name is the whole record: `changes` only asks whether one
   # with this tree exists, and a hit skips every check. So every check has to
   # have run and passed: a documentation-only change skips them, and recording
@@ -542,7 +619,7 @@ jobs:
   # failure or cancellation and nothing is recorded either.
   record-pass:
     name: Record passing tree
-    needs: [changes, lint, migration-heads, unit-tests, integration-tests, bandit, pip-audit, gitleaks]
+    needs: [changes, lint, migration-heads, unit-tests, integration-tests, bandit, pip-audit, gitleaks, nginx]
     if: ${{ !cancelled() && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') && needs.changes.outputs.verified != 'true' && needs.changes.outputs.docs_only != 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -565,7 +642,7 @@ jobs:
   # become the tag a human reaches for when they mean production.
   build-and-push:
     name: Build & push image
-    needs: [changes, lint, migration-heads, unit-tests, integration-tests, bandit, pip-audit, gitleaks]
+    needs: [changes, lint, migration-heads, unit-tests, integration-tests, bandit, pip-audit, gitleaks, nginx]
     # Branch and event filtering happens in the caller; here the decision arrives
     # as a single input so stage and prod share one implementation.
     # Checks skipped by a gate count as passed; the explicit status test is what

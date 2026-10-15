@@ -1,0 +1,25 @@
+# Port 80 answers the ACME http-01 challenge for the webhook host and nothing
+# else. Telegram only calls HTTPS, so there is no redirect to build.
+server {
+    listen 80 default_server;
+    server_name _;
+    include /etc/nginx/bot/security_headers.inc;
+
+    location / {
+        return 444;
+    }
+}
+
+server {
+    listen 80;
+    server_name ${WEBHOOK_HOST};
+    include /etc/nginx/bot/security_headers.inc;
+
+    location /.well-known/acme-challenge/ {
+        root /var/www/certbot;
+    }
+
+    location / {
+        return 444;
+    }
+}

@@ -1,0 +1,54 @@
+# Rendered only once the certificate exists (entrypoint.sh). An unknown SNI
+# name is refused during the handshake, so a scanner walking the address space
+# never sees the certificate.
+server {
+    listen 443 ssl default_server;
+    server_name _;
+    ssl_reject_handshake on;
+}
+
+server {
+    listen 443 ssl;
+    server_name ${WEBHOOK_HOST};
+
+    ssl_certificate /etc/letsencrypt/live/${WEBHOOK_HOST}/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/${WEBHOOK_HOST}/privkey.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_session_cache shared:SSL:10m;
+    ssl_session_timeout 1d;
+
+    include /etc/nginx/bot/security_headers.inc;
+
+    proxy_http_version 1.1;
+    proxy_set_header Connection "";
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    # A bot container that refuses the connection is skipped for the next one;
+    # nginx never resends a POST that already reached a bot.
+    proxy_next_upstream error timeout;
+    proxy_connect_timeout 5s;
+
+    # The one location the internet reaches, and only from Telegram's subnets.
+    location = ${WEBHOOK_PATH} {
+        if ($from_telegram = 0) {
+            return 444;
+        }
+        if ($request_method != POST) {
+            return 444;
+        }
+        proxy_pass http://bot_upstream;
+    }
+
+    location ~ ^/(live|ready|health)$ {
+        if ($from_private_network = 0) {
+            return 444;
+        }
+        proxy_pass http://bot_upstream;
+    }
+
+    location / {
+        return 444;
+    }
+}

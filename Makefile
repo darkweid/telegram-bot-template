@@ -80,9 +80,18 @@ shell: ## Open a bash shell inside the bot container
 
 ##@ Cleanup
 
+# Let's Encrypt issues a certificate for the same host at most five times a
+# week, so the certificate volume outlives `make clean`; remove it by hand
+# (`docker volume rm tg-bot-template-certbot-certs`) to start over. compose
+# labels every volume it creates with the project name, which selects the rest.
+# The project name is fixed in compose, so every checkout and worktree of this
+# repository shares these volumes: `make clean` from any of them empties all.
+CERTIFICATE_VOLUME = tg-bot-template-certbot-certs
 .PHONY: clean
-clean: ## Remove the stack together with its volumes, local images and orphans
-	$(DOCKER_COMPOSE) down -v --rmi local --remove-orphans
+clean: ## Remove the stack with its volumes (the certificate kept), local images and orphans
+	$(DOCKER_COMPOSE) --profile webhook down --rmi local --remove-orphans
+	docker volume ls -q --filter label=com.docker.compose.project=tg-bot-template \
+		| grep -vxF '$(CERTIFICATE_VOLUME)' | xargs -r docker volume rm
 
 .PHONY: clean-resources
 clean-resources: ## Remove unused Docker resources, keeping build cache and reusable images
@@ -128,6 +137,26 @@ psql: ## Open psql inside the postgres container
 .PHONY: redis-cli
 redis-cli: ## Open redis-cli inside the redis container
 	$(DOCKER_COMPOSE_EXEC) redis redis-cli
+
+##@ Deployment
+
+DOCKER_COMPOSE_WEBHOOK = $(DOCKER_COMPOSE) --profile webhook
+
+# The first certificate for the webhook host; the certbot service renews it
+# from then on. Let's Encrypt fetches the challenge from port 80 of DOMAIN, so
+# DNS must already point at this box and port 80 must be open. DOMAIN is the
+# host of WEBHOOK_BASE_URL: nginx looks for the certificate under that name,
+# and the last command fails when the two differ.
+.PHONY: cert-issue
+cert-issue: ## Issue the webhook's certificate: make cert-issue DOMAIN=bot.example.com [EMAIL=you@example.com]
+	@test -n "$(DOMAIN)" || { echo "Usage: make cert-issue DOMAIN=bot.example.com [EMAIL=you@example.com]"; exit 1; }
+	$(DOCKER_COMPOSE_WEBHOOK) up -d --no-deps nginx
+	$(DOCKER_COMPOSE_WEBHOOK) run --rm --no-deps --entrypoint certbot certbot certonly \
+		--webroot -w /var/www/certbot -d '$(DOMAIN)' --cert-name '$(DOMAIN)' \
+		--non-interactive --agree-tos \
+		$(if $(EMAIL),--email '$(EMAIL)',--register-unsafely-without-email)
+	$(DOCKER_COMPOSE_WEBHOOK) restart nginx
+	$(DOCKER_COMPOSE_WEBHOOK) run --rm --no-deps -e NGINX_REQUIRE_TLS=1 nginx nginx -t
 
 ##@ Logs
 

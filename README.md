@@ -122,10 +122,29 @@ for it; `make migrate` runs the same service by hand. With `BOT_IMAGE` set in
 `.env` to an image CI pushed (`ghcr.io/<owner>/<repo>:sha-<12>`), `make run`
 pulls and runs that image instead of building one from the checkout.
 
-Put a reverse proxy with a valid certificate in front of the bot and forward
-`WEBHOOK_PATH` (default `/webhook/telegram`) to `bot:${WEB_SERVER_PORT}` on the
-`tg-bot-template-network` Docker network. The compose file publishes no port
-of the bot.
+### nginx and the certificate
+
+The `webhook` compose profile adds nginx and certbot. Set
+`COMPOSE_PROFILES=webhook` in `.env` together with `BOT_MODE=webhook`, and
+`make run`, `up`, `down`, `logs` and `restart` handle both with the rest of the
+stack. The dev stack always polls and leaves them out.
+
+nginx publishes ports 80 and 443, the only ports of the stack open to the
+internet. It passes `WEBHOOK_PATH` (default `/webhook/telegram`) to the bot
+only for POST requests from Telegram's subnets (`TELEGRAM_ALLOWED_SUBNETS`),
+serves `/live`, `/ready` and `/health` to private addresses only, and closes
+every other connection without an answer. Port 80 serves certbot's challenge
+and nothing else.
+
+Issue the first certificate once DNS for the webhook host points at the box
+and port 80 is open; `DOMAIN` is the host of `WEBHOOK_BASE_URL`:
+
+    make cert-issue DOMAIN=bot.example.com EMAIL=you@example.com
+
+Until a certificate exists, nginx serves port 80 only. certbot tries to renew
+twice a day and nginx reloads every six hours, so a renewed certificate is in
+use within six hours. `make clean` keeps the certificate volume: Let's Encrypt
+issues a certificate for the same host at most five times a week.
 
 Every service except the image builder has a CPU and memory cap taken from `.env` (`BOT_CPUS`,
 `BOT_MEMORY`, `WORKER_MEMORY`, ...; the commented block at the end of
