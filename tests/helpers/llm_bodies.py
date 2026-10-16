@@ -79,10 +79,11 @@ def openrouter_completion(
     tool_calls: list[JsonValue] | None = None,
     reasoning_details: list[JsonValue] | None = None,
     finish_reason: str = "stop",
+    refusal: str | None = None,
     model: str = "anthropic/claude-sonnet-5.5",
     usage: JsonObject | None = None,
 ) -> JsonObject:
-    message: JsonObject = {"role": "assistant", "content": content, "refusal": None}
+    message: JsonObject = {"role": "assistant", "content": content, "refusal": refusal}
     if tool_calls is not None:
         message["tool_calls"] = tool_calls
     if reasoning_details is not None:
