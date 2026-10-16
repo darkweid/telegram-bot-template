@@ -164,23 +164,31 @@ class AnthropicLLMClient:
         model: str,
         output_format: JSONOutputFormatParam | None,
     ) -> LLMResponse:
+        # Built before the try: a request the adapter cannot build is the
+        # caller's bug, and read as an outage it would switch to the fallback.
+        system = _system(request)
+        messages = _messages(request)
+        tools = _tools(request)
+        tool_choice = _tool_choice(request)
+        output_config = _output_config(request, output_format)
+        # With the system breakpoint, a second one at the end of the history:
+        # a tool loop resends all of it every step.
+        cache_control: CacheControlEphemeralParam | Omit = (
+            CacheControlEphemeralParam(type="ephemeral")
+            if request.cache_system
+            else omit
+        )
         started = time.perf_counter()
         try:
             message = await self._client.messages.create(
                 model=model,
                 max_tokens=request.max_tokens,
-                system=_system(request),
-                messages=_messages(request),
-                tools=_tools(request),
-                tool_choice=_tool_choice(request),
-                output_config=_output_config(request, output_format),
-                # With the system breakpoint, a second one at the end of the
-                # history: a tool loop resends all of it every step.
-                cache_control=(
-                    CacheControlEphemeralParam(type="ephemeral")
-                    if request.cache_system
-                    else omit
-                ),
+                system=system,
+                messages=messages,
+                tools=tools,
+                tool_choice=tool_choice,
+                output_config=output_config,
+                cache_control=cache_control,
             )
         except anthropic.APITimeoutError:
             raise LLMTimeout(
