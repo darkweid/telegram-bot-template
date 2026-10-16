@@ -6,16 +6,23 @@ import sentry_sdk
 from sqlalchemy.exc import DBAPIError
 
 from src.core.errors.scrubbed import ScrubbedError
-from src.core.llm.enums import LLMCallStatus, LLMProviderName
+from src.core.llm.enums import LLMCallStatus, LLMProviderName, ModelTier
 from src.core.llm.errors import LLMOutputError, LLMRefused, LLMTimeout
 from src.core.llm.reporting import billed_usage
-from src.core.llm.types import LLMResponse, LLMUsage, TextBlock
+from src.core.llm.types import (
+    LLMMessage,
+    LLMRequest,
+    LLMResponse,
+    LLMUsage,
+    TextBlock,
+)
 from src.core.llm.usage import recording as recording_module
 from src.core.llm.usage.models import LLMUsageRecord
-from src.core.llm.usage.recording import LLMUsageRecorder
+from src.core.llm.usage.recording import LLMUsageRecorder, RecordingLLMClient
 from src.core.llm.usage.repository import LLMUsageRepository
 from src.core.update_context import UpdateContext, bind_update_context
 from tests.fakes.db import FakeSessionFactory
+from tests.fakes.llm import FakeLLMClient
 from tests.helpers.logs import captured_logs
 
 NOW = datetime(2026, 3, 4, 5, 6, 7, tzinfo=UTC)
@@ -194,18 +201,32 @@ async def test_a_failed_write_never_fails_the_call(
 
 
 async def test_no_prompt_or_answer_text_reaches_the_row() -> None:
-    """llm_usage is read by /stats and kept for months: it holds counts only."""
+    """llm_usage is read by /stats and kept for months: it holds counts only,
+    though the wrapper that writes it holds the whole exchange."""
+    inner = FakeLLMClient()
+    inner.queue(_response())
     sessions = FakeSessionFactory()
-    await LLMUsageRecorder(sessions, LLMUsageRepository()).record(
-        purpose=PURPOSE,
-        usage=billed_usage(_response().usage, None),
-        error=None,
+    client = RecordingLLMClient(
+        inner,
+        LLMUsageRecorder(sessions, LLMUsageRepository()),
         provider=LLMProviderName.ANTHROPIC,
-        model="claude-sonnet-5-5",
-        latency_ms=812,
+        models={
+            ModelTier.STRONG: "claude-sonnet-5-5",
+            ModelTier.FAST: "claude-haiku-5-5",
+        },
+        log_content=False,
     )
+    request = LLMRequest(
+        purpose=PURPOSE,
+        messages=[LLMMessage(role="user", content="secret prompt")],
+        system="secret system",
+    )
+
+    await client.complete(request)
+
     row = _stored(sessions)
     values = [getattr(row, column.key) for column in LLMUsageRecord.__table__.columns]
+    assert row.input_tokens == 120
     assert not any(isinstance(value, str) and "secret" in value for value in values)
 
 

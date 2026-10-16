@@ -22,6 +22,7 @@ from src.core.llm.structured import combine_usage
 from src.core.llm.types import LLMMessage, LLMRequest, LLMUsage
 from tests.helpers.llm_server import ScriptedLLMServer
 from tests.helpers.logs import captured_logs
+from tests.helpers.sentry import collected_breadcrumbs
 
 SECRET_PROMPT = "my diary entry about the surgery"
 
@@ -429,6 +430,24 @@ async def test_one_log_line_without_content(server: ScriptedLLMServer) -> None:
     ):
         assert part in line
     assert "surgery" not in line
+    await client.aclose()
+
+
+async def test_each_call_leaves_exactly_one_breadcrumb_without_content(
+    server: ScriptedLLMServer,
+) -> None:
+    """A Sentry event carries the breadcrumbs of the calls before it: one per
+    call keeps the trail readable, and the prompt and the answer are user data
+    that must not ride along with an unrelated error."""
+    server.reply(completion("the answer about the surgery"))
+    client = make_client(server)
+
+    with collected_breadcrumbs() as breadcrumbs:
+        await client.complete(request())
+
+    [crumb] = [c for c in breadcrumbs if c["category"] == "src.core.llm.reporting"]
+    assert "purpose=note_summary" in crumb["message"]
+    assert "surgery" not in repr(breadcrumbs)
     await client.aclose()
 
 

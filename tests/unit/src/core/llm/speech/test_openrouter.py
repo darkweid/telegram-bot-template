@@ -29,6 +29,7 @@ from tests.helpers.llm_bodies import (
 )
 from tests.helpers.llm_server import ScriptedLLMServer
 from tests.helpers.logs import captured_logs
+from tests.helpers.sentry import collected_breadcrumbs
 
 AUDIO = b"OggS" + bytes(200)
 AUDIO_BASE64 = base64.b64encode(AUDIO).decode()
@@ -311,6 +312,25 @@ async def test_a_successful_call_logs_no_content(server: ScriptedLLMServer) -> N
         assert SECRET_TRANSCRIPT not in line
         assert AUDIO_BASE64 not in line
         assert API_KEY not in line
+    await transcriber.aclose()
+
+
+async def test_a_transcription_leaves_one_breadcrumb_without_the_transcript(
+    server: ScriptedLLMServer,
+) -> None:
+    """What a user said is user data: a later Sentry event carries the call's
+    breadcrumb, which must hold the numbers only, once."""
+    server.reply(completion())
+    transcriber = make_transcriber(server)
+
+    with collected_breadcrumbs() as breadcrumbs:
+        await transcribe(transcriber)
+
+    [crumb] = [c for c in breadcrumbs if c["category"] == REPORTING_LOGGER]
+    assert "purpose=voice" in crumb["message"]
+    trail = repr(breadcrumbs)
+    assert SECRET_TRANSCRIPT not in trail
+    assert AUDIO_BASE64 not in trail
     await transcriber.aclose()
 
 
