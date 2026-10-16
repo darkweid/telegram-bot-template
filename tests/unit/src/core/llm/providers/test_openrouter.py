@@ -15,7 +15,7 @@ from src.core.llm.errors import (
     LLMTimeout,
     LLMUnavailable,
 )
-from src.core.llm.providers.openrouter import OpenRouterLLMClient
+from src.core.llm.providers.openrouter import OpenRouterLLMClient, openrouter_client
 from src.core.llm.structured import combine_usage
 from src.core.llm.types import LLMMessage, LLMRequest, LLMUsage
 from tests.helpers.llm_server import ScriptedLLMServer
@@ -197,6 +197,25 @@ async def test_empty_attribution_is_not_sent(server: ScriptedLLMServer) -> None:
     assert "http-referer" not in sent.headers
     assert "x-title" not in sent.headers
     await client.aclose()
+
+
+async def test_the_shared_client_pins_the_base_url_and_drops_blank_attribution() -> (
+    None
+):
+    """Every OpenRouter caller builds its client here: OPENAI_BASE_URL in the
+    environment must not send the key elsewhere, and a blank attribution
+    header would list an app with no name."""
+    client = openrouter_client(
+        api_key="k",
+        app_url="",
+        app_title="Bot",
+        timeout_seconds=7.0,
+        max_retries=0,
+    )
+    assert client.base_url == "https://openrouter.ai/api/v1/"
+    assert client.default_headers["X-Title"] == "Bot"
+    assert "HTTP-Referer" not in client.default_headers
+    await client.close()
 
 
 async def test_structured_asks_for_a_strict_schema_on_providers_that_honour_it(

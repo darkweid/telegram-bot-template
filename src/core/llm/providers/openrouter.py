@@ -1,5 +1,5 @@
 import base64
-from collections.abc import Mapping, Sequence
+from collections.abc import Awaitable, Mapping, Sequence
 from decimal import Decimal
 from functools import partial
 import json
@@ -25,6 +25,7 @@ from openai.types.chat import (
     ChatCompletionToolUnionParam,
     ChatCompletionUserMessageParam,
 )
+from openai.types.chat.chat_completion import Choice
 from openai.types.chat.completion_create_params import ResponseFormat
 from pydantic import BaseModel, JsonValue
 
@@ -59,6 +60,11 @@ OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 
 _PROVIDER = LLMProviderName.OPENROUTER
 
+# The SDK builds a completion without validating it, so a JSON body that is
+# no completion (a choice without a message, a null usage count) fails with
+# AttributeError, TypeError or ValueError on first access to the missing field.
+MALFORMED_COMPLETION = "OpenRouter returned a body that is not a chat completion"
+
 
 class OpenRouterLLMClient:
     """LLMClient over OpenRouter's OpenAI-compatible chat completions API.
@@ -85,21 +91,12 @@ class OpenRouterLLMClient:
         max_retries: int,
         http_client: httpx2.AsyncClient | None = None,
     ) -> None:
-        # OpenRouter attributes traffic to an app by these two headers; an
-        # empty value is left out rather than sent blank.
-        attribution = {
-            name: value
-            for name, value in (("HTTP-Referer", app_url), ("X-Title", app_title))
-            if value
-        }
-        # base_url is explicit so OPENAI_BASE_URL in the environment cannot
-        # send the key somewhere else.
-        self._client = AsyncOpenAI(
+        self._client = openrouter_client(
             api_key=api_key,
-            base_url=OPENROUTER_BASE_URL,
-            timeout=timeout_seconds,
+            app_url=app_url,
+            app_title=app_title,
+            timeout_seconds=timeout_seconds,
             max_retries=max_retries,
-            default_headers=attribution,
             http_client=http_client,
         )
         self._models = models
@@ -145,8 +142,8 @@ class OpenRouterLLMClient:
     ) -> LLMResponse:
         structured = not isinstance(response_format, Omit)
         started = time.perf_counter()
-        try:
-            completion = await self._client.chat.completions.create(
+        completion = await checked_completion(
+            self._client.chat.completions.create(
                 model=model,
                 messages=_messages(request, model),
                 max_tokens=request.max_tokens,
@@ -158,39 +155,12 @@ class OpenRouterLLMClient:
                 tool_choice=_tool_choice(request),
                 extra_body=_extra_body(request, structured=structured),
             )
-        except openai.APITimeoutError:
-            raise LLMTimeout(
-                "OpenRouter request timed out", provider=_PROVIDER
-            ) from None
-        except openai.RateLimitError as error:
-            raise LLMRateLimited(_describe(error), provider=_PROVIDER) from None
-        except openai.OpenAIError as error:
-            # Chained from None: an SDK error's message carries the response
-            # body, which can echo the request.
-            raise LLMUnavailable(_describe(error), provider=_PROVIDER) from None
-        except ValueError:
-            # A 200 whose body is cut or empty: the JSON decoder's error holds
-            # the whole body, which can quote the answer, so nothing is kept.
-            raise LLMUnavailable(
-                "OpenRouter returned an unreadable body", provider=_PROVIDER
-            ) from None
-        if not isinstance(completion, ChatCompletion):
-            # The SDK hands back a non-JSON 200 body (an HTML error page from
-            # a proxy) as a plain string.
-            raise LLMUnavailable(
-                "OpenRouter returned a body that is not JSON", provider=_PROVIDER
-            ) from None
+        )
         latency_ms = int((time.perf_counter() - started) * 1000)
         try:
             return _response(completion, structured=structured, latency_ms=latency_ms)
         except (AttributeError, TypeError, ValueError):
-            # The SDK builds the completion without validating it, so a JSON
-            # body that is no completion (a choice without a message, a null
-            # usage count) fails on first access to the missing field.
-            raise LLMUnavailable(
-                "OpenRouter returned a body that is not a chat completion",
-                provider=_PROVIDER,
-            ) from None
+            raise LLMUnavailable(MALFORMED_COMPLETION, provider=_PROVIDER) from None
 
     def _report(
         self,
@@ -208,6 +178,87 @@ class OpenRouterLLMClient:
             error=error,
             latency_ms=int((time.perf_counter() - started) * 1000),
         )
+
+
+def openrouter_client(
+    *,
+    api_key: str,
+    app_url: str,
+    app_title: str,
+    timeout_seconds: float,
+    max_retries: int,
+    http_client: httpx2.AsyncClient | None = None,
+) -> AsyncOpenAI:
+    """Retries (429, 5xx, connection errors) and the per-attempt timeout are
+    the SDK's own. The caller closes the client."""
+    # OpenRouter attributes traffic to an app by these two headers; an empty
+    # value is left out rather than sent blank.
+    attribution = {
+        name: value
+        for name, value in (("HTTP-Referer", app_url), ("X-Title", app_title))
+        if value
+    }
+    # base_url is explicit so OPENAI_BASE_URL in the environment cannot send
+    # the key somewhere else.
+    return AsyncOpenAI(
+        api_key=api_key,
+        base_url=OPENROUTER_BASE_URL,
+        timeout=timeout_seconds,
+        max_retries=max_retries,
+        default_headers=attribution,
+        http_client=http_client,
+    )
+
+
+async def checked_completion(call: Awaitable[object]) -> ChatCompletion:
+    """Await an SDK chat completion call and map every SDK failure and every
+    body that is not JSON to an LLMError, chained from None: the SDK's
+    message carries the response body, which can echo the request.
+
+    The completion itself is not validated: reading it may still raise
+    AttributeError, TypeError or ValueError (`MALFORMED_COMPLETION`).
+    """
+    try:
+        completion = await call
+    except openai.APITimeoutError:
+        raise LLMTimeout("OpenRouter request timed out", provider=_PROVIDER) from None
+    except openai.RateLimitError as error:
+        raise LLMRateLimited(_describe(error), provider=_PROVIDER) from None
+    except openai.OpenAIError as error:
+        raise LLMUnavailable(_describe(error), provider=_PROVIDER) from None
+    except ValueError:
+        # A 200 whose body is cut or empty: the JSON decoder's error holds
+        # the whole body, which can quote the answer, so nothing is kept.
+        raise LLMUnavailable(
+            "OpenRouter returned an unreadable body", provider=_PROVIDER
+        ) from None
+    if not isinstance(completion, ChatCompletion):
+        # The SDK hands back a non-JSON 200 body (an HTML error page from a
+        # proxy) as a plain string.
+        raise LLMUnavailable(
+            "OpenRouter returned a body that is not JSON", provider=_PROVIDER
+        ) from None
+    return completion
+
+
+def first_choice(completion: ChatCompletion) -> Choice:
+    """The answer's choice, once OpenRouter reported no failure and no
+    refusal. A refusal is billed: LLMRefused carries the completion's usage.
+    """
+    if not completion.choices:
+        raise LLMUnavailable("OpenRouter returned no choices", provider=_PROVIDER)
+    choice = completion.choices[0]
+    finish_reason: str | None = choice.finish_reason
+    if finish_reason == "error":
+        # OpenRouter reports an upstream failure after the stream began this way.
+        raise LLMUnavailable("OpenRouter finish_reason=error", provider=_PROVIDER)
+    if choice.message.refusal or finish_reason == "content_filter":
+        raise LLMRefused(
+            f"OpenRouter finish_reason={finish_reason}",
+            provider=_PROVIDER,
+            usage=completion_usage(completion),
+        )
+    return choice
 
 
 def _messages(request: LLMRequest, model: str) -> list[ChatCompletionMessageParam]:
@@ -363,27 +414,15 @@ def _stop(reason: str | None) -> LLMStop:
 def _response(
     completion: ChatCompletion, *, structured: bool, latency_ms: int
 ) -> LLMResponse:
-    if not completion.choices:
-        raise LLMUnavailable("OpenRouter returned no choices", provider=_PROVIDER)
-    choice = completion.choices[0]
+    choice = first_choice(completion)
     finish_reason: str | None = choice.finish_reason
-    if finish_reason == "error":
-        # OpenRouter reports an upstream failure after the stream began this way.
-        raise LLMUnavailable("OpenRouter finish_reason=error", provider=_PROVIDER)
-    if choice.message.refusal or finish_reason == "content_filter":
-        # A refusal is billed like any answer.
-        raise LLMRefused(
-            f"OpenRouter finish_reason={finish_reason}",
-            provider=_PROVIDER,
-            usage=_usage(completion),
-        )
     stop = _stop(finish_reason)
     tool_calls = choice.message.tool_calls or []
     if tool_calls and stop == "end":
         # Some providers behind OpenRouter report "stop" with tool calls; a
         # loop that reads `stop` would drop them. The raw reason is kept.
         stop = "tool_use"
-    usage = _usage(completion)
+    usage = completion_usage(completion)
     if stop == "max_tokens" and (structured or tool_calls):
         # Truncated JSON fails validation again on a repair attempt that has
         # even less room left, and a cut tool call carries half its arguments,
@@ -439,7 +478,7 @@ def _tool_use(call: ChatCompletionMessageToolCallUnion) -> ToolUseBlock:
     )
 
 
-def _usage(completion: ChatCompletion) -> LLMUsage:
+def completion_usage(completion: ChatCompletion) -> LLMUsage:
     usage = completion.usage
     if usage is None:
         return LLMUsage(input_tokens=0, output_tokens=0)
