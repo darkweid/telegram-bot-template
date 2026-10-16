@@ -37,7 +37,13 @@ class Transcriber(Protocol):
     async def transcribe(
         self, audio: bytes, media_type: str, *, language: str | None, purpose: str
     ) -> Transcript:
-        """`language` is an English language name used as a hint, or None."""
+        """Raise `ValueError` before any call on input that
+        `check_transcription_input` refuses, and an `LLMError` subclass when
+        the provider fails.
+
+        `Transcript.text` is stripped; an empty string means there was no
+        speech. `language` is an English language name used as a hint, or None.
+        """
         ...
 
 
