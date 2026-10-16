@@ -3,12 +3,11 @@ import base64
 from collections.abc import Callable
 from decimal import Decimal
 import logging
-from typing import Any
 
 import pytest
 
 from src.core.llm.enums import LLMCallStatus, LLMProviderName
-from src.core.llm.errors import LLMRefused
+from src.core.llm.errors import LLMError, LLMRefused
 from src.core.llm.speech.disabled import DisabledTranscriber
 from src.core.llm.speech.errors import TranscriberNotConfigured
 from src.core.llm.speech.interface import Transcriber
@@ -127,10 +126,28 @@ class SlowRecorder(LLMUsageRecorder):
         self.entered = asyncio.Event()
         self.release = asyncio.Event()
 
-    async def record(self, **kwargs: Any) -> None:
+    async def record(
+        self,
+        *,
+        purpose: str,
+        provider: LLMProviderName,
+        model: str,
+        usage: LLMUsage | None,
+        error: LLMError | None,
+        latency_ms: int,
+        cancelled: bool = False,
+    ) -> None:
         self.entered.set()
         await self.release.wait()
-        await super().record(**kwargs)
+        await super().record(
+            purpose=purpose,
+            provider=provider,
+            model=model,
+            usage=usage,
+            error=error,
+            latency_ms=latency_ms,
+            cancelled=cancelled,
+        )
 
 
 async def test_a_cancel_during_the_record_keeps_one_row() -> None:
@@ -191,6 +208,8 @@ async def test_log_content_shows_the_text_and_only_the_size_of_the_audio() -> No
 
 
 async def test_log_content_names_the_error_class_of_a_failure() -> None:
+    """A failed transcription has no text to show; the line must still say
+    how the attempt ended, or debugging a refusal reads as silence."""
     inner = FakeTranscriber()
     inner.queue(LLMRefused("content_filter", provider=LLMProviderName.OPENROUTER))
     wrapped, _ = _transcriber(inner, log_content=True)
@@ -210,3 +229,22 @@ async def test_the_transcription_stays_out_of_the_logs_by_default() -> None:
     with captured_logs("src.core.llm.speech.recording") as records:
         await _transcribe(wrapped)
     assert records == []
+
+
+async def test_log_content_says_a_cancelled_transcription_was_cancelled() -> None:
+    """A transcription cut by a deadline or a shutdown leaves no text; the
+    line must name the cancel, not look like a call that never ended."""
+    inner = FakeTranscriber()
+    hold = inner.hold()
+    wrapped, _ = _transcriber(inner, log_content=True)
+    with captured_logs("src.core.llm.speech.recording") as records:
+        task = asyncio.create_task(_transcribe(wrapped))
+        async with asyncio.timeout(2):
+            await hold.reached.wait()
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+    [record] = records
+    assert record.getMessage() == (
+        "Transcription for voice: <audio ogg 204 bytes> -> Cancelled"
+    )

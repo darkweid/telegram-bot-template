@@ -25,7 +25,7 @@ class RecordingTranscriber:
     cancelled ones included, and the transcription logged under
     LLM_LOG_CONTENT.
 
-    Input `check_transcription_input` refuses raises its `ValueError` before
+    Input that `check_transcription_input` refuses raises `ValueError` before
     the inner call and is not recorded, nor is `LLMNotConfigured`: neither
     reached a provider.
     """
