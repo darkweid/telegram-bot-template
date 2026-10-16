@@ -188,6 +188,7 @@ def test_env_example_ships_the_llm_off() -> None:
     assert example["LLM_FALLBACK_PROVIDER"] == ""
     assert example["ANTHROPIC_API_KEY"] == ""
     assert example["OPENROUTER_API_KEY"] == ""
+    assert example["TRANSCRIBE_MODEL"] == ""
 
 
 def test_the_commented_llm_example_passes_validation() -> None:
@@ -223,11 +224,12 @@ def test_a_transcribe_model_needs_a_vendor_prefix() -> None:
         _llm(TRANSCRIBE_MODEL="gemini-3.8-flash", OPENROUTER_API_KEY=OPENROUTER_KEY)
 
 
-def test_transcribe_max_tokens_below_the_reasoning_floor_is_refused() -> None:
+@pytest.mark.parametrize("max_tokens", [1999, 32001], ids=["below", "above"])
+def test_transcribe_max_tokens_outside_its_range_is_refused(max_tokens: int) -> None:
     """The model reasons before it answers; under 2000 tokens a transcript is
-    cut off."""
+    cut off, and above 32000 a runaway answer bills far past any voice note."""
     with pytest.raises(ValidationError, match="TRANSCRIBE_MAX_TOKENS"):
-        _llm(TRANSCRIBE_MAX_TOKENS=1999)
+        _llm(TRANSCRIBE_MAX_TOKENS=max_tokens)
 
 
 def test_transcriber_works_beside_an_anthropic_llm() -> None:

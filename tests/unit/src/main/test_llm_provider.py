@@ -25,6 +25,7 @@ from src.main.di import _tier_models, build_container
 from tests.fakes.llm import FakeLLMClient
 from tests.fakes.telegram import FakeTelegramSession
 from tests.helpers.llm import record_closing, with_llm
+from tests.helpers.logs import captured_logs
 from tests.helpers.providers import SessionOnly, TestOverrides, build_test_container
 
 REQUEST = LLMRequest(
@@ -315,3 +316,65 @@ async def test_the_transcriber_works_beside_an_anthropic_client(
         assert isinstance(transcriber.inner, OpenRouterTranscriber)
     finally:
         await container.close()
+
+
+async def test_a_transcriber_without_its_key_fails_by_the_keys_name(
+    settings: Config, i18n: I18n, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Config refuses this combination; a Config copied around its validator
+    must still fail at startup by the key's name, and open no client."""
+    closed: list[str] = []
+    record_closing(monkeypatch, closed)
+    valid = with_llm(settings, LLM_PROVIDER=None, **TRANSCRIBER)
+    # model_copy skips the validator, as a Config assembled by hand would.
+    config = valid.model_copy(
+        update={
+            "llm": valid.llm.model_copy(update={"OPENROUTER_API_KEY": SecretStr("")})
+        }
+    )
+    container = build_container(config, SessionOnly(FakeTelegramSession(), i18n))
+    try:
+        with pytest.raises(RuntimeError, match="OPENROUTER_API_KEY"):
+            await container.get(Transcriber)
+    finally:
+        await container.close()
+    assert closed == []
+
+
+async def _unavailable(self: object, *args: object, **kwargs: object) -> None:
+    raise LLMUnavailable("down")
+
+
+async def _discard(self: object, **kwargs: object) -> None:
+    pass
+
+
+@pytest.mark.parametrize("log_content", [True, False], ids=["on", "off"])
+async def test_llm_log_content_reaches_the_transcriber(
+    settings: Config,
+    i18n: I18n,
+    monkeypatch: pytest.MonkeyPatch,
+    log_content: bool,
+) -> None:
+    """A lost flag silently drops the debugging line; a crossed one writes what
+    users said into the log where nobody asked for it."""
+    monkeypatch.setattr(OpenRouterTranscriber, "transcribe", _unavailable)
+    monkeypatch.setattr(LLMUsageRecorder, "record", _discard)
+    debug = settings.model_copy(
+        update={"app": settings.app.model_copy(update={"DEBUG": True})}
+    )
+    config = with_llm(
+        debug, LLM_PROVIDER=None, LLM_LOG_CONTENT=log_content, **TRANSCRIBER
+    )
+    container = build_container(config, SessionOnly(FakeTelegramSession(), i18n))
+    try:
+        transcriber = await container.get(Transcriber)
+        with captured_logs("src.core.llm.speech.recording") as records:
+            with pytest.raises(LLMUnavailable):
+                await transcriber.transcribe(
+                    b"\x00" * 10, "audio/ogg", language=None, purpose="voice_note"
+                )
+    finally:
+        await container.close()
+    lines = [r.getMessage() for r in records if "Transcription for" in r.getMessage()]
+    assert len(lines) == (1 if log_content else 0)

@@ -1,6 +1,7 @@
 import pytest
 
 from src.core.llm.speech.interface import MAX_AUDIO_BYTES, check_transcription_input
+from src.core.llm.types import PURPOSE_MAX_LENGTH
 
 
 def test_a_known_type_maps_to_its_format() -> None:
@@ -32,8 +33,16 @@ def test_mime_parameters_and_case_are_ignored() -> None:
         (b"x" * (MAX_AUDIO_BYTES + 1), "audio/ogg", None, "voice"),
         (b"x", "video/mp4", None, "voice"),
         (b"x", "audio/ogg", None, ""),
-        (b"x", "audio/ogg", None, "p" * 65),
+        (b"x", "audio/ogg", None, "p" * (PURPOSE_MAX_LENGTH + 1)),
         (b"x", "audio/ogg", "", "voice"),
+    ],
+    ids=[
+        "empty",
+        "too-large",
+        "unknown-type",
+        "empty-purpose",
+        "long-purpose",
+        "empty-language",
     ],
 )
 def test_bad_input_is_refused_before_any_call(
