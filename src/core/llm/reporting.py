@@ -34,7 +34,8 @@ def report_llm_call(
     It carries the provider, model, purpose, token counts, cost and latency -
     never the prompt or the answer: those are user data. Sentry's logging
     integration keeps the line as the call's one breadcrumb. The exchange
-    itself is logged only by RecordingLLMClient under LLM_LOG_CONTENT.
+    itself is logged only by RecordingLLMClient and RecordingTranscriber
+    under LLM_LOG_CONTENT.
 
     `usage` is what the call was billed (`billed_usage`). `cancelled` is a
     call cut short by its caller (a deadline, a stopping bot): outcome

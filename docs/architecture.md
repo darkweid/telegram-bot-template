@@ -114,7 +114,8 @@ Top level:
   the email tasks and the Jinja2 templates;
 - `src/core/http` - the HTTP client for third-party APIs;
 - `src/core/llm` - the LLM client contract, the fallback and the agent loop;
-  the provider adapters in `providers/`, the usage accounting in `usage/`;
+  the provider adapters in `providers/`, the usage accounting in `usage/`,
+  speech to text in `speech/`;
 - `src/core/errors` - `CoreException`, the scrubbing helpers and
   `report_core_exception`;
 - `src/core/i18n` - `build_i18n`, `N_` and the locale middleware;

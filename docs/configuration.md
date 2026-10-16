@@ -158,7 +158,7 @@ The layer itself is described in [the LLM guide](llm.md).
 | `LLM_FALLBACK_MODEL` | empty | Model of the fallback provider; required with it. |
 | `LLM_FALLBACK_MODEL_FAST` | empty | The fallback's model for `ModelTier.FAST`; empty means `LLM_FALLBACK_MODEL`. |
 | `ANTHROPIC_API_KEY` | empty | Required when Anthropic is the primary or the fallback. |
-| `OPENROUTER_API_KEY` | empty | Required when OpenRouter is the primary or the fallback. |
+| `OPENROUTER_API_KEY` | empty | Required when OpenRouter is the primary or the fallback, or when `TRANSCRIBE_MODEL` is set. |
 | `OPENROUTER_APP_URL` | empty | Public URL OpenRouter credits the calls to (`HTTP-Referer`); printable ASCII, blank sends nothing. |
 | `OPENROUTER_APP_TITLE` | empty | App name OpenRouter credits the calls to (`X-Title`); printable ASCII, blank sends nothing. |
 | `TRANSCRIBE_MODEL` | empty | OpenRouter id `<vendor>/<model>` of a model that takes audio; empty turns voice transcription off. Requires `OPENROUTER_API_KEY`, whatever `LLM_PROVIDER` is. A model without audio input answers with an error; OpenAI models refuse OGG. |
@@ -167,7 +167,7 @@ The layer itself is described in [the LLM guide](llm.md).
 | `LLM_MAX_RETRIES` | `1` | Retries after a 429, a 5xx or a network error, 0 to 5. |
 | `LLM_PRICING_OVERRIDES` | empty | JSON that replaces or extends the price table in `src/core/llm/usage/pricing.py`; each entry needs all four rates. Malformed JSON or a bad rate stops startup. |
 | `LLM_USAGE_RETENTION_DAYS` | `90` | Days of `llm_usage` rows the daily purge keeps; at least 30, the longest period `/stats` reports. |
-| `LLM_LOG_CONTENT` | `false` | Logs every prompt and answer, which carry what users typed. Refused unless `DEBUG=true`, and refused by `make check-env`. |
+| `LLM_LOG_CONTENT` | `false` | Logs every prompt and answer, and every voice transcript: what users typed or said. Refused unless `DEBUG=true`, and refused by `make check-env`. |
 
 ## S3
 

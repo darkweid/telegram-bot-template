@@ -38,11 +38,10 @@ class Transcriber(Protocol):
         self, audio: bytes, media_type: str, *, language: str | None, purpose: str
     ) -> Transcript:
         """Raise `ValueError` before any call on input that
-        `check_transcription_input` refuses, and an `LLMError` subclass when
-        the provider fails.
+        `check_transcription_input` refuses, an `LLMError` subclass when the
+        provider fails, and `TranscriberNotConfigured` when the feature is off.
 
-        `Transcript.text` is stripped; an empty string means there was no
-        speech. `language` is an English language name used as a hint, or None.
+        `language` is an English language name used as a hint, or None.
         """
         ...
 
