@@ -50,8 +50,10 @@ you switch it on.
   progress and a Stop button, resumed from the last checkpoint after a worker
   restart. [Details](docs/broadcast.md)
 - An LLM client for Anthropic and OpenRouter: structured output validated by
-  pydantic, tools and an agent loop over them, images, two model tiers, a fallback provider, and the cost
-  of every call recorded and shown in `/stats`. Off until `LLM_PROVIDER` is set. [Details](docs/llm.md)
+  pydantic, tools and an agent loop over them, images, two model tiers, a
+  fallback provider, speech to text through OpenRouter, and the cost of every
+  call recorded and shown in `/stats`. Off until `LLM_PROVIDER`, or
+  `TRANSCRIBE_MODEL` for speech, is set. [Details](docs/llm.md)
 - S3 storage and SMTP email with HTML templates, both off by default.
   [S3](docs/background-jobs.md#file-storage-s3), [email](docs/background-jobs.md#email)
 - One error handler that logs the failure, answers in the user's Telegram
@@ -217,7 +219,7 @@ The step-by-step checklist is in
 | [The bot layer](docs/bot-layer.md) | Polling and webhook, startup and shutdown, the middleware chain, roles, throttling, errors and alerts, health probes |
 | [Background jobs](docs/background-jobs.md) | The worker and the scheduler, declaring a task, the outbox, schedules, failure alerts, S3 and email |
 | [Broadcasts](docs/broadcast.md) | Sending a broadcast, how a run survives a restart, pacing |
-| [The LLM layer](docs/llm.md) | Turning it on, calling a model, structured output, fallback, usage and cost |
+| [The LLM layer](docs/llm.md) | Turning it on, calling a model, structured output, fallback, usage and cost, speech to text |
 | [Translations](docs/i18n.md) | Marking strings, updating catalogs, adding a language |
 | [Configuration](docs/configuration.md) | Every `.env` key with its default, and the deploy-time `.env` check |
 | [Deployment](docs/deployment.md) | Webhook mode and nginx, server provisioning, the deploy script, CD, releases |

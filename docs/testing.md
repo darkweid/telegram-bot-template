@@ -71,7 +71,8 @@ prompt, saved = running.session.sent(SendMessage)
 - **Overrides.** `running_bot` always adds `TestOverrides`
   (`tests/helpers/providers.py`): in-memory FSM storage, cache and limiters,
   and recording fakes for the task publisher (`.publisher`), the unreachable
-  recorder (`.recorder`) and the model (`.llm`, a `FakeLLMClient`). Inside a
+  recorder (`.recorder`), the model (`.llm`, a `FakeLLMClient`) and the
+  transcriber (`.transcriber`, a `FakeTranscriber`). Inside a
   running bot, get them from the container, for example
   `await running.container.get(LLMClient)`. `SessionOnly` overrides only the
   two Telegram sessions and the catalogs, for a test of a production provider
@@ -121,6 +122,7 @@ touches the dev stack.
 |---|---|---|
 | `InMemoryRedis` | `tests/fakes/redis.py` | Redis, including every Lua script the code runs (rate limiter, cache, task claim). |
 | `FakeLLMClient` | `tests/fakes/llm.py` | `LLMClient`: `queue()` a response or an exception, `queue_structured()` an output model, `hold()` the next call, read `calls`. |
+| `FakeTranscriber` | `tests/fakes/speech.py` | `Transcriber`: `queue()` a `transcript()` or an exception, `hold()` the next call, read `calls`; refuses the input the adapter refuses. |
 | `ScriptedLLMServer` | `tests/helpers/llm_server.py` | The provider's HTTP API, as an `httpx2` mock transport for the adapter tests (`tests/unit/src/core/llm/providers/test_anthropic.py`, `test_openrouter.py`). |
 | `InMemoryS3Client` | `tests/fakes/s3.py` | The `S3Client` protocol over in-memory buckets. |
 | `FakeMailer` | `tests/fakes/email.py` | The SMTP mailer; records every send, or raises the `error` you set. |

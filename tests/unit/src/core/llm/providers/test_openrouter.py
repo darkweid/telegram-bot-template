@@ -1,7 +1,7 @@
 from decimal import Decimal
 import json
 import logging
-from typing import Any
+from typing import Any, NoReturn
 
 import httpx2
 from pydantic import BaseModel, field_validator
@@ -9,17 +9,20 @@ import pytest
 
 from src.core.llm.enums import LLMProviderName, ModelTier
 from src.core.llm.errors import (
+    LLMError,
     LLMOutputError,
     LLMRateLimited,
     LLMRefused,
     LLMTimeout,
     LLMUnavailable,
 )
-from src.core.llm.providers.openrouter import OpenRouterLLMClient
+from src.core.llm.providers import openrouter as openrouter_module
+from src.core.llm.providers.openrouter import OpenRouterLLMClient, openrouter_client
 from src.core.llm.structured import combine_usage
 from src.core.llm.types import LLMMessage, LLMRequest, LLMUsage
 from tests.helpers.llm_server import ScriptedLLMServer
 from tests.helpers.logs import captured_logs
+from tests.helpers.sentry import collected_breadcrumbs
 
 SECRET_PROMPT = "my diary entry about the surgery"
 
@@ -197,6 +200,25 @@ async def test_empty_attribution_is_not_sent(server: ScriptedLLMServer) -> None:
     assert "http-referer" not in sent.headers
     assert "x-title" not in sent.headers
     await client.aclose()
+
+
+async def test_the_shared_client_pins_the_base_url_and_drops_blank_attribution() -> (
+    None
+):
+    """Every OpenRouter caller builds its client here: OPENAI_BASE_URL in the
+    environment must not send the key elsewhere, and a blank attribution
+    header would list an app with no name."""
+    client = openrouter_client(
+        api_key="k",
+        app_url="",
+        app_title="Bot",
+        timeout_seconds=7.0,
+        max_retries=0,
+    )
+    assert client.base_url == "https://openrouter.ai/api/v1/"
+    assert client.default_headers["X-Title"] == "Bot"
+    assert "HTTP-Referer" not in client.default_headers
+    await client.close()
 
 
 async def test_structured_asks_for_a_strict_schema_on_providers_that_honour_it(
@@ -408,6 +430,24 @@ async def test_one_log_line_without_content(server: ScriptedLLMServer) -> None:
     ):
         assert part in line
     assert "surgery" not in line
+    await client.aclose()
+
+
+async def test_each_call_leaves_exactly_one_breadcrumb_without_content(
+    server: ScriptedLLMServer,
+) -> None:
+    """A Sentry event carries the breadcrumbs of the calls before it: one per
+    call keeps the trail readable, and the prompt and the answer are user data
+    that must not ride along with an unrelated error."""
+    server.reply(completion("the answer about the surgery"))
+    client = make_client(server)
+
+    with collected_breadcrumbs() as breadcrumbs:
+        await client.complete(request())
+
+    [crumb] = [c for c in breadcrumbs if c["category"] == "src.core.llm.reporting"]
+    assert "purpose=note_summary" in crumb["message"]
+    assert "surgery" not in repr(breadcrumbs)
     await client.aclose()
 
 
@@ -695,3 +735,26 @@ async def test_a_fast_request_calls_the_fast_model(server: ScriptedLLMServer) ->
     await client.complete(request(tier=ModelTier.FAST))
 
     assert server.bodies()[0]["model"] == "google/gemini-3.5-flash-lite"
+
+
+def _refuse_to_build(*args: object, **kwargs: object) -> NoReturn:
+    raise ValueError("schema this provider cannot express")
+
+
+async def test_a_request_the_sdk_cannot_build_is_a_bug_not_an_outage(
+    server: ScriptedLLMServer, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A request the adapter cannot build is the caller's bug: read as an
+    outage it would switch to the fallback, alert the developers about a
+    provider that is fine and record a call that never left the bot."""
+    monkeypatch.setattr(openrouter_module, "_tools", _refuse_to_build)
+    client = make_client(server)
+
+    with captured_logs("src.core.llm.reporting") as records:
+        with pytest.raises(ValueError) as raised:
+            await client.complete(request())
+
+    assert not isinstance(raised.value, LLMError)
+    assert server.requests == []
+    assert records == []
+    await client.aclose()

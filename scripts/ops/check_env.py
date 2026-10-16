@@ -105,6 +105,8 @@ KNOWN_KEYS = frozenset(
         "OPENROUTER_API_KEY",
         "OPENROUTER_APP_URL",
         "OPENROUTER_APP_TITLE",
+        "TRANSCRIBE_MODEL",
+        "TRANSCRIBE_MAX_TOKENS",
         "LLM_TIMEOUT_SECONDS",
         "LLM_MAX_RETRIES",
         "LLM_PRICING_OVERRIDES",
@@ -193,6 +195,9 @@ FEATURE_SWITCHES = {
 # after is LLM_PROVIDER or LLM_FALLBACK_PROVIDER.
 PROVIDER_KEY = re.compile(r"([A-Z][A-Z0-9]*)_API_KEY")
 LLM_PROVIDER_KEYS = ("LLM_PROVIDER", "LLM_FALLBACK_PROVIDER")
+# The transcriber uses the OpenRouter key whatever the providers above say.
+TRANSCRIBER_MODEL_KEY = "TRANSCRIBE_MODEL"
+TRANSCRIBER_PROVIDER = "openrouter"
 ASCII_DIGITS = re.compile(r"[0-9]+")
 CPUS_PATTERN = re.compile(r"[0-9]+(\.[0-9]+)?")
 # compose's byte units: 512M, 1g, 1.5GB, 1048576.
@@ -341,8 +346,13 @@ def _feature_is_off(env: dict[str, str], key: str) -> bool:
             return not _is_true(env.get(switch, ""))
     provider = PROVIDER_KEY.fullmatch(key)
     if provider:
-        in_use = {env.get(name, "").strip().lower() for name in LLM_PROVIDER_KEYS}
-        return provider.group(1).lower() not in in_use
+        name = provider.group(1).lower()
+        if name == TRANSCRIBER_PROVIDER and env.get(TRANSCRIBER_MODEL_KEY, "").strip():
+            return False
+        in_use = {
+            env.get(name_key, "").strip().lower() for name_key in LLM_PROVIDER_KEYS
+        }
+        return name not in in_use
     return False
 
 

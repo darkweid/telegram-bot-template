@@ -13,6 +13,7 @@ from src.core.cache.memory_cache import InMemoryCache
 from src.core.cache.serializer import JsonSerializer
 from src.core.limiter.limiter import RateLimiter
 from src.core.llm.interface import LLMClient
+from src.core.llm.speech.interface import Transcriber
 from src.core.outbox.interface import TaskPublisher
 from src.core.redis.degradation import RedisDegradationReporter
 from src.core.telegram.alerts import AlertLimiter, AlertSession
@@ -22,6 +23,7 @@ from src.main.config import Config
 from src.main.di import build_container
 from tests.fakes.llm import FakeLLMClient
 from tests.fakes.redis import InMemoryRedis
+from tests.fakes.speech import FakeTranscriber
 from tests.fakes.telegram import FakeTelegramSession
 
 
@@ -98,6 +100,7 @@ class TestOverrides(SessionOnly):
         self.recorder = RecordingUnreachableRecorder()
         self.publisher = RecordingTaskPublisher()
         self.llm = FakeLLMClient()
+        self.transcriber = FakeTranscriber()
 
     @provide(override=True)
     def fsm_storage(self) -> BaseStorage:
@@ -137,6 +140,10 @@ class TestOverrides(SessionOnly):
     def llm_client(self) -> LLMClient:
         # No unit test reaches a provider: queue answers on `overrides.llm`.
         return self.llm
+
+    @provide(override=True)
+    def transcriber_client(self) -> Transcriber:
+        return self.transcriber
 
     @provide(override=True)
     def alert_limiter(self) -> AlertLimiter:

@@ -6,22 +6,27 @@ from pydantic import SecretStr
 import pytest
 
 from src.core.llm.disabled import DisabledLLMClient
-from src.core.llm.enums import ModelTier
-from src.core.llm.errors import LLMNotConfigured
+from src.core.llm.enums import LLMProviderName, ModelTier
+from src.core.llm.errors import LLMNotConfigured, LLMUnavailable
 from src.core.llm.fallback import FallbackLLMClient
 from src.core.llm.interface import LLMClient
 from src.core.llm.providers.anthropic import AnthropicLLMClient
 from src.core.llm.providers.openrouter import OpenRouterLLMClient
+from src.core.llm.speech.disabled import DisabledTranscriber
+from src.core.llm.speech.interface import Transcriber
+from src.core.llm.speech.openrouter import OpenRouterTranscriber
+from src.core.llm.speech.recording import RecordingTranscriber
 from src.core.llm.types import LLMMessage, LLMRequest, LLMUsage
 from src.core.llm.usage.pricing import PricingTable
-from src.core.llm.usage.recording import RecordingLLMClient
+from src.core.llm.usage.recording import LLMUsageRecorder, RecordingLLMClient
 from src.core.llm.usage.repository import LLMUsageRepository
 from src.main.config import Config
 from src.main.di import _tier_models, build_container
 from tests.fakes.llm import FakeLLMClient
 from tests.fakes.telegram import FakeTelegramSession
 from tests.helpers.llm import record_closing, with_llm
-from tests.helpers.providers import SessionOnly, build_test_container
+from tests.helpers.logs import captured_logs
+from tests.helpers.providers import SessionOnly, TestOverrides, build_test_container
 
 REQUEST = LLMRequest(
     purpose="note_summary", messages=[LLMMessage(role="user", content="hi")]
@@ -200,3 +205,176 @@ def test_the_tier_mapping_is_read_only() -> None:
     models = _tier_models("a", "b")
     with pytest.raises(TypeError):
         models[ModelTier.FAST] = "c"  # type: ignore[index]
+
+
+TRANSCRIBER = {
+    "OPENROUTER_API_KEY": "sk-or-not-real",
+    "TRANSCRIBE_MODEL": "google/gemini-3.8-flash",
+}
+
+
+async def test_an_empty_transcribe_model_gives_the_disabled_transcriber(
+    settings: Config, i18n: I18n, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A bot without voice input must start with no OpenRouter key."""
+    closed: list[str] = []
+    record_closing(monkeypatch, closed)
+    config = with_llm(settings, LLM_PROVIDER=None)
+    container = build_container(config, SessionOnly(FakeTelegramSession(), i18n))
+    try:
+        assert isinstance(await container.get(Transcriber), DisabledTranscriber)
+    finally:
+        await container.close()
+    assert closed == []
+
+
+async def test_a_transcriber_is_recorded_and_closed_with_the_container(
+    settings: Config, i18n: I18n, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The SDK client holds a connection pool bound to this event loop; left
+    open, it outlives the loop and warns at exit."""
+    closed: list[str] = []
+    record_closing(monkeypatch, closed)
+    config = with_llm(settings, LLM_PROVIDER=None, **TRANSCRIBER)
+    container = build_container(config, SessionOnly(FakeTelegramSession(), i18n))
+    try:
+        transcriber = await container.get(Transcriber)
+        assert isinstance(transcriber, RecordingTranscriber)
+        assert isinstance(transcriber.inner, OpenRouterTranscriber)
+        assert closed == []
+    finally:
+        await container.close()
+    assert closed == ["OpenRouterTranscriber"]
+
+
+async def test_the_transcriber_does_not_need_the_llm_provider(
+    settings: Config, i18n: I18n
+) -> None:
+    """Voice input may run beside an LLM layer that is off."""
+    config = with_llm(settings, LLM_PROVIDER=None, **TRANSCRIBER)
+    container = build_container(config, SessionOnly(FakeTelegramSession(), i18n))
+    try:
+        assert isinstance(await container.get(LLMClient), DisabledLLMClient)
+        assert isinstance(await container.get(Transcriber), RecordingTranscriber)
+    finally:
+        await container.close()
+
+
+async def test_handler_tests_get_the_fake_transcriber(
+    settings: Config, i18n: I18n
+) -> None:
+    """Unit tests must never reach a provider: they queue answers on the fake."""
+    overrides = TestOverrides(FakeTelegramSession(), i18n)
+    container = build_container(settings, overrides)
+    try:
+        assert await container.get(Transcriber) is overrides.transcriber
+    finally:
+        await container.close()
+
+
+async def test_the_usage_row_names_the_transcription_model(
+    settings: Config, i18n: I18n, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The llm_usage row must name what was called, not the chat model beside it."""
+    recorded: list[dict[str, object]] = []
+
+    async def failing(self: object, *args: object, **kwargs: object) -> None:
+        raise LLMUnavailable("down")
+
+    async def capture(self: object, **kwargs: object) -> None:
+        recorded.append(kwargs)
+
+    monkeypatch.setattr(OpenRouterTranscriber, "transcribe", failing)
+    monkeypatch.setattr(LLMUsageRecorder, "record", capture)
+    config = with_llm(settings, **{**WITH_FALLBACK, **TRANSCRIBER})
+    container = build_container(config, SessionOnly(FakeTelegramSession(), i18n))
+    try:
+        transcriber = await container.get(Transcriber)
+        with pytest.raises(LLMUnavailable):
+            await transcriber.transcribe(
+                b"\x00" * 10, "audio/ogg", language=None, purpose="voice_note"
+            )
+    finally:
+        await container.close()
+    assert len(recorded) == 1
+    assert recorded[0]["provider"] == LLMProviderName.OPENROUTER
+    assert recorded[0]["model"] == TRANSCRIBER["TRANSCRIBE_MODEL"]
+
+
+async def test_the_transcriber_works_beside_an_anthropic_client(
+    settings: Config, i18n: I18n
+) -> None:
+    """Voice input goes through OpenRouter whatever the chat provider is."""
+    config = with_llm(settings, **ANTHROPIC, **TRANSCRIBER)
+    container = build_container(config, SessionOnly(FakeTelegramSession(), i18n))
+    try:
+        client = await container.get(LLMClient)
+        assert isinstance(client, RecordingLLMClient)
+        assert isinstance(client.inner, AnthropicLLMClient)
+        transcriber = await container.get(Transcriber)
+        assert isinstance(transcriber, RecordingTranscriber)
+        assert isinstance(transcriber.inner, OpenRouterTranscriber)
+    finally:
+        await container.close()
+
+
+async def test_a_transcriber_without_its_key_fails_by_the_keys_name(
+    settings: Config, i18n: I18n, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Config refuses this combination; a Config copied around its validator
+    must still fail at startup by the key's name, and open no client."""
+    closed: list[str] = []
+    record_closing(monkeypatch, closed)
+    valid = with_llm(settings, LLM_PROVIDER=None, **TRANSCRIBER)
+    # model_copy skips the validator, as a Config assembled by hand would.
+    config = valid.model_copy(
+        update={
+            "llm": valid.llm.model_copy(update={"OPENROUTER_API_KEY": SecretStr("")})
+        }
+    )
+    container = build_container(config, SessionOnly(FakeTelegramSession(), i18n))
+    try:
+        with pytest.raises(RuntimeError, match="OPENROUTER_API_KEY"):
+            await container.get(Transcriber)
+    finally:
+        await container.close()
+    assert closed == []
+
+
+async def _unavailable(self: object, *args: object, **kwargs: object) -> None:
+    raise LLMUnavailable("down")
+
+
+async def _discard(self: object, **kwargs: object) -> None:
+    pass
+
+
+@pytest.mark.parametrize("log_content", [True, False], ids=["on", "off"])
+async def test_llm_log_content_reaches_the_transcriber(
+    settings: Config,
+    i18n: I18n,
+    monkeypatch: pytest.MonkeyPatch,
+    log_content: bool,
+) -> None:
+    """A lost flag silently drops the debugging line; a crossed one writes what
+    users said into the log where nobody asked for it."""
+    monkeypatch.setattr(OpenRouterTranscriber, "transcribe", _unavailable)
+    monkeypatch.setattr(LLMUsageRecorder, "record", _discard)
+    debug = settings.model_copy(
+        update={"app": settings.app.model_copy(update={"DEBUG": True})}
+    )
+    config = with_llm(
+        debug, LLM_PROVIDER=None, LLM_LOG_CONTENT=log_content, **TRANSCRIBER
+    )
+    container = build_container(config, SessionOnly(FakeTelegramSession(), i18n))
+    try:
+        transcriber = await container.get(Transcriber)
+        with captured_logs("src.core.llm.speech.recording") as records:
+            with pytest.raises(LLMUnavailable):
+                await transcriber.transcribe(
+                    b"\x00" * 10, "audio/ogg", language=None, purpose="voice_note"
+                )
+    finally:
+        await container.close()
+    lines = [r.getMessage() for r in records if "Transcription for" in r.getMessage()]
+    assert len(lines) == (1 if log_content else 0)

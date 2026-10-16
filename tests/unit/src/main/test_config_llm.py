@@ -188,6 +188,7 @@ def test_env_example_ships_the_llm_off() -> None:
     assert example["LLM_FALLBACK_PROVIDER"] == ""
     assert example["ANTHROPIC_API_KEY"] == ""
     assert example["OPENROUTER_API_KEY"] == ""
+    assert example["TRANSCRIBE_MODEL"] == ""
 
 
 def test_the_commented_llm_example_passes_validation() -> None:
@@ -199,6 +200,7 @@ def test_the_commented_llm_example_passes_validation() -> None:
         "LLM_FALLBACK_MODEL",
         "ANTHROPIC_API_KEY",
         "OPENROUTER_API_KEY",
+        "TRANSCRIBE_MODEL",
     )
     values = {name: _commented_example(name) for name in names}
     assert None not in values.values(), values
@@ -207,6 +209,66 @@ def test_the_commented_llm_example_passes_validation() -> None:
 
     assert config.LLM_PROVIDER is LLMProviderName.ANTHROPIC
     assert config.LLM_FALLBACK_PROVIDER is LLMProviderName.OPENROUTER
+    assert config.TRANSCRIBE_MODEL == "google/gemini-3.8-flash"
+
+
+def test_a_transcribe_model_needs_the_openrouter_key() -> None:
+    """Without the check every voice message would fail with a 401 at run time."""
+    with pytest.raises(ValidationError, match="OPENROUTER_API_KEY"):
+        _llm(TRANSCRIBE_MODEL="google/gemini-3.8-flash")
+
+
+def test_a_transcribe_model_needs_a_vendor_prefix() -> None:
+    """OpenRouter answers 400 to a bare model id; better to stop at startup."""
+    with pytest.raises(ValidationError, match="TRANSCRIBE_MODEL"):
+        _llm(TRANSCRIBE_MODEL="gemini-3.8-flash", OPENROUTER_API_KEY=OPENROUTER_KEY)
+
+
+@pytest.mark.parametrize("max_tokens", [1999, 32001], ids=["below", "above"])
+def test_transcribe_max_tokens_outside_its_range_is_refused(max_tokens: int) -> None:
+    """The model reasons before it answers; under 2000 tokens a transcript is
+    cut off, and above 32000 a runaway answer bills far past any voice note."""
+    with pytest.raises(ValidationError, match="TRANSCRIBE_MAX_TOKENS"):
+        _llm(TRANSCRIBE_MAX_TOKENS=max_tokens)
+
+
+def test_transcriber_works_beside_an_anthropic_llm() -> None:
+    """The transcriber has its own provider, whatever the chat model is."""
+    config = _llm(
+        LLM_PROVIDER="anthropic",
+        ANTHROPIC_API_KEY=ANTHROPIC_KEY,
+        OPENROUTER_API_KEY=OPENROUTER_KEY,
+        TRANSCRIBE_MODEL="google/gemini-3.8-flash",
+    )
+
+    assert config.LLM_PROVIDER is LLMProviderName.ANTHROPIC
+    assert config.TRANSCRIBE_MODEL == "google/gemini-3.8-flash"
+
+
+def test_a_blank_transcribe_model_means_off() -> None:
+    """check_env reads a whitespace-only value as off; the config must agree
+    or a deploy that passed the check would fail at startup."""
+    assert _llm(TRANSCRIBE_MODEL="  ").TRANSCRIBE_MODEL == ""
+
+
+def test_transcriber_works_with_the_llm_off() -> None:
+    """A bot may transcribe voice without any chat model."""
+    config = _llm(
+        OPENROUTER_API_KEY=OPENROUTER_KEY, TRANSCRIBE_MODEL="google/gemini-3.8-flash"
+    )
+
+    assert config.LLM_PROVIDER is None
+
+
+def test_the_openrouter_key_stays_out_of_a_transcriber_error() -> None:
+    """A validation error ends up in logs; the key must not."""
+    with pytest.raises(ValidationError) as error:
+        _llm(
+            TRANSCRIBE_MODEL="gemini",
+            OPENROUTER_API_KEY=SecretStr("sk-or-secret-not-real"),
+        )
+
+    assert "sk-or-secret-not-real" not in str(error.value)
 
 
 @pytest.mark.parametrize("setting", ["OPENROUTER_APP_URL", "OPENROUTER_APP_TITLE"])

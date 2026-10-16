@@ -51,6 +51,10 @@ from src.core.llm.fallback import FallbackLLMClient
 from src.core.llm.interface import LLMClient
 from src.core.llm.providers.anthropic import AnthropicLLMClient
 from src.core.llm.providers.openrouter import OpenRouterLLMClient
+from src.core.llm.speech.disabled import DisabledTranscriber
+from src.core.llm.speech.interface import Transcriber
+from src.core.llm.speech.openrouter import OpenRouterTranscriber
+from src.core.llm.speech.recording import RecordingTranscriber
 from src.core.llm.usage.pricing import PricingTable
 from src.core.llm.usage.recording import LLMUsageRecorder, RecordingLLMClient
 from src.core.llm.usage.repository import LLMUsageRepository
@@ -332,11 +336,11 @@ class TelegramProvider(Provider):
 
 
 def _required(value: str, key: str) -> str:
-    # Config's validator refuses a provider without its key or model; a Config
+    # Config's validator refuses a provider or transcriber without its key; a Config
     # copied around the validator still fails here by the key's name instead
     # of at the first paid call.
     if not value:
-        raise RuntimeError(f"{key} is required by the configured LLM provider")
+        raise RuntimeError(f"{key} is required by the configuration")
     return value
 
 
@@ -452,6 +456,36 @@ class LLMProvider(Provider):
                 adapters,
             )
             yield FallbackLLMClient(primary, fallback, alerter)
+
+    @provide
+    async def transcriber(
+        self, config: Config, recorder: LLMUsageRecorder
+    ) -> AsyncIterator[Transcriber]:
+        llm = config.llm
+        if not llm.TRANSCRIBE_MODEL:
+            yield DisabledTranscriber()
+            return
+        adapter = OpenRouterTranscriber(
+            api_key=_required(
+                llm.OPENROUTER_API_KEY.get_secret_value(), "OPENROUTER_API_KEY"
+            ),
+            model=llm.TRANSCRIBE_MODEL,
+            max_tokens=llm.TRANSCRIBE_MAX_TOKENS,
+            app_url=llm.OPENROUTER_APP_URL,
+            app_title=llm.OPENROUTER_APP_TITLE,
+            timeout_seconds=llm.LLM_TIMEOUT_SECONDS,
+            max_retries=llm.LLM_MAX_RETRIES,
+        )
+        try:
+            yield RecordingTranscriber(
+                adapter,
+                recorder,
+                provider=LLMProviderName.OPENROUTER,
+                model=llm.TRANSCRIBE_MODEL,
+                log_content=llm.LLM_LOG_CONTENT,
+            )
+        finally:
+            await adapter.aclose()
 
 
 class AlertProvider(Provider):

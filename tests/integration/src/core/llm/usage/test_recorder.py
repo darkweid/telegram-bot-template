@@ -7,18 +7,15 @@ from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 
 from src.core.llm.enums import LLMCallStatus, LLMProviderName
-from src.core.llm.types import (
-    LLMMessage,
-    LLMRequest,
-    LLMResponse,
-    LLMUsage,
-    TextBlock,
-)
+from src.core.llm.reporting import billed_usage
+from src.core.llm.speech.recording import RecordingTranscriber
+from src.core.llm.types import LLMResponse, LLMUsage, TextBlock
 from src.core.llm.usage import recording as recording_module
 from src.core.llm.usage.models import LLMUsageRecord
 from src.core.llm.usage.recording import LLMUsageRecorder
 from src.core.llm.usage.repository import LLMUsageRepository
 from src.core.update_context import UpdateContext, bind_update_context
+from tests.fakes.speech import FakeTranscriber, transcript
 from tests.integration.conftest import new_user_id
 
 pytestmark = pytest.mark.asyncio(loop_scope="session")
@@ -35,9 +32,6 @@ async def test_a_recorded_call_is_committed_on_its_own(
     sessionmaker = async_sessionmaker(integration_engine, expire_on_commit=False)
     purpose = f"test_{uuid4().hex}"
     user_id = new_user_id()
-    request = LLMRequest(
-        purpose=purpose, messages=[LLMMessage(role="user", content="hi")]
-    )
     response = LLMResponse(
         content=(TextBlock("hello"),),
         usage=LLMUsage(input_tokens=7, output_tokens=3, cost_usd=Decimal("0.00004200")),
@@ -51,9 +45,9 @@ async def test_a_recorded_call_is_committed_on_its_own(
         UpdateContext(update_id=1, update_type="message", user_id=user_id)
     ):
         await LLMUsageRecorder(sessionmaker, LLMUsageRepository()).record(
-            request,
-            response,
-            None,
+            purpose=purpose,
+            usage=billed_usage(response.usage, None),
+            error=None,
             provider=LLMProviderName.ANTHROPIC,
             model="claude-sonnet-5-5",
             latency_ms=321,
@@ -92,13 +86,10 @@ async def test_a_cancelled_call_row_round_trips(
     monkeypatch.setattr(recording_module, "get_utc_now", lambda: CANCELLED_AT)
     sessionmaker = async_sessionmaker(integration_engine, expire_on_commit=False)
     purpose = f"test_{uuid4().hex}"
-    request = LLMRequest(
-        purpose=purpose, messages=[LLMMessage(role="user", content="hi")]
-    )
     await LLMUsageRecorder(sessionmaker, LLMUsageRepository()).record(
-        request,
-        None,
-        None,
+        purpose=purpose,
+        usage=None,
+        error=None,
         provider=LLMProviderName.ANTHROPIC,
         model="claude-sonnet-5-5",
         latency_ms=1500,
@@ -125,4 +116,47 @@ async def test_a_cancelled_call_row_round_trips(
             await session.execute(
                 delete(LLMUsageRecord).where(LLMUsageRecord.purpose == purpose)
             )
+            await session.commit()
+
+
+TRANSCRIBED_AT = datetime(2004, 4, 4, 4, 4, 4, tzinfo=UTC)
+
+
+async def test_a_transcription_row_lands_in_llm_usage(
+    integration_engine: AsyncEngine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Voice input is paid per call like any model call: /stats must see its
+    provider, purpose and the cost OpenRouter reported, to the last digit."""
+    monkeypatch.setattr(recording_module, "get_utc_now", lambda: TRANSCRIBED_AT)
+    sessionmaker = async_sessionmaker(integration_engine, expire_on_commit=False)
+    inner = FakeTranscriber()
+    inner.queue(transcript(cost=Decimal("0.00012345")))
+    transcriber = RecordingTranscriber(
+        inner,
+        LLMUsageRecorder(sessionmaker, LLMUsageRepository()),
+        provider=LLMProviderName.OPENROUTER,
+        model="google/gemini-3.8-flash",
+    )
+    purpose = f"test_{uuid4().hex}"
+    in_window = (LLMUsageRecord.purpose == purpose) & (
+        LLMUsageRecord.created_at == TRANSCRIBED_AT
+    )
+    try:
+        await transcriber.transcribe(
+            b"OggS", "audio/ogg", language=None, purpose=purpose
+        )
+        async with sessionmaker() as session:
+            row = (
+                await session.execute(select(LLMUsageRecord).where(in_window))
+            ).scalar_one()
+        assert (row.provider, row.model, row.status) == (
+            "openrouter",
+            "google/gemini-3.8-flash",
+            LLMCallStatus.SUCCESS,
+        )
+        assert (row.input_tokens, row.output_tokens) == (20, 6)
+        assert row.cost_usd == Decimal("0.00012345")
+    finally:
+        async with sessionmaker() as session:
+            await session.execute(delete(LLMUsageRecord).where(in_window))
             await session.commit()

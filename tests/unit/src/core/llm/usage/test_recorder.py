@@ -6,8 +6,9 @@ import sentry_sdk
 from sqlalchemy.exc import DBAPIError
 
 from src.core.errors.scrubbed import ScrubbedError
-from src.core.llm.enums import LLMCallStatus, LLMProviderName
+from src.core.llm.enums import LLMCallStatus, LLMProviderName, ModelTier
 from src.core.llm.errors import LLMOutputError, LLMRefused, LLMTimeout
+from src.core.llm.reporting import billed_usage
 from src.core.llm.types import (
     LLMMessage,
     LLMRequest,
@@ -17,10 +18,11 @@ from src.core.llm.types import (
 )
 from src.core.llm.usage import recording as recording_module
 from src.core.llm.usage.models import LLMUsageRecord
-from src.core.llm.usage.recording import LLMUsageRecorder
+from src.core.llm.usage.recording import LLMUsageRecorder, RecordingLLMClient
 from src.core.llm.usage.repository import LLMUsageRepository
 from src.core.update_context import UpdateContext, bind_update_context
 from tests.fakes.db import FakeSessionFactory
+from tests.fakes.llm import FakeLLMClient
 from tests.helpers.logs import captured_logs
 
 NOW = datetime(2026, 3, 4, 5, 6, 7, tzinfo=UTC)
@@ -31,11 +33,7 @@ def _frozen_clock(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(recording_module, "get_utc_now", lambda: NOW)
 
 
-def _request() -> LLMRequest:
-    return LLMRequest(
-        purpose="note_summary",
-        messages=[LLMMessage(role="user", content="secret note text")],
-    )
+PURPOSE = "note_summary"
 
 
 def _response() -> LLMResponse:
@@ -69,9 +67,9 @@ async def test_a_successful_call_is_stored_with_its_usage_and_cost() -> None:
         UpdateContext(update_id=1, update_type="message", user_id=42, chat_id=42)
     ):
         await recorder.record(
-            _request(),
-            _response(),
-            None,
+            purpose=PURPOSE,
+            usage=billed_usage(_response().usage, None),
+            error=None,
             provider=LLMProviderName.ANTHROPIC,
             model="claude-sonnet-5-5",
             latency_ms=812,
@@ -99,10 +97,11 @@ async def test_a_failed_call_is_stored_by_its_error_class() -> None:
     up in /stats: an outage is otherwise invisible in the accounting."""
     sessions = FakeSessionFactory()
     recorder = LLMUsageRecorder(sessions, LLMUsageRepository())
+    error = LLMTimeout("read timeout", provider=LLMProviderName.ANTHROPIC)
     await recorder.record(
-        _request(),
-        None,
-        LLMTimeout("read timeout", provider=LLMProviderName.ANTHROPIC),
+        purpose=PURPOSE,
+        usage=billed_usage(None, error),
+        error=error,
         provider=LLMProviderName.ANTHROPIC,
         model="claude-sonnet-5-5",
         latency_ms=30000,
@@ -118,12 +117,13 @@ async def test_a_failed_repair_is_stored_with_what_both_answers_cost() -> None:
     money spent on them, not a free error."""
     sessions = FakeSessionFactory()
     paid = LLMUsage(input_tokens=240, output_tokens=80, cost_usd=Decimal("0.00246800"))
+    error = LLMOutputError(
+        "points: too_short", provider=LLMProviderName.ANTHROPIC, usage=paid
+    )
     await LLMUsageRecorder(sessions, LLMUsageRepository()).record(
-        _request(),
-        None,
-        LLMOutputError(
-            "points: too_short", provider=LLMProviderName.ANTHROPIC, usage=paid
-        ),
+        purpose=PURPOSE,
+        usage=billed_usage(None, error),
+        error=error,
         provider=LLMProviderName.ANTHROPIC,
         model="claude-sonnet-5-5",
         latency_ms=1600,
@@ -139,10 +139,11 @@ async def test_a_refusal_is_stored_with_what_it_cost() -> None:
     with it, not only an output error."""
     sessions = FakeSessionFactory()
     paid = LLMUsage(input_tokens=90, output_tokens=12, cost_usd=Decimal("0.00031200"))
+    error = LLMRefused("refusal", provider=LLMProviderName.ANTHROPIC, usage=paid)
     await LLMUsageRecorder(sessions, LLMUsageRepository()).record(
-        _request(),
-        None,
-        LLMRefused("refusal", provider=LLMProviderName.ANTHROPIC, usage=paid),
+        purpose=PURPOSE,
+        usage=billed_usage(None, error),
+        error=error,
         provider=LLMProviderName.ANTHROPIC,
         model="claude-sonnet-5-5",
         latency_ms=700,
@@ -157,9 +158,9 @@ async def test_a_call_outside_an_update_has_no_user() -> None:
     """Worker tasks call the model too; they have no update context."""
     sessions = FakeSessionFactory()
     await LLMUsageRecorder(sessions, LLMUsageRepository()).record(
-        _request(),
-        _response(),
-        None,
+        purpose=PURPOSE,
+        usage=billed_usage(_response().usage, None),
+        error=None,
         provider=LLMProviderName.ANTHROPIC,
         model="claude-sonnet-5-5",
         latency_ms=812,
@@ -183,9 +184,9 @@ async def test_a_failed_write_never_fails_the_call(
     )
     with captured_logs("src.core.llm.usage.recording") as records:
         await LLMUsageRecorder(sessions, LLMUsageRepository()).record(
-            _request(),
-            _response(),
-            None,
+            purpose=PURPOSE,
+            usage=billed_usage(_response().usage, None),
+            error=None,
             provider=LLMProviderName.ANTHROPIC,
             model="claude-sonnet-5-5",
             latency_ms=812,
@@ -200,18 +201,32 @@ async def test_a_failed_write_never_fails_the_call(
 
 
 async def test_no_prompt_or_answer_text_reaches_the_row() -> None:
-    """llm_usage is read by /stats and kept for months: it holds counts only."""
+    """llm_usage is read by /stats and kept for months: it holds counts only,
+    though the wrapper that writes it holds the whole exchange."""
+    inner = FakeLLMClient()
+    inner.queue(_response())
     sessions = FakeSessionFactory()
-    await LLMUsageRecorder(sessions, LLMUsageRepository()).record(
-        _request(),
-        _response(),
-        None,
+    client = RecordingLLMClient(
+        inner,
+        LLMUsageRecorder(sessions, LLMUsageRepository()),
         provider=LLMProviderName.ANTHROPIC,
-        model="claude-sonnet-5-5",
-        latency_ms=812,
+        models={
+            ModelTier.STRONG: "claude-sonnet-5-5",
+            ModelTier.FAST: "claude-haiku-5-5",
+        },
+        log_content=False,
     )
+    request = LLMRequest(
+        purpose=PURPOSE,
+        messages=[LLMMessage(role="user", content="secret prompt")],
+        system="secret system",
+    )
+
+    await client.complete(request)
+
     row = _stored(sessions)
     values = [getattr(row, column.key) for column in LLMUsageRecord.__table__.columns]
+    assert row.input_tokens == 120
     assert not any(isinstance(value, str) and "secret" in value for value in values)
 
 
@@ -221,9 +236,9 @@ async def test_a_cancelled_call_is_stored_as_an_error_without_usage() -> None:
     sessions = FakeSessionFactory()
     recorder = LLMUsageRecorder(sessions, LLMUsageRepository())
     await recorder.record(
-        _request(),
-        None,
-        None,
+        purpose=PURPOSE,
+        usage=None,
+        error=None,
         provider=LLMProviderName.ANTHROPIC,
         model="claude-haiku-5-5",
         latency_ms=2000,
@@ -235,3 +250,23 @@ async def test_a_cancelled_call_is_stored_as_an_error_without_usage() -> None:
     assert (row.cache_read_tokens, row.cache_write_tokens) == (0, 0)
     assert row.cost_usd is None
     assert (row.model, row.latency_ms) == ("claude-haiku-5-5", 2000)
+
+
+async def test_a_cancelled_call_stores_no_usage_even_when_given_some() -> None:
+    """A cut call's tokens are unknown: whatever a caller hands over, the row
+    claims none rather than a partial count /stats would read as the whole."""
+    sessions = FakeSessionFactory()
+    await LLMUsageRecorder(sessions, LLMUsageRepository()).record(
+        purpose=PURPOSE,
+        usage=_response().usage,
+        error=None,
+        provider=LLMProviderName.ANTHROPIC,
+        model="claude-sonnet-5-5",
+        latency_ms=2000,
+        cancelled=True,
+    )
+    row = _stored(sessions)
+    assert (row.status, row.error_type) == (LLMCallStatus.ERROR, "Cancelled")
+    assert (row.input_tokens, row.output_tokens) == (0, 0)
+    assert (row.cache_read_tokens, row.cache_write_tokens) == (0, 0)
+    assert row.cost_usd is None

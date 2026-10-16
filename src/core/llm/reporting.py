@@ -3,17 +3,28 @@ import logging
 from loggers import get_logger
 from src.core.llm.enums import LLMProviderName
 from src.core.llm.errors import LLMError
-from src.core.llm.types import LLMRequest, LLMResponse, LLMUsage
+from src.core.llm.types import LLMUsage
 
 logger = get_logger(__name__)
+
+
+def billed_usage(usage: LLMUsage | None, error: LLMError | None) -> LLMUsage | None:
+    """What a call was billed: the answer's usage, else the error's.
+
+    A failed call may still have been billed: a refusal, an answer that
+    failed validation, a repair cut short.
+    """
+    if usage is not None:
+        return usage
+    return None if error is None else error.usage
 
 
 def report_llm_call(
     *,
     provider: LLMProviderName,
     model: str,
-    request: LLMRequest,
-    response: LLMResponse | None,
+    purpose: str,
+    usage: LLMUsage | None,
     error: LLMError | None,
     latency_ms: int,
     cancelled: bool = False,
@@ -23,22 +34,18 @@ def report_llm_call(
     It carries the provider, model, purpose, token counts, cost and latency -
     never the prompt or the answer: those are user data. Sentry's logging
     integration keeps the line as the call's one breadcrumb. The exchange
-    itself is logged only by RecordingLLMClient under LLM_LOG_CONTENT.
+    itself is logged only by RecordingLLMClient and RecordingTranscriber
+    under LLM_LOG_CONTENT.
 
-    `cancelled` is a call cut short by its caller (a deadline, a stopping
-    bot): no response and no error, outcome `Cancelled`.
+    `usage` is what the call was billed (`billed_usage`). `cancelled` is a
+    call cut short by its caller (a deadline, a stopping bot): outcome
+    `Cancelled`, logged without usage whatever `usage` holds.
     """
     if cancelled:
         outcome = "Cancelled"
+        usage = None
     else:
         outcome = "ok" if error is None else type(error).__name__
-    # A failed call may still have been billed: a refusal, an answer that
-    # failed validation, a repair cut short.
-    usage: LLMUsage | None = None
-    if response is not None:
-        usage = response.usage
-    elif error is not None:
-        usage = error.usage
     input_tokens = 0 if usage is None else usage.input_tokens
     output_tokens = 0 if usage is None else usage.output_tokens
     cache_read_tokens = 0 if usage is None else usage.cache_read_tokens
@@ -51,7 +58,7 @@ def report_llm_call(
         "cost_usd=%s latency_ms=%d",
         provider,
         model,
-        request.purpose,
+        purpose,
         outcome,
         input_tokens,
         output_tokens,
