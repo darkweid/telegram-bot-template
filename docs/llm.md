@@ -368,3 +368,70 @@ so it never reaches a deployment that runs the check.
 answers from a queue and records every request; the adapters are tested
 against `ScriptedLLMServer`. Both are described in
 [the testing guide](testing.md#fakes-and-helpers).
+
+## Speech to text
+
+`src/core/llm/speech` turns a voice message into text, for a bot that takes
+spoken input. A use case receives `Transcriber` from the container and calls
+`transcribe(audio, media_type, language=..., purpose=...)`; it returns a
+`Transcript` whose `text` is stripped, where an empty string means the
+message held no speech.
+
+**Turning it on.** `TRANSCRIBE_MODEL` names an OpenRouter model, and the call
+goes through OpenRouter whatever `LLM_PROVIDER` says: with Anthropic as the
+provider, or with the LLM layer off, `TRANSCRIBE_MODEL` still needs
+`OPENROUTER_API_KEY`, and `LLMConfig` refuses to start without it.
+`make check-env` refuses a `not-real` placeholder in that key when only the
+transcriber uses it. With `TRANSCRIBE_MODEL` empty the container binds
+`DisabledTranscriber`, which raises `TranscriberNotConfigured`, a
+`LLMNotConfigured`, so the user reads the same "not available" text.
+
+**The model** must take audio input; one that does not answers with an
+error. Gemini models (`google/gemini-3.8-flash`) take the OGG/Opus of a
+Telegram voice message as it is. OpenAI models on OpenRouter take only WAV
+and MP3; converting the audio is the domain's job. The model reasons before
+it answers, so `TRANSCRIBE_MAX_TOKENS` (4000 by default, 2000 to 32000)
+leaves room for both; a transcript cut at the limit fails as
+`LLMOutputError`, since a cut number would read as a different one.
+`LLM_TIMEOUT_SECONDS` and `LLM_MAX_RETRIES` apply as for any OpenRouter call.
+
+**Errors** are the LLM layer's: provider failures reach the caller as
+`LLMError` subclasses with the same replies. There is no fallback: no second
+provider takes the same audio.
+
+**Input checks.** `check_transcription_input` (`src/core/llm/speech/interface.py`)
+accepts the MIME types in `AUDIO_FORMATS` (parameters and case ignored, so
+`audio/ogg; codecs=opus` passes), non-empty audio of at most
+`MAX_AUDIO_BYTES` (20 MiB, the Bot API's download limit), a purpose as for
+`LLMRequest` and a language that is None or non-empty. Anything else raises
+`ValueError` before any call: it is a bug in the caller, not an outage, and
+records no row. The duration is not checked here: the domain refuses a
+voice message too long for it by `voice.duration`, before downloading it.
+
+**Usage.** Every attempt writes one `llm_usage` row under its `purpose`,
+failed ones included, with the cost OpenRouter reported (NULL when it
+reported none), so `/stats` shows voice input next to the other calls. A
+cancelled transcription records one `Cancelled` row, as a cancelled model
+call does. Under `LLM_LOG_CONTENT` the log line carries the transcript and
+names the audio by format and size only.
+
+**A use case** downloads the file, then transcribes it outside any unit of
+work, with the user's language as a hint:
+
+```python
+voice = message.voice
+if voice.duration > MAX_VOICE_SECONDS:
+    raise VoiceTooLongError()
+audio = await bot.download(voice)
+transcript = await self._transcriber.transcribe(
+    audio.read(),
+    voice.mime_type or "audio/ogg",
+    language=RESPONSE_LANGUAGES[locale],
+    purpose=VOICE_INPUT_PURPOSE,
+)
+```
+
+The transcript is what the user said: user data, like a typed message. It
+goes into a reply through `html.quote` and into a prompt inside tags, and
+never into a log line. A test binds `FakeTranscriber` (`tests/fakes/speech.py`)
+through `TestOverrides.transcriber`.
