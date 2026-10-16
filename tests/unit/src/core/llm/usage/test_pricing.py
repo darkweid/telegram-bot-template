@@ -3,8 +3,8 @@ from decimal import Decimal
 from pydantic import ValidationError
 import pytest
 
-from src.core.llm.pricing import COST_QUANTUM, PRICES, ModelPrice, PricingTable
 from src.core.llm.types import LLMUsage
+from src.core.llm.usage.pricing import COST_QUANTUM, PRICES, ModelPrice, PricingTable
 from tests.helpers.logs import captured_logs
 
 MILLION = 1_000_000
@@ -90,7 +90,7 @@ def test_an_unknown_model_has_no_cost_and_warns_once() -> None:
     model, because a per-call warning would flood the log."""
     table = PricingTable()
 
-    with captured_logs("src.core.llm.pricing") as records:
+    with captured_logs("src.core.llm.usage.pricing") as records:
         first = table.cost("claude-unknown-1", LLMUsage(10, 10))
         second = table.cost("claude-unknown-1", LLMUsage(10, 10))
         other = table.cost("claude-unknown-2", LLMUsage(10, 10))

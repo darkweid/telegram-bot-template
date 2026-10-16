@@ -17,7 +17,6 @@ from src.core.llm.enums import LLMCallStatus, LLMProviderName, ModelTier
 from src.core.llm.errors import LLMError
 from src.core.llm.interface import LLMClient
 from src.core.llm.reporting import report_llm_call
-from src.core.llm.repository import LLMUsageRepository
 from src.core.llm.types import (
     ContentBlock,
     ImageBlock,
@@ -30,6 +29,7 @@ from src.core.llm.types import (
     ToolResultBlock,
     ToolUseBlock,
 )
+from src.core.llm.usage.repository import LLMUsageRepository
 from src.core.update_context import get_update_context
 from src.core.utils.datetime_utils import get_utc_now
 

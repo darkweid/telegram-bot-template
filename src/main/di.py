@@ -45,16 +45,16 @@ from src.core.events.registry import set_event_subscribers
 from src.core.http.user_agent import UserAgent, build_user_agent
 from src.core.i18n import LOCALES_DIR, build_i18n
 from src.core.limiter.limiter import RateLimiter
-from src.core.llm.anthropic import AnthropicLLMClient
 from src.core.llm.disabled import DisabledLLMClient
 from src.core.llm.enums import LLMProviderName, ModelTier
 from src.core.llm.fallback import FallbackLLMClient
 from src.core.llm.interface import LLMClient
-from src.core.llm.openrouter import OpenRouterLLMClient
-from src.core.llm.pricing import PricingTable
-from src.core.llm.recording import LLMUsageRecorder, RecordingLLMClient
-from src.core.llm.repository import LLMUsageRepository
-from src.core.llm.tasks import LLMUsageRetention
+from src.core.llm.providers.anthropic import AnthropicLLMClient
+from src.core.llm.providers.openrouter import OpenRouterLLMClient
+from src.core.llm.usage.pricing import PricingTable
+from src.core.llm.usage.recording import LLMUsageRecorder, RecordingLLMClient
+from src.core.llm.usage.repository import LLMUsageRepository
+from src.core.llm.usage.tasks import LLMUsageRetention
 from src.core.outbox.interface import TaskPublisher
 from src.core.outbox.publisher import OutboxPublisher
 from src.core.redis.core import create_redis_client

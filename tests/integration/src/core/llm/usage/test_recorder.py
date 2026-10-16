@@ -6,11 +6,7 @@ import pytest
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 
-from src.core.llm import recording as recording_module
 from src.core.llm.enums import LLMCallStatus, LLMProviderName
-from src.core.llm.models import LLMUsageRecord
-from src.core.llm.recording import LLMUsageRecorder
-from src.core.llm.repository import LLMUsageRepository
 from src.core.llm.types import (
     LLMMessage,
     LLMRequest,
@@ -18,6 +14,10 @@ from src.core.llm.types import (
     LLMUsage,
     TextBlock,
 )
+from src.core.llm.usage import recording as recording_module
+from src.core.llm.usage.models import LLMUsageRecord
+from src.core.llm.usage.recording import LLMUsageRecorder
+from src.core.llm.usage.repository import LLMUsageRepository
 from src.core.update_context import UpdateContext, bind_update_context
 from tests.integration.conftest import new_user_id
 

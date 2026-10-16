@@ -5,10 +5,9 @@ from typing import Any, get_args
 from pydantic import BaseModel, field_validator
 import pytest
 
-from src.core.llm.anthropic import AnthropicLLMClient, ImageMediaType
 from src.core.llm.enums import LLMProviderName, ModelTier
 from src.core.llm.errors import LLMOutputError, LLMUnavailable
-from src.core.llm.pricing import PricingTable
+from src.core.llm.providers.anthropic import AnthropicLLMClient, ImageMediaType
 from src.core.llm.types import (
     IMAGE_MEDIA_TYPES,
     ImageBlock,
@@ -20,6 +19,7 @@ from src.core.llm.types import (
     ToolResultBlock,
     ToolUseBlock,
 )
+from src.core.llm.usage.pricing import PricingTable
 from tests.helpers.llm_bodies import (
     JsonObject,
     anthropic_message,

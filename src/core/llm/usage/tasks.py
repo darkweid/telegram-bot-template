@@ -8,7 +8,7 @@ from dishka import FromDishka
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.core.database.batches import delete_in_batches
-from src.core.llm.repository import LLMUsageRepository
+from src.core.llm.usage.repository import LLMUsageRepository
 from src.core.utils.datetime_utils import get_utc_now
 
 # How long llm_usage rows are kept. Provided by the composition root from

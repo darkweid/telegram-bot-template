@@ -3,9 +3,9 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from src.core.llm import tasks
-from src.core.llm.repository import LLMUsageRepository
-from src.core.llm.tasks import (
+from src.core.llm.usage import tasks
+from src.core.llm.usage.repository import LLMUsageRepository
+from src.core.llm.usage.tasks import (
     LLM_USAGE_PURGE_BATCH_SIZE,
     LLMUsageRetention,
     purge_llm_usage,

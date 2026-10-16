@@ -3,7 +3,7 @@ from taskiq.middlewares import SmartRetryMiddleware
 from taskiq_redis import RedisStreamBroker
 
 from src.broadcast.task_names import RESUME_STALLED_BROADCASTS, RUN_BROADCAST
-from src.core.llm.tasks import purge_llm_usage
+from src.core.llm.usage.tasks import purge_llm_usage
 from src.core.tasks.middlewares import TaskFailureAlertMiddleware
 from src.main import tasks as tasks_module
 from src.main.config import Config

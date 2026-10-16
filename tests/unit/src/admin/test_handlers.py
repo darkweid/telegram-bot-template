@@ -8,7 +8,7 @@ import pytest
 
 from src.admin.schemas import LLMUsageStats
 from src.admin.usecases.get_llm_usage_stats import GetLLMUsageStatsUseCase
-from src.core.llm.repository import (
+from src.core.llm.usage.repository import (
     LLMUsageByPurpose,
     LLMUsageSummary,
     LLMUsageTopUser,

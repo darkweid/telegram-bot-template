@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 
-from src.core.llm.repository import (
+from src.core.llm.usage.repository import (
     LLMUsageByPurpose,
     LLMUsageSummary,
     LLMUsageTopUser,

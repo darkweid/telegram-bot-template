@@ -17,7 +17,7 @@ from pydantic import (
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 from src.core.llm.enums import LLMProviderName
-from src.core.llm.pricing import ModelPrice
+from src.core.llm.usage.pricing import ModelPrice
 from src.core.locales import SUPPORTED_LOCALES
 
 
@@ -387,7 +387,7 @@ class LLMConfig(BaseSettings):
     # times, so a caller waits up to timeout x (retries + 1) per provider.
     LLM_TIMEOUT_SECONDS: float = Field(60, gt=0, le=600)
     LLM_MAX_RETRIES: int = Field(1, ge=0, le=5)
-    # Replaces or adds entries of src/core/llm/pricing.py, as JSON:
+    # Replaces or adds entries of src/core/llm/usage/pricing.py, as JSON:
     # {"<model>": {"input_per_mtok": "3", "output_per_mtok": "15", ...}}.
     # NoDecode: parsed below, so that an empty value means no overrides.
     LLM_PRICING_OVERRIDES: Annotated[dict[str, ModelPrice], NoDecode] = Field(

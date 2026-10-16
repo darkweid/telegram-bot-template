@@ -7,8 +7,8 @@ from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
 from src.core.llm.enums import LLMCallStatus, LLMProviderName
-from src.core.llm.models import LLMUsageRecord
-from src.core.llm.repository import (
+from src.core.llm.usage.models import LLMUsageRecord
+from src.core.llm.usage.repository import (
     LLMUsageByPurpose,
     LLMUsageRepository,
     LLMUsageSummary,

@@ -8,7 +8,7 @@ import pytest
 
 from src.core.llm.enums import LLMProviderName, ModelTier
 from src.core.llm.errors import LLMOutputError, LLMUnavailable
-from src.core.llm.openrouter import OpenRouterLLMClient
+from src.core.llm.providers.openrouter import OpenRouterLLMClient
 from src.core.llm.types import (
     ImageBlock,
     LLMMessage,

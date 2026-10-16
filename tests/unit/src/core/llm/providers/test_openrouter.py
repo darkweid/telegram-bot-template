@@ -15,7 +15,7 @@ from src.core.llm.errors import (
     LLMTimeout,
     LLMUnavailable,
 )
-from src.core.llm.openrouter import OpenRouterLLMClient
+from src.core.llm.providers.openrouter import OpenRouterLLMClient
 from src.core.llm.structured import combine_usage
 from src.core.llm.types import LLMMessage, LLMRequest, LLMUsage
 from tests.helpers.llm_server import ScriptedLLMServer

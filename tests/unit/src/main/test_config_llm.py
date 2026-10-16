@@ -7,7 +7,7 @@ from pydantic import SecretStr, ValidationError
 import pytest
 
 from src.core.llm.enums import LLMProviderName
-from src.core.llm.pricing import PRICES, ModelPrice
+from src.core.llm.usage.pricing import PRICES, ModelPrice
 from src.main.config import Config, LLMConfig
 
 PROJECT_ROOT = Path(__file__).resolve().parents[4]

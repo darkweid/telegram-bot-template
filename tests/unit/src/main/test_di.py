@@ -32,7 +32,7 @@ from src.core.events.registry import event_subscribers, set_event_subscribers
 from src.core.events.schemas import DomainEvent
 from src.core.http.user_agent import UserAgent
 from src.core.limiter.pacer import Pacer
-from src.core.llm.tasks import LLMUsageRetention
+from src.core.llm.usage.tasks import LLMUsageRetention
 from src.core.outbox.interface import TaskPublisher
 from src.core.outbox.models import OutboxMessage
 from src.core.outbox.publisher import UnregisteredTaskError

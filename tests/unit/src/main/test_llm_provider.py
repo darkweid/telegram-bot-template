@@ -5,17 +5,17 @@ from aiogram.utils.i18n import I18n
 from pydantic import SecretStr
 import pytest
 
-from src.core.llm.anthropic import AnthropicLLMClient
 from src.core.llm.disabled import DisabledLLMClient
 from src.core.llm.enums import ModelTier
 from src.core.llm.errors import LLMNotConfigured
 from src.core.llm.fallback import FallbackLLMClient
 from src.core.llm.interface import LLMClient
-from src.core.llm.openrouter import OpenRouterLLMClient
-from src.core.llm.pricing import PricingTable
-from src.core.llm.recording import RecordingLLMClient
-from src.core.llm.repository import LLMUsageRepository
+from src.core.llm.providers.anthropic import AnthropicLLMClient
+from src.core.llm.providers.openrouter import OpenRouterLLMClient
 from src.core.llm.types import LLMMessage, LLMRequest, LLMUsage
+from src.core.llm.usage.pricing import PricingTable
+from src.core.llm.usage.recording import RecordingLLMClient
+from src.core.llm.usage.repository import LLMUsageRepository
 from src.main.config import Config
 from src.main.di import _tier_models, build_container
 from tests.fakes.llm import FakeLLMClient
