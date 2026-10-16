@@ -242,7 +242,7 @@ class RecordingLLMClient:
             logger.info(
                 "LLM exchange for %s: %r -> %r",
                 request.purpose,
-                _transcript(request),
+                _rendered_history(request),
                 _rendered(response.content),
             )
         await record_ended(
@@ -262,7 +262,7 @@ class RecordingLLMClient:
             logger.info(
                 "LLM exchange for %s: %r -> %s",
                 request.purpose,
-                _transcript(request),
+                _rendered_history(request),
                 type(error).__name__,
             )
         await record_ended(
@@ -283,7 +283,7 @@ class RecordingLLMClient:
             logger.info(
                 "LLM exchange for %s: %r -> %s",
                 request.purpose,
-                _transcript(request),
+                _rendered_history(request),
                 CANCELLED,
             )
         await record_cancelled(
@@ -299,7 +299,7 @@ def _error_type(error: LLMError | None) -> str | None:
     return type(error).__name__ if error else None
 
 
-def _transcript(request: LLMRequest) -> list[tuple[str, str | list[str]]]:
+def _rendered_history(request: LLMRequest) -> list[tuple[str, str | list[str]]]:
     system: list[tuple[str, str | list[str]]] = (
         [("system", request.system)] if request.system else []
     )
