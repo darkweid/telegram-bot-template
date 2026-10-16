@@ -4,6 +4,7 @@ import pytest
 
 from src.core.llm.providers.anthropic import AnthropicLLMClient
 from src.core.llm.providers.openrouter import OpenRouterLLMClient
+from src.core.llm.speech.openrouter import OpenRouterTranscriber
 from src.main.config import Config, LLMConfig
 
 
@@ -16,7 +17,7 @@ def with_llm(settings: Config, **values: object) -> Config:
 def record_closing(monkeypatch: pytest.MonkeyPatch, closed: list[str]) -> None:
     """Append the adapter's class name to `closed` when it closes; the real
     close still runs, so no SDK connection pool is left behind."""
-    for adapter in (AnthropicLLMClient, OpenRouterLLMClient):
+    for adapter in (AnthropicLLMClient, OpenRouterLLMClient, OpenRouterTranscriber):
         monkeypatch.setattr(adapter, "aclose", _recording(adapter.aclose, closed))
 
 
