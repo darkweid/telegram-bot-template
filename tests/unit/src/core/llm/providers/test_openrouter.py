@@ -1,7 +1,7 @@
 from decimal import Decimal
 import json
 import logging
-from typing import Any
+from typing import Any, NoReturn
 
 import httpx2
 from pydantic import BaseModel, field_validator
@@ -9,12 +9,14 @@ import pytest
 
 from src.core.llm.enums import LLMProviderName, ModelTier
 from src.core.llm.errors import (
+    LLMError,
     LLMOutputError,
     LLMRateLimited,
     LLMRefused,
     LLMTimeout,
     LLMUnavailable,
 )
+from src.core.llm.providers import openrouter as openrouter_module
 from src.core.llm.providers.openrouter import OpenRouterLLMClient, openrouter_client
 from src.core.llm.structured import combine_usage
 from src.core.llm.types import LLMMessage, LLMRequest, LLMUsage
@@ -714,3 +716,26 @@ async def test_a_fast_request_calls_the_fast_model(server: ScriptedLLMServer) ->
     await client.complete(request(tier=ModelTier.FAST))
 
     assert server.bodies()[0]["model"] == "google/gemini-3.5-flash-lite"
+
+
+def _refuse_to_build(*args: object, **kwargs: object) -> NoReturn:
+    raise ValueError("schema this provider cannot express")
+
+
+async def test_a_request_the_sdk_cannot_build_is_a_bug_not_an_outage(
+    server: ScriptedLLMServer, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A request the adapter cannot build is the caller's bug: read as an
+    outage it would switch to the fallback, alert the developers about a
+    provider that is fine and record a call that never left the bot."""
+    monkeypatch.setattr(openrouter_module, "_tools", _refuse_to_build)
+    client = make_client(server)
+
+    with captured_logs("src.core.llm.reporting") as records:
+        with pytest.raises(ValueError) as raised:
+            await client.complete(request())
+
+    assert not isinstance(raised.value, LLMError)
+    assert server.requests == []
+    assert records == []
+    await client.aclose()
