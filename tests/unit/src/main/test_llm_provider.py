@@ -6,8 +6,8 @@ from pydantic import SecretStr
 import pytest
 
 from src.core.llm.disabled import DisabledLLMClient
-from src.core.llm.enums import ModelTier
-from src.core.llm.errors import LLMNotConfigured
+from src.core.llm.enums import LLMProviderName, ModelTier
+from src.core.llm.errors import LLMNotConfigured, LLMUnavailable
 from src.core.llm.fallback import FallbackLLMClient
 from src.core.llm.interface import LLMClient
 from src.core.llm.providers.anthropic import AnthropicLLMClient
@@ -18,7 +18,7 @@ from src.core.llm.speech.openrouter import OpenRouterTranscriber
 from src.core.llm.speech.recording import RecordingTranscriber
 from src.core.llm.types import LLMMessage, LLMRequest, LLMUsage
 from src.core.llm.usage.pricing import PricingTable
-from src.core.llm.usage.recording import RecordingLLMClient
+from src.core.llm.usage.recording import LLMUsageRecorder, RecordingLLMClient
 from src.core.llm.usage.repository import LLMUsageRepository
 from src.main.config import Config
 from src.main.di import _tier_models, build_container
@@ -213,23 +213,25 @@ TRANSCRIBER = {
 
 
 async def test_an_empty_transcribe_model_gives_the_disabled_transcriber(
-    settings: Config, i18n: I18n
+    settings: Config, i18n: I18n, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A bot without voice input must start with no OpenRouter key."""
+    closed: list[str] = []
+    record_closing(monkeypatch, closed)
     config = with_llm(settings, LLM_PROVIDER=None)
     container = build_container(config, SessionOnly(FakeTelegramSession(), i18n))
     try:
         assert isinstance(await container.get(Transcriber), DisabledTranscriber)
     finally:
         await container.close()
+    assert closed == []
 
 
 async def test_a_transcriber_is_recorded_and_closed_with_the_container(
     settings: Config, i18n: I18n, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The SDK client holds a connection pool bound to this event loop; left
-    open, it outlives the loop and warns at exit. The row must name the model
-    that was called."""
+    open, it outlives the loop and warns at exit."""
     closed: list[str] = []
     record_closing(monkeypatch, closed)
     config = with_llm(settings, LLM_PROVIDER=None, **TRANSCRIBER)
@@ -265,5 +267,51 @@ async def test_handler_tests_get_the_fake_transcriber(
     container = build_container(settings, overrides)
     try:
         assert await container.get(Transcriber) is overrides.transcriber
+    finally:
+        await container.close()
+
+
+async def test_the_usage_row_names_the_transcription_model(
+    settings: Config, i18n: I18n, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The llm_usage row must name what was called, not the chat model beside it."""
+    recorded: list[dict[str, object]] = []
+
+    async def failing(self: object, *args: object, **kwargs: object) -> None:
+        raise LLMUnavailable("down")
+
+    async def capture(self: object, **kwargs: object) -> None:
+        recorded.append(kwargs)
+
+    monkeypatch.setattr(OpenRouterTranscriber, "transcribe", failing)
+    monkeypatch.setattr(LLMUsageRecorder, "record", capture)
+    config = with_llm(settings, **{**WITH_FALLBACK, **TRANSCRIBER})
+    container = build_container(config, SessionOnly(FakeTelegramSession(), i18n))
+    try:
+        transcriber = await container.get(Transcriber)
+        with pytest.raises(LLMUnavailable):
+            await transcriber.transcribe(
+                b"\x00" * 10, "audio/ogg", language=None, purpose="voice_note"
+            )
+    finally:
+        await container.close()
+    assert len(recorded) == 1
+    assert recorded[0]["provider"] == LLMProviderName.OPENROUTER
+    assert recorded[0]["model"] == TRANSCRIBER["TRANSCRIBE_MODEL"]
+
+
+async def test_the_transcriber_works_beside_an_anthropic_client(
+    settings: Config, i18n: I18n
+) -> None:
+    """Voice input goes through OpenRouter whatever the chat provider is."""
+    config = with_llm(settings, **ANTHROPIC, **TRANSCRIBER)
+    container = build_container(config, SessionOnly(FakeTelegramSession(), i18n))
+    try:
+        client = await container.get(LLMClient)
+        assert isinstance(client, RecordingLLMClient)
+        assert isinstance(client.inner, AnthropicLLMClient)
+        transcriber = await container.get(Transcriber)
+        assert isinstance(transcriber, RecordingTranscriber)
+        assert isinstance(transcriber.inner, OpenRouterTranscriber)
     finally:
         await container.close()

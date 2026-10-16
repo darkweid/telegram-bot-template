@@ -336,11 +336,11 @@ class TelegramProvider(Provider):
 
 
 def _required(value: str, key: str) -> str:
-    # Config's validator refuses a provider without its key or model; a Config
+    # Config's validator refuses a provider or transcriber without its key; a Config
     # copied around the validator still fails here by the key's name instead
     # of at the first paid call.
     if not value:
-        raise RuntimeError(f"{key} is required by the configured LLM provider")
+        raise RuntimeError(f"{key} is required by the configuration")
     return value
 
 
