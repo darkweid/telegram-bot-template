@@ -420,6 +420,12 @@ class LLMConfig(BaseSettings):
             return value
         return json.loads(value) if value.strip() else {}
 
+    @field_validator("TRANSCRIBE_MODEL")
+    @classmethod
+    def strip_transcribe_model(cls, value: str) -> str:
+        # A blank value means off, as check_env reads it.
+        return value.strip()
+
     @field_validator("OPENROUTER_APP_URL", "OPENROUTER_APP_TITLE")
     @classmethod
     def reject_unprintable(cls, value: str, info: ValidationInfo) -> str:

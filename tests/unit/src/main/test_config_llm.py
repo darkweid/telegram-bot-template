@@ -243,6 +243,12 @@ def test_transcriber_works_beside_an_anthropic_llm() -> None:
     assert config.TRANSCRIBE_MODEL == "google/gemini-3.8-flash"
 
 
+def test_a_blank_transcribe_model_means_off() -> None:
+    """check_env reads a whitespace-only value as off; the config must agree
+    or a deploy that passed the check would fail at startup."""
+    assert _llm(TRANSCRIBE_MODEL="  ").TRANSCRIBE_MODEL == ""
+
+
 def test_transcriber_works_with_the_llm_off() -> None:
     """A bot may transcribe voice without any chat model."""
     config = _llm(

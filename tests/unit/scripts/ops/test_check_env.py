@@ -323,6 +323,19 @@ def test_a_placeholder_openrouter_key_is_refused_when_only_the_transcriber_uses_
     assert any("OPENROUTER_API_KEY" in error for error in errors)
 
 
+def test_a_blank_transcribe_model_leaves_the_openrouter_key_unused() -> None:
+    """Whitespace is off here, as in LLMConfig."""
+    assert (
+        _errors(
+            LLM_PROVIDER="",
+            LLM_FALLBACK_PROVIDER="",
+            TRANSCRIBE_MODEL="  ",
+            OPENROUTER_API_KEY="sk-or-example-key-not-real",
+        )
+        == []
+    )
+
+
 def test_a_placeholder_openrouter_key_passes_while_nothing_uses_it() -> None:
     """The example ships the key as a placeholder with every user of it off."""
     assert (
