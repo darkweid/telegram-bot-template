@@ -137,13 +137,14 @@ async def test_a_transcription_row_lands_in_llm_usage(
         provider=LLMProviderName.OPENROUTER,
         model="google/gemini-3.8-flash",
     )
-    await transcriber.transcribe(
-        b"OggS", "audio/ogg", language=None, purpose="voice_test"
-    )
-    in_window = (LLMUsageRecord.purpose == "voice_test") & (
+    purpose = f"test_{uuid4().hex}"
+    in_window = (LLMUsageRecord.purpose == purpose) & (
         LLMUsageRecord.created_at == TRANSCRIBED_AT
     )
     try:
+        await transcriber.transcribe(
+            b"OggS", "audio/ogg", language=None, purpose=purpose
+        )
         async with sessionmaker() as session:
             row = (
                 await session.execute(select(LLMUsageRecord).where(in_window))

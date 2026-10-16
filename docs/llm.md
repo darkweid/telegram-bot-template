@@ -416,19 +416,23 @@ call does. Under `LLM_LOG_CONTENT` the log line carries the transcript and
 names the audio by format and size only.
 
 **A use case** downloads the file, then transcribes it outside any unit of
-work, with the user's language as a hint:
+work, with the user's language as a hint. It gets the `Voice` and the locale
+from the handler and `Bot` from the container; `MAX_VOICE_SECONDS`,
+`VoiceTooLongError` and `VOICE_INPUT_PURPOSE` are the domain's own:
 
 ```python
-voice = message.voice
-if voice.duration > MAX_VOICE_SECONDS:
-    raise VoiceTooLongError()
-audio = await bot.download(voice)
-transcript = await self._transcriber.transcribe(
-    audio.read(),
-    voice.mime_type or "audio/ogg",
-    language=RESPONSE_LANGUAGES[locale],
-    purpose=VOICE_INPUT_PURPOSE,
-)
+async def execute(self, voice: Voice, locale: str) -> Transcript:
+    if voice.duration > MAX_VOICE_SECONDS:
+        raise VoiceTooLongError()
+    # With a destination of its own, download returns nothing to check for None.
+    audio = BytesIO()
+    await self._bot.download(voice, destination=audio)
+    return await self._transcriber.transcribe(
+        audio.getvalue(),
+        voice.mime_type or "audio/ogg",
+        language=RESPONSE_LANGUAGES[locale],
+        purpose=VOICE_INPUT_PURPOSE,
+    )
 ```
 
 The transcript is what the user said: user data, like a typed message. It
