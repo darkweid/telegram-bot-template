@@ -7,12 +7,11 @@ from sentry_sdk.integrations.logging import LoggingIntegration
 from sentry_sdk.transport import Transport
 
 from src.core.llm.enums import LLMProviderName
-from src.core.llm.reporting import report_llm_call
-from src.core.llm.types import LLMMessage, LLMRequest
+from src.core.llm.errors import LLMRefused, LLMTimeout
+from src.core.llm.reporting import billed_usage, report_llm_call
+from src.core.llm.types import LLMUsage
 from tests.fakes.llm import llm_response
 from tests.helpers.logs import captured_logs
-
-SECRET_PROMPT = "my diary entry about the surgery"
 
 
 class _DiscardingTransport(Transport):
@@ -45,11 +44,10 @@ def test_each_call_leaves_exactly_one_breadcrumb_without_content() -> None:
         report_llm_call(
             provider=LLMProviderName.ANTHROPIC,
             model="claude-sonnet-5-5",
-            request=LLMRequest(
-                purpose="note_summary",
-                messages=[LLMMessage(role="user", content=SECRET_PROMPT)],
+            purpose="note_summary",
+            usage=billed_usage(
+                llm_response("the answer about the surgery").usage, None
             ),
-            response=llm_response("the answer about the surgery"),
             error=None,
             latency_ms=12,
         )
@@ -68,11 +66,8 @@ def test_a_cancelled_call_logs_its_outcome_without_tokens() -> None:
         report_llm_call(
             provider=LLMProviderName.ANTHROPIC,
             model="claude-sonnet-5-5",
-            request=LLMRequest(
-                purpose="note_summary",
-                messages=[LLMMessage(role="user", content=SECRET_PROMPT)],
-            ),
-            response=None,
+            purpose="note_summary",
+            usage=None,
             error=None,
             latency_ms=1500,
             cancelled=True,
@@ -83,3 +78,15 @@ def test_a_cancelled_call_logs_its_outcome_without_tokens() -> None:
     assert "outcome=Cancelled input_tokens=0 output_tokens=0" in line
     assert "cost_usd=unknown latency_ms=1500" in line
     assert "surgery" not in line
+
+
+def test_billed_usage_prefers_the_answer_then_the_error() -> None:
+    """A failed call may still have been billed (a refusal, an answer that
+    failed validation): the log line and the accounting row must count it,
+    and both take the usage through this one rule."""
+    answered = LLMUsage(input_tokens=10, output_tokens=5)
+    refused = LLMUsage(input_tokens=7, output_tokens=2)
+    assert billed_usage(answered, None) is answered
+    assert billed_usage(None, LLMRefused("refusal", usage=refused)) is refused
+    assert billed_usage(None, None) is None
+    assert billed_usage(None, LLMTimeout("read timeout")) is None

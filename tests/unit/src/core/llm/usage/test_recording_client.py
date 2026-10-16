@@ -59,9 +59,9 @@ async def test_a_success_is_recorded_as_the_provider_reported_it() -> None:
     client, recorder = _client(inner)
     assert await client.complete(REQUEST) is response
     recorder.record.assert_awaited_once_with(
-        REQUEST,
-        response,
-        None,
+        purpose=REQUEST.purpose,
+        usage=response.usage,
+        error=None,
         provider=LLMProviderName.ANTHROPIC,
         model="claude-sonnet-5-5",
         latency_ms=640,
@@ -78,8 +78,12 @@ async def test_a_failure_is_recorded_and_still_raised() -> None:
     with pytest.raises(LLMUnavailable) as raised:
         await client.complete(REQUEST)
     assert raised.value is error
-    args, kwargs = recorder.record.await_args
-    assert args == (REQUEST, None, error)
+    kwargs = recorder.record.await_args.kwargs
+    assert (kwargs["purpose"], kwargs["usage"], kwargs["error"]) == (
+        REQUEST.purpose,
+        None,
+        error,
+    )
     assert kwargs["provider"] == LLMProviderName.ANTHROPIC
     assert kwargs["model"] == "claude-sonnet-5-5"
     assert isinstance(kwargs["latency_ms"], int)
@@ -104,9 +108,9 @@ async def test_a_structured_answer_is_recorded_by_its_response() -> None:
     result = await client.structured(REQUEST, Answer)
     assert result.output == Answer(summary="short")
     recorder.record.assert_awaited_once_with(
-        REQUEST,
-        result.response,
-        None,
+        purpose=REQUEST.purpose,
+        usage=result.response.usage,
+        error=None,
         provider=result.response.provider,
         model=result.response.model,
         latency_ms=result.response.latency_ms,
@@ -121,7 +125,7 @@ async def test_a_structured_failure_is_recorded() -> None:
     client, recorder = _client(inner)
     with pytest.raises(LLMOutputError):
         await client.structured(REQUEST, Answer)
-    assert recorder.record.await_args.args[2] is error
+    assert recorder.record.await_args.kwargs["error"] is error
 
 
 async def test_content_stays_out_of_the_logs_by_default() -> None:
@@ -246,8 +250,12 @@ async def test_a_cancelled_call_is_recorded_without_usage() -> None:
     request = replace(REQUEST, tier=ModelTier.FAST)
     await _cancel_call(client, inner, request)
     recorder.record.assert_awaited_once()
-    args, kwargs = recorder.record.await_args
-    assert args == (request, None, None)
+    kwargs = recorder.record.await_args.kwargs
+    assert (kwargs["purpose"], kwargs["usage"], kwargs["error"]) == (
+        request.purpose,
+        None,
+        None,
+    )
     assert kwargs["cancelled"] is True
     assert kwargs["model"] == "claude-haiku-5-5"
     assert kwargs["provider"] == LLMProviderName.ANTHROPIC
@@ -364,8 +372,12 @@ async def test_a_cancel_during_the_success_record_still_records_the_answer() -> 
     await _cancel_during_the_record(client, slow)
     assert slow.finished
     recorder.record.assert_awaited_once()
-    args, kwargs = recorder.record.await_args
-    assert args == (REQUEST, response, None)
+    kwargs = recorder.record.await_args.kwargs
+    assert (kwargs["purpose"], kwargs["usage"], kwargs["error"]) == (
+        REQUEST.purpose,
+        response.usage,
+        None,
+    )
     assert kwargs["model"] == "claude-sonnet-5-5"
 
 
@@ -379,8 +391,12 @@ async def test_a_cancel_during_the_failure_record_still_records_the_error() -> N
     await _cancel_during_the_record(client, slow)
     assert slow.finished
     recorder.record.assert_awaited_once()
-    args, _ = recorder.record.await_args
-    assert args == (REQUEST, None, error)
+    kwargs = recorder.record.await_args.kwargs
+    assert (kwargs["purpose"], kwargs["usage"], kwargs["error"]) == (
+        REQUEST.purpose,
+        None,
+        error,
+    )
 
 
 async def test_a_hung_record_cut_by_a_cancel_gives_up_after_its_bound(

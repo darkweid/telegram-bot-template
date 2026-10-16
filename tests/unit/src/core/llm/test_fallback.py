@@ -249,10 +249,11 @@ async def test_a_failed_primary_and_the_answering_fallback_are_two_rows() -> Non
     assert await client.complete(REQUEST) is answer
 
     first, second = recorder.record.await_args_list
-    assert first.args == (REQUEST, None, error)
+    assert (first.kwargs["purpose"], first.kwargs["error"]) == (REQUEST.purpose, error)
+    assert first.kwargs["usage"] is None
     assert first.kwargs["provider"] is LLMProviderName.ANTHROPIC
-    assert second.args[1] is answer
-    assert second.args[2] is None
+    assert second.kwargs["usage"] is answer.usage
+    assert second.kwargs["error"] is None
     assert second.kwargs["provider"] is LLMProviderName.OPENROUTER
     assert second.kwargs["model"] == FALLBACK_MODEL
 

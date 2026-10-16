@@ -41,7 +41,7 @@ from src.core.llm.errors import (
     LLMTimeout,
     LLMUnavailable,
 )
-from src.core.llm.reporting import report_llm_call
+from src.core.llm.reporting import billed_usage, report_llm_call
 from src.core.llm.structured import validated_with_repair
 from src.core.llm.types import (
     AnswerBlock,
@@ -296,8 +296,8 @@ class AnthropicLLMClient:
         report_llm_call(
             provider=_PROVIDER,
             model=model if response is None else response.model,
-            request=request,
-            response=response,
+            purpose=request.purpose,
+            usage=billed_usage(None if response is None else response.usage, error),
             error=error,
             latency_ms=int((time.perf_counter() - started) * 1000),
         )

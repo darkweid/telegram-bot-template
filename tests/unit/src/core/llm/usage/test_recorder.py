@@ -8,13 +8,8 @@ from sqlalchemy.exc import DBAPIError
 from src.core.errors.scrubbed import ScrubbedError
 from src.core.llm.enums import LLMCallStatus, LLMProviderName
 from src.core.llm.errors import LLMOutputError, LLMRefused, LLMTimeout
-from src.core.llm.types import (
-    LLMMessage,
-    LLMRequest,
-    LLMResponse,
-    LLMUsage,
-    TextBlock,
-)
+from src.core.llm.reporting import billed_usage
+from src.core.llm.types import LLMResponse, LLMUsage, TextBlock
 from src.core.llm.usage import recording as recording_module
 from src.core.llm.usage.models import LLMUsageRecord
 from src.core.llm.usage.recording import LLMUsageRecorder
@@ -31,11 +26,7 @@ def _frozen_clock(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(recording_module, "get_utc_now", lambda: NOW)
 
 
-def _request() -> LLMRequest:
-    return LLMRequest(
-        purpose="note_summary",
-        messages=[LLMMessage(role="user", content="secret note text")],
-    )
+PURPOSE = "note_summary"
 
 
 def _response() -> LLMResponse:
@@ -69,9 +60,9 @@ async def test_a_successful_call_is_stored_with_its_usage_and_cost() -> None:
         UpdateContext(update_id=1, update_type="message", user_id=42, chat_id=42)
     ):
         await recorder.record(
-            _request(),
-            _response(),
-            None,
+            purpose=PURPOSE,
+            usage=billed_usage(_response().usage, None),
+            error=None,
             provider=LLMProviderName.ANTHROPIC,
             model="claude-sonnet-5-5",
             latency_ms=812,
@@ -99,10 +90,11 @@ async def test_a_failed_call_is_stored_by_its_error_class() -> None:
     up in /stats: an outage is otherwise invisible in the accounting."""
     sessions = FakeSessionFactory()
     recorder = LLMUsageRecorder(sessions, LLMUsageRepository())
+    error = LLMTimeout("read timeout", provider=LLMProviderName.ANTHROPIC)
     await recorder.record(
-        _request(),
-        None,
-        LLMTimeout("read timeout", provider=LLMProviderName.ANTHROPIC),
+        purpose=PURPOSE,
+        usage=billed_usage(None, error),
+        error=error,
         provider=LLMProviderName.ANTHROPIC,
         model="claude-sonnet-5-5",
         latency_ms=30000,
@@ -118,12 +110,13 @@ async def test_a_failed_repair_is_stored_with_what_both_answers_cost() -> None:
     money spent on them, not a free error."""
     sessions = FakeSessionFactory()
     paid = LLMUsage(input_tokens=240, output_tokens=80, cost_usd=Decimal("0.00246800"))
+    error = LLMOutputError(
+        "points: too_short", provider=LLMProviderName.ANTHROPIC, usage=paid
+    )
     await LLMUsageRecorder(sessions, LLMUsageRepository()).record(
-        _request(),
-        None,
-        LLMOutputError(
-            "points: too_short", provider=LLMProviderName.ANTHROPIC, usage=paid
-        ),
+        purpose=PURPOSE,
+        usage=billed_usage(None, error),
+        error=error,
         provider=LLMProviderName.ANTHROPIC,
         model="claude-sonnet-5-5",
         latency_ms=1600,
@@ -139,10 +132,11 @@ async def test_a_refusal_is_stored_with_what_it_cost() -> None:
     with it, not only an output error."""
     sessions = FakeSessionFactory()
     paid = LLMUsage(input_tokens=90, output_tokens=12, cost_usd=Decimal("0.00031200"))
+    error = LLMRefused("refusal", provider=LLMProviderName.ANTHROPIC, usage=paid)
     await LLMUsageRecorder(sessions, LLMUsageRepository()).record(
-        _request(),
-        None,
-        LLMRefused("refusal", provider=LLMProviderName.ANTHROPIC, usage=paid),
+        purpose=PURPOSE,
+        usage=billed_usage(None, error),
+        error=error,
         provider=LLMProviderName.ANTHROPIC,
         model="claude-sonnet-5-5",
         latency_ms=700,
@@ -157,9 +151,9 @@ async def test_a_call_outside_an_update_has_no_user() -> None:
     """Worker tasks call the model too; they have no update context."""
     sessions = FakeSessionFactory()
     await LLMUsageRecorder(sessions, LLMUsageRepository()).record(
-        _request(),
-        _response(),
-        None,
+        purpose=PURPOSE,
+        usage=billed_usage(_response().usage, None),
+        error=None,
         provider=LLMProviderName.ANTHROPIC,
         model="claude-sonnet-5-5",
         latency_ms=812,
@@ -183,9 +177,9 @@ async def test_a_failed_write_never_fails_the_call(
     )
     with captured_logs("src.core.llm.usage.recording") as records:
         await LLMUsageRecorder(sessions, LLMUsageRepository()).record(
-            _request(),
-            _response(),
-            None,
+            purpose=PURPOSE,
+            usage=billed_usage(_response().usage, None),
+            error=None,
             provider=LLMProviderName.ANTHROPIC,
             model="claude-sonnet-5-5",
             latency_ms=812,
@@ -203,9 +197,9 @@ async def test_no_prompt_or_answer_text_reaches_the_row() -> None:
     """llm_usage is read by /stats and kept for months: it holds counts only."""
     sessions = FakeSessionFactory()
     await LLMUsageRecorder(sessions, LLMUsageRepository()).record(
-        _request(),
-        _response(),
-        None,
+        purpose=PURPOSE,
+        usage=billed_usage(_response().usage, None),
+        error=None,
         provider=LLMProviderName.ANTHROPIC,
         model="claude-sonnet-5-5",
         latency_ms=812,
@@ -221,9 +215,9 @@ async def test_a_cancelled_call_is_stored_as_an_error_without_usage() -> None:
     sessions = FakeSessionFactory()
     recorder = LLMUsageRecorder(sessions, LLMUsageRepository())
     await recorder.record(
-        _request(),
-        None,
-        None,
+        purpose=PURPOSE,
+        usage=None,
+        error=None,
         provider=LLMProviderName.ANTHROPIC,
         model="claude-haiku-5-5",
         latency_ms=2000,
