@@ -383,6 +383,11 @@ class LLMConfig(BaseSettings):
     # OpenRouter's attribution headers (HTTP-Referer, X-Title); blank sends none.
     OPENROUTER_APP_URL: str = Field("", max_length=256)
     OPENROUTER_APP_TITLE: str = Field("", max_length=256)
+    # Voice to text through OpenRouter, whatever LLM_PROVIDER is; empty turns it
+    # off. An OpenRouter id "<vendor>/<model>" of a model that takes audio.
+    TRANSCRIBE_MODEL: str = ""
+    # The model reasons before it answers; a smaller budget cuts the transcript.
+    TRANSCRIBE_MAX_TOKENS: int = Field(4000, ge=2000, le=32000)
     # Per attempt; the SDK retries 429, 5xx and network errors LLM_MAX_RETRIES
     # times, so a caller waits up to timeout x (retries + 1) per provider.
     LLM_TIMEOUT_SECONDS: float = Field(60, gt=0, le=600)
@@ -454,6 +459,19 @@ class LLMConfig(BaseSettings):
                 self.LLM_FALLBACK_MODEL_FAST,
                 "LLM_FALLBACK_MODEL_FAST",
             )
+        return self
+
+    @model_validator(mode="after")
+    def require_transcriber_settings(self) -> Self:
+        if not self.TRANSCRIBE_MODEL:
+            return self
+        if not self.OPENROUTER_API_KEY.get_secret_value():
+            raise ValueError(
+                "OPENROUTER_API_KEY is required when TRANSCRIBE_MODEL is set"
+            )
+        _require_model_shape(
+            LLMProviderName.OPENROUTER, self.TRANSCRIBE_MODEL, "TRANSCRIBE_MODEL"
+        )
         return self
 
     def _require_provider(

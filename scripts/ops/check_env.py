@@ -105,6 +105,8 @@ KNOWN_KEYS = frozenset(
         "OPENROUTER_API_KEY",
         "OPENROUTER_APP_URL",
         "OPENROUTER_APP_TITLE",
+        "TRANSCRIBE_MODEL",
+        "TRANSCRIBE_MAX_TOKENS",
         "LLM_TIMEOUT_SECONDS",
         "LLM_MAX_RETRIES",
         "LLM_PRICING_OVERRIDES",
@@ -342,6 +344,11 @@ def _feature_is_off(env: dict[str, str], key: str) -> bool:
     provider = PROVIDER_KEY.fullmatch(key)
     if provider:
         in_use = {env.get(name, "").strip().lower() for name in LLM_PROVIDER_KEYS}
+        if (
+            provider.group(1).lower() == "openrouter"
+            and env.get("TRANSCRIBE_MODEL", "").strip()
+        ):
+            return False
         return provider.group(1).lower() not in in_use
     return False
 

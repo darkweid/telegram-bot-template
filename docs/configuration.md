@@ -161,6 +161,8 @@ The layer itself is described in [the LLM guide](llm.md).
 | `OPENROUTER_API_KEY` | empty | Required when OpenRouter is the primary or the fallback. |
 | `OPENROUTER_APP_URL` | empty | Public URL OpenRouter credits the calls to (`HTTP-Referer`); printable ASCII, blank sends nothing. |
 | `OPENROUTER_APP_TITLE` | empty | App name OpenRouter credits the calls to (`X-Title`); printable ASCII, blank sends nothing. |
+| `TRANSCRIBE_MODEL` | empty | OpenRouter id `<vendor>/<model>` of a model that takes audio; empty turns voice transcription off. Requires `OPENROUTER_API_KEY`, whatever `LLM_PROVIDER` is. A model without audio input answers with an error; OpenAI models refuse OGG. |
+| `TRANSCRIBE_MAX_TOKENS` | `4000` | `max_tokens` of a transcription call, 2000 to 32000. The model reasons first; a smaller budget cuts the transcript and fails the call. |
 | `LLM_TIMEOUT_SECONDS` | `60` | Seconds per attempt, at most 600. A user waits up to timeout x (retries + 1) before the fallback runs. |
 | `LLM_MAX_RETRIES` | `1` | Retries after a 429, a 5xx or a network error, 0 to 5. |
 | `LLM_PRICING_OVERRIDES` | empty | JSON that replaces or extends the price table in `src/core/llm/usage/pricing.py`; each entry needs all four rates. Malformed JSON or a bad rate stops startup. |
