@@ -38,12 +38,9 @@ _PROVIDER = LLMProviderName.OPENROUTER
 
 
 class OpenRouterTranscriber:
-    """Transcriber over one OpenRouter chat completion with one `input_audio`
-    part; the model must accept audio input in the format sent.
-
-    Retries and the per-attempt timeout are the SDK's own. No temperature and
-    no reasoning effort are sent. A transcript cut at `max_tokens` fails as
-    LLMOutputError: a cut number reads as a different one.
+    """The model must accept audio input in the format sent. Retries and the
+    per-attempt timeout are the SDK's own. A transcript cut at `max_tokens`
+    fails as LLMOutputError: a cut number reads as a different one.
     """
 
     def __init__(

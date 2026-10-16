@@ -36,9 +36,9 @@ MODEL = "google/gemini-3.8-flash"
 API_KEY = "sk-or-test-key"
 SECRET_TRANSCRIPT = "my blood test results came back"
 
-# The adapter writes its one line through report_llm_call; our loggers do not
-# propagate, so each one that could carry content is captured by name.
-LOGGERS = ("src.core.llm.reporting", "src.core.llm.speech.openrouter")
+# The transcriber writes no line of its own: the one line per call comes from
+# report_llm_call. Our loggers do not propagate, so it is captured by name.
+REPORTING_LOGGER = "src.core.llm.reporting"
 
 
 @pytest.fixture
@@ -97,6 +97,7 @@ async def test_the_request_carries_one_audio_part_and_the_prompt(
     )
 
     [body] = server.bodies()
+    assert set(body) == {"model", "messages", "max_tokens"}
     assert body["model"] == MODEL
     assert body["max_tokens"] == 4000
     assert "temperature" not in body
@@ -284,12 +285,12 @@ async def test_nothing_secret_reaches_errors_or_logs(
     script(server)
     transcriber = make_transcriber(server)
 
-    with captured_logs(LOGGERS[0]) as reporting, captured_logs(LOGGERS[1]) as own:
+    with captured_logs(REPORTING_LOGGER) as records:
         with pytest.raises(expected) as raised:
             await transcribe(transcriber)
 
     texts = [str(raised.value), raised.value.detail or ""]
-    texts += [record.getMessage() for record in [*reporting, *own]]
+    texts += [record.getMessage() for record in records]
     for text in texts:
         assert API_KEY not in text
         assert AUDIO_BASE64 not in text
@@ -302,10 +303,10 @@ async def test_a_successful_call_logs_no_content(server: ScriptedLLMServer) -> N
     server.reply(completion())
     transcriber = make_transcriber(server)
 
-    with captured_logs(LOGGERS[0]) as reporting, captured_logs(LOGGERS[1]) as own:
+    with captured_logs(REPORTING_LOGGER) as records:
         await transcribe(transcriber)
 
-    for record in [*reporting, *own]:
+    for record in records:
         line = record.getMessage()
         assert SECRET_TRANSCRIPT not in line
         assert AUDIO_BASE64 not in line
@@ -320,7 +321,7 @@ async def test_each_call_writes_one_line(server: ScriptedLLMServer) -> None:
     server.reply(completion(refusal="no"))
     transcriber = make_transcriber(server)
 
-    with captured_logs(LOGGERS[0]) as records:
+    with captured_logs(REPORTING_LOGGER) as records:
         await transcribe(transcriber)
     [record] = records
     assert record.levelno == logging.INFO
@@ -328,7 +329,7 @@ async def test_each_call_writes_one_line(server: ScriptedLLMServer) -> None:
         f"LLM call provider=openrouter model={MODEL} purpose=voice outcome=ok"
     )
 
-    with captured_logs(LOGGERS[0]) as records:
+    with captured_logs(REPORTING_LOGGER) as records:
         with pytest.raises(LLMRefused):
             await transcribe(transcriber)
     [record] = records
@@ -336,7 +337,7 @@ async def test_each_call_writes_one_line(server: ScriptedLLMServer) -> None:
     assert f"model={MODEL}" in record.getMessage()
 
     requests_before = len(server.requests)
-    with captured_logs(LOGGERS[0]) as records:
+    with captured_logs(REPORTING_LOGGER) as records:
         with pytest.raises(ValueError):
             await transcribe(transcriber, media_type="text/plain")
     assert records == []
