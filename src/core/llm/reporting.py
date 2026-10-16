@@ -37,11 +37,12 @@ def report_llm_call(
     itself is logged only by RecordingLLMClient under LLM_LOG_CONTENT.
 
     `usage` is what the call was billed (`billed_usage`). `cancelled` is a
-    call cut short by its caller (a deadline, a stopping bot): no usage and
-    no error, outcome `Cancelled`.
+    call cut short by its caller (a deadline, a stopping bot): outcome
+    `Cancelled`, logged without usage whatever `usage` holds.
     """
     if cancelled:
         outcome = "Cancelled"
+        usage = None
     else:
         outcome = "ok" if error is None else type(error).__name__
     input_tokens = 0 if usage is None else usage.input_tokens

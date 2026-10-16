@@ -229,3 +229,23 @@ async def test_a_cancelled_call_is_stored_as_an_error_without_usage() -> None:
     assert (row.cache_read_tokens, row.cache_write_tokens) == (0, 0)
     assert row.cost_usd is None
     assert (row.model, row.latency_ms) == ("claude-haiku-5-5", 2000)
+
+
+async def test_a_cancelled_call_stores_no_usage_even_when_given_some() -> None:
+    """A cut call's tokens are unknown: whatever a caller hands over, the row
+    claims none rather than a partial count /stats would read as the whole."""
+    sessions = FakeSessionFactory()
+    await LLMUsageRecorder(sessions, LLMUsageRepository()).record(
+        purpose=PURPOSE,
+        usage=_response().usage,
+        error=None,
+        provider=LLMProviderName.ANTHROPIC,
+        model="claude-sonnet-5-5",
+        latency_ms=2000,
+        cancelled=True,
+    )
+    row = _stored(sessions)
+    assert (row.status, row.error_type) == (LLMCallStatus.ERROR, "Cancelled")
+    assert (row.input_tokens, row.output_tokens) == (0, 0)
+    assert (row.cache_read_tokens, row.cache_write_tokens) == (0, 0)
+    assert row.cost_usd is None

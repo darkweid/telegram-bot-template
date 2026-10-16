@@ -13,6 +13,7 @@ from src.core.llm.types import (
     LLMMessage,
     LLMRequest,
     LLMResponse,
+    LLMUsage,
     ProviderBlock,
     StructuredResponse,
     ToolResultBlock,
@@ -118,14 +119,21 @@ async def test_a_structured_answer_is_recorded_by_its_response() -> None:
 
 
 async def test_a_structured_failure_is_recorded() -> None:
-    """Two invalid answers were still two billed calls."""
+    """Two invalid answers were still two billed calls: the row carries what
+    the error says they cost."""
     inner = FakeLLMClient()
-    error = LLMOutputError("invalid after repair", provider=LLMProviderName.ANTHROPIC)
+    error = LLMOutputError(
+        "invalid after repair",
+        provider=LLMProviderName.ANTHROPIC,
+        usage=LLMUsage(input_tokens=240, output_tokens=80),
+    )
     inner.queue(error)
     client, recorder = _client(inner)
     with pytest.raises(LLMOutputError):
         await client.structured(REQUEST, Answer)
-    assert recorder.record.await_args.kwargs["error"] is error
+    kwargs = recorder.record.await_args.kwargs
+    assert kwargs["error"] is error
+    assert kwargs["usage"] is error.usage
 
 
 async def test_content_stays_out_of_the_logs_by_default() -> None:

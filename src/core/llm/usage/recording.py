@@ -73,7 +73,10 @@ class LLMUsageRecorder:
     ) -> None:
         """`usage` is what the call was billed (`billed_usage`). `cancelled`
         stores a call its caller cut short: an error row with error_type
-        `Cancelled` and no usage, whatever the provider billed."""
+        `Cancelled` and no usage, whatever `usage` holds or the provider
+        billed."""
+        if cancelled:
+            usage = None
         context = get_update_context()
         data: dict[str, Any] = {
             "created_at": get_utc_now(),
@@ -273,6 +276,9 @@ class RecordingLLMClient:
         )
 
     async def _record_cancel(self, request: LLMRequest, started: float) -> None:
+        # Runs inside `except CancelledError` and never raises: the cancel the
+        # caller is waiting for goes on as it came (record_cancelled swallows
+        # whatever happens to the row).
         if self._log_content:
             logger.info(
                 "LLM exchange for %s: %r -> %s",

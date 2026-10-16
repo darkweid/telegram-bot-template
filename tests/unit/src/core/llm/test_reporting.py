@@ -1,3 +1,4 @@
+from decimal import Decimal
 import logging
 from typing import Any
 
@@ -90,3 +91,22 @@ def test_billed_usage_prefers_the_answer_then_the_error() -> None:
     assert billed_usage(None, LLMRefused("refusal", usage=refused)) is refused
     assert billed_usage(None, None) is None
     assert billed_usage(None, LLMTimeout("read timeout")) is None
+
+
+def test_a_cancelled_call_logs_no_usage_even_when_given_some() -> None:
+    """The line of a cut call must agree with its row, which claims no
+    tokens and no cost."""
+    with captured_logs("src.core.llm.reporting") as records:
+        report_llm_call(
+            provider=LLMProviderName.ANTHROPIC,
+            model="claude-sonnet-5-5",
+            purpose="note_summary",
+            usage=LLMUsage(input_tokens=10, output_tokens=5, cost_usd=Decimal("0.1")),
+            error=None,
+            latency_ms=1500,
+            cancelled=True,
+        )
+    [record] = records
+    line = record.getMessage()
+    assert "outcome=Cancelled input_tokens=0 output_tokens=0" in line
+    assert "cost_usd=unknown" in line
