@@ -1,6 +1,7 @@
 # telegram-bot-template
 
 [![CI](https://github.com/darkweid/telegram-bot-template/actions/workflows/prod_ci.yml/badge.svg?branch=main)](https://github.com/darkweid/telegram-bot-template/actions/workflows/prod_ci.yml)
+[![Coverage](https://coveralls.io/repos/github/darkweid/telegram-bot-template/badge.svg?branch=main)](https://coveralls.io/github/darkweid/telegram-bot-template?branch=main)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 ![Python 3.13](https://img.shields.io/badge/python-3.13-blue.svg)
 ![aiogram 3](https://img.shields.io/badge/aiogram-3-blue.svg)
