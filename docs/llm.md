@@ -320,7 +320,7 @@ failure is alerted once per `ALERT_COOLDOWN_SECONDS`
 ## Usage and cost
 
 **One row per attempt.** Every provider call, failed ones included, writes a
-row to `llm_usage` (`src/core/llm/models.py`): the Telegram user id, the
+row to `llm_usage` (`src/core/llm/usage/models.py`): the Telegram user id, the
 purpose, provider and model, token counts (input, output, cache reads and
 writes), the cost, latency, the status and the error class. A call that fell
 back leaves two rows. A failed call the provider still billed (a refusal, an
@@ -340,7 +340,7 @@ the same 2 seconds to finish, with the tokens and cost the call reported.
 It is never repeated, since it may have committed already.
 
 **Prices.** OpenRouter reports the cost of each call. For Anthropic the cost
-comes from the price table in `src/core/llm/pricing.py` (US dollars per
+comes from the price table in `src/core/llm/usage/pricing.py` (US dollars per
 million tokens, as `Decimal`, eight decimal places). `LLM_PRICING_OVERRIDES`
 replaces or adds whole entries as JSON; each entry needs all four rates.
 A model with no price is recorded with `cost_usd` NULL, which means unknown,

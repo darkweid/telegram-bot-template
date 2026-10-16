@@ -7,7 +7,6 @@ import httpx2
 from pydantic import BaseModel, field_validator
 import pytest
 
-from src.core.llm.anthropic import AnthropicLLMClient
 from src.core.llm.enums import LLMProviderName, ModelTier
 from src.core.llm.errors import (
     LLMOutputError,
@@ -16,8 +15,9 @@ from src.core.llm.errors import (
     LLMTimeout,
     LLMUnavailable,
 )
-from src.core.llm.pricing import PricingTable
+from src.core.llm.providers.anthropic import AnthropicLLMClient
 from src.core.llm.types import LLMMessage, LLMRequest
+from src.core.llm.usage.pricing import PricingTable
 from tests.helpers.llm_server import ScriptedLLMServer
 from tests.helpers.logs import captured_logs
 

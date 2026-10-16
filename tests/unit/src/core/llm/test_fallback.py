@@ -9,7 +9,6 @@ from pydantic import BaseModel
 import pytest
 
 from src.core.limiter.limiter import RateLimiter
-from src.core.llm.anthropic import AnthropicLLMClient
 from src.core.llm.enums import LLMProviderName, ModelTier
 from src.core.llm.errors import (
     LLMError,
@@ -20,9 +19,8 @@ from src.core.llm.errors import (
     LLMUnavailable,
 )
 from src.core.llm.fallback import FallbackLLMClient
-from src.core.llm.openrouter import OpenRouterLLMClient
-from src.core.llm.pricing import PricingTable
-from src.core.llm.recording import LLMUsageRecorder, RecordingLLMClient
+from src.core.llm.providers.anthropic import AnthropicLLMClient
+from src.core.llm.providers.openrouter import OpenRouterLLMClient
 from src.core.llm.types import (
     LLMMessage,
     LLMRequest,
@@ -31,6 +29,8 @@ from src.core.llm.types import (
     ToolResultBlock,
     ToolUseBlock,
 )
+from src.core.llm.usage.pricing import PricingTable
+from src.core.llm.usage.recording import LLMUsageRecorder, RecordingLLMClient
 from src.core.redis.degradation import RedisDegradationReporter
 from src.core.telegram.alerts import DeveloperAlerter
 from src.core.update_context import UpdateContext, bind_update_context

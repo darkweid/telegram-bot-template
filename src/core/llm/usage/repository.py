@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.core.database.repositories import BaseRepository
 from src.core.llm.enums import LLMCallStatus
-from src.core.llm.models import LLMUsageRecord
+from src.core.llm.usage.models import LLMUsageRecord
 
 
 @dataclass(frozen=True, slots=True)

@@ -6,10 +6,8 @@ from unittest.mock import AsyncMock
 from pydantic import BaseModel
 import pytest
 
-from src.core.llm import recording as recording_module
 from src.core.llm.enums import LLMProviderName, ModelTier
 from src.core.llm.errors import LLMOutputError, LLMTimeout, LLMUnavailable
-from src.core.llm.recording import LLMUsageRecorder, RecordingLLMClient
 from src.core.llm.types import (
     ImageBlock,
     LLMMessage,
@@ -19,6 +17,8 @@ from src.core.llm.types import (
     StructuredResponse,
     ToolResultBlock,
 )
+from src.core.llm.usage import recording as recording_module
+from src.core.llm.usage.recording import LLMUsageRecorder, RecordingLLMClient
 from tests.fakes.llm import FakeLLMClient, llm_response, tool_call
 from tests.helpers.logs import captured_logs
 
@@ -127,7 +127,7 @@ async def test_a_structured_failure_is_recorded() -> None:
 async def test_content_stays_out_of_the_logs_by_default() -> None:
     """Prompts carry what users wrote; logs are kept and shipped elsewhere."""
     client, _ = _client(FakeLLMClient())
-    with captured_logs("src.core.llm.recording") as records:
+    with captured_logs("src.core.llm.usage.recording") as records:
         await client.complete(REQUEST)
     assert records == []
 
@@ -136,7 +136,7 @@ async def test_log_content_shows_the_exchange_for_local_debugging() -> None:
     inner = FakeLLMClient()
     inner.queue(llm_response("the answer"))
     client, _ = _client(inner, log_content=True)
-    with captured_logs("src.core.llm.recording") as records:
+    with captured_logs("src.core.llm.usage.recording") as records:
         await client.complete(REQUEST)
     [record] = records
     message = record.getMessage()
@@ -194,7 +194,7 @@ async def test_log_content_names_images_and_provider_blocks_without_their_bytes(
             ),
         ],
     )
-    with captured_logs("src.core.llm.recording") as records:
+    with captured_logs("src.core.llm.usage.recording") as records:
         await client.complete(request)
     message = records[0].getMessage()
     assert "<image image/png 17 bytes>" in message
@@ -297,7 +297,7 @@ async def test_a_failed_record_of_a_cancelled_call_does_not_replace_the_cancel()
     inner = HangingLLMClient()
     client, recorder = _client(inner)
     recorder.record.side_effect = RuntimeError("database is gone")
-    with captured_logs("src.core.llm.recording") as records:
+    with captured_logs("src.core.llm.usage.recording") as records:
         await _cancel_call(client, inner, REQUEST)
     assert [r.getMessage() for r in records] == [
         "Cancelled LLM call not recorded: RuntimeError"
@@ -317,7 +317,7 @@ async def test_a_hung_record_of_a_cancelled_call_gives_up_after_its_bound(
         await asyncio.Event().wait()
 
     recorder.record.side_effect = hang
-    with captured_logs("src.core.llm.recording") as records:
+    with captured_logs("src.core.llm.usage.recording") as records:
         await _cancel_call(client, inner, REQUEST)
     assert [r.getMessage() for r in records] == [
         "Cancelled LLM call not recorded: TimeoutError"
@@ -394,7 +394,7 @@ async def test_a_hung_record_cut_by_a_cancel_gives_up_after_its_bound(
     client, recorder = _client(inner)
     slow = SlowRecord(recorder)
     task = asyncio.create_task(client.complete(REQUEST))
-    with captured_logs("src.core.llm.recording") as records:
+    with captured_logs("src.core.llm.usage.recording") as records:
         async with asyncio.timeout(2):
             await slow.entered.wait()
             task.cancel()

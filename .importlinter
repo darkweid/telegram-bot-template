@@ -34,7 +34,7 @@ source_modules =
     src.note.handlers
 forbidden_modules =
     src.user.repositories
-    src.core.llm.repository
+    src.core.llm.usage.repository
     src.broadcast.repositories
     src.note.repositories
     src.system.repositories

@@ -11,7 +11,7 @@ from src.admin.usecases.get_llm_usage_stats import (
     GetLLMUsageStatsUseCase,
 )
 from src.core.database.uow import SQLAlchemyUnitOfWork
-from src.core.llm.repository import (
+from src.core.llm.usage.repository import (
     LLMUsageByPurpose,
     LLMUsageRepository,
     LLMUsageSummary,

@@ -3,7 +3,7 @@ from datetime import timedelta
 from src.admin.schemas import LLMUsageStats
 from src.core.database.transactions import set_local_statement_timeout
 from src.core.database.uow import SQLAlchemyUnitOfWork
-from src.core.llm.repository import LLMUsageRepository
+from src.core.llm.usage.repository import LLMUsageRepository
 from src.core.utils.datetime_utils import get_utc_now
 
 # Below the session-wide DB_STATEMENT_TIMEOUT_SECONDS: an admin command must

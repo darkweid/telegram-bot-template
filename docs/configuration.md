@@ -163,7 +163,7 @@ The layer itself is described in [the LLM guide](llm.md).
 | `OPENROUTER_APP_TITLE` | empty | App name OpenRouter credits the calls to (`X-Title`); printable ASCII, blank sends nothing. |
 | `LLM_TIMEOUT_SECONDS` | `60` | Seconds per attempt, at most 600. A user waits up to timeout x (retries + 1) before the fallback runs. |
 | `LLM_MAX_RETRIES` | `1` | Retries after a 429, a 5xx or a network error, 0 to 5. |
-| `LLM_PRICING_OVERRIDES` | empty | JSON that replaces or extends the price table in `src/core/llm/pricing.py`; each entry needs all four rates. Malformed JSON or a bad rate stops startup. |
+| `LLM_PRICING_OVERRIDES` | empty | JSON that replaces or extends the price table in `src/core/llm/usage/pricing.py`; each entry needs all four rates. Malformed JSON or a bad rate stops startup. |
 | `LLM_USAGE_RETENTION_DAYS` | `90` | Days of `llm_usage` rows the daily purge keeps; at least 30, the longest period `/stats` reports. |
 | `LLM_LOG_CONTENT` | `false` | Logs every prompt and answer, which carry what users typed. Refused unless `DEBUG=true`, and refused by `make check-env`. |
 

@@ -6,12 +6,8 @@ import sentry_sdk
 from sqlalchemy.exc import DBAPIError
 
 from src.core.errors.scrubbed import ScrubbedError
-from src.core.llm import recording as recording_module
 from src.core.llm.enums import LLMCallStatus, LLMProviderName
 from src.core.llm.errors import LLMOutputError, LLMRefused, LLMTimeout
-from src.core.llm.models import LLMUsageRecord
-from src.core.llm.recording import LLMUsageRecorder
-from src.core.llm.repository import LLMUsageRepository
 from src.core.llm.types import (
     LLMMessage,
     LLMRequest,
@@ -19,6 +15,10 @@ from src.core.llm.types import (
     LLMUsage,
     TextBlock,
 )
+from src.core.llm.usage import recording as recording_module
+from src.core.llm.usage.models import LLMUsageRecord
+from src.core.llm.usage.recording import LLMUsageRecorder
+from src.core.llm.usage.repository import LLMUsageRepository
 from src.core.update_context import UpdateContext, bind_update_context
 from tests.fakes.db import FakeSessionFactory
 from tests.helpers.logs import captured_logs
@@ -181,7 +181,7 @@ async def test_a_failed_write_never_fails_the_call(
         {"purpose": "note_summary"},
         Exception("Failing row contains (secret)"),
     )
-    with captured_logs("src.core.llm.recording") as records:
+    with captured_logs("src.core.llm.usage.recording") as records:
         await LLMUsageRecorder(sessions, LLMUsageRepository()).record(
             _request(),
             _response(),

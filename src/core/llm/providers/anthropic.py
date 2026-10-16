@@ -41,7 +41,6 @@ from src.core.llm.errors import (
     LLMTimeout,
     LLMUnavailable,
 )
-from src.core.llm.pricing import PricingTable
 from src.core.llm.reporting import report_llm_call
 from src.core.llm.structured import validated_with_repair
 from src.core.llm.types import (
@@ -58,6 +57,7 @@ from src.core.llm.types import (
     ToolResultBlock,
     ToolUseBlock,
 )
+from src.core.llm.usage.pricing import PricingTable
 
 ANTHROPIC_BASE_URL = "https://api.anthropic.com"
 

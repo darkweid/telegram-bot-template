@@ -8,7 +8,7 @@ from taskiq import AsyncBroker, InMemoryBroker
 
 from src.broadcast.tasks import BROADCAST_TASKS
 from src.core.email.tasks import EMAIL_TASKS
-from src.core.llm.tasks import purge_llm_usage
+from src.core.llm.usage.tasks import purge_llm_usage
 from src.core.outbox.sweeper import purge_outbox, sweep_outbox
 from src.core.tasks.broker import create_stream_broker
 from src.core.tasks.middlewares import TaskFailureAlertMiddleware

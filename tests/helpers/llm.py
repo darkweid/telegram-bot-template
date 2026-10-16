@@ -2,8 +2,8 @@ from collections.abc import Awaitable, Callable
 
 import pytest
 
-from src.core.llm.anthropic import AnthropicLLMClient
-from src.core.llm.openrouter import OpenRouterLLMClient
+from src.core.llm.providers.anthropic import AnthropicLLMClient
+from src.core.llm.providers.openrouter import OpenRouterLLMClient
 from src.main.config import Config, LLMConfig
 
 

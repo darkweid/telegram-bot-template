@@ -121,7 +121,7 @@ touches the dev stack.
 |---|---|---|
 | `InMemoryRedis` | `tests/fakes/redis.py` | Redis, including every Lua script the code runs (rate limiter, cache, task claim). |
 | `FakeLLMClient` | `tests/fakes/llm.py` | `LLMClient`: `queue()` a response or an exception, `queue_structured()` an output model, `hold()` the next call, read `calls`. |
-| `ScriptedLLMServer` | `tests/helpers/llm_server.py` | The provider's HTTP API, as an `httpx2` mock transport for the adapter tests (`tests/unit/src/core/llm/test_anthropic.py`, `test_openrouter.py`). |
+| `ScriptedLLMServer` | `tests/helpers/llm_server.py` | The provider's HTTP API, as an `httpx2` mock transport for the adapter tests (`tests/unit/src/core/llm/providers/test_anthropic.py`, `test_openrouter.py`). |
 | `InMemoryS3Client` | `tests/fakes/s3.py` | The `S3Client` protocol over in-memory buckets. |
 | `FakeMailer` | `tests/fakes/email.py` | The SMTP mailer; records every send, or raises the `error` you set. |
 | `FakeHttpClient` | `tests/fakes/http.py` | `HttpRequester`, the protocol `HttpClient` implements, for an integration's tests (type the dependency as `HttpRequester`); records requests and answers from a queue, repeating the last. |
